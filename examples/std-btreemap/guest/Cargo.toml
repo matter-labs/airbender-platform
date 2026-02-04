@@ -1,0 +1,7 @@
+[package]
+name = "airbender-std-btreemap"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", path = "../../../crates/airbender-sdk", features = ["std"] }

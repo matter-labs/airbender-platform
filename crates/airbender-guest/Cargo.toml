@@ -1,0 +1,18 @@
+[package]
+name = "airbender-guest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+airbender-codec = { path = "../airbender-codec" }
+airbender-rt = { path = "../airbender-rt" }
+serde = { workspace = true, default-features = false, features = ["alloc", "derive"] }
+
+[features]
+std = ["airbender-rt/std", "serde/std"]

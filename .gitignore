@@ -1,1 +1,9 @@
-/target
+target/
+/dist
+**/dist/
+
+# Local development artifacts of the main repository developer.
+SESSION.md
+tmp/
+debug/
+issues/

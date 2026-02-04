@@ -1,0 +1,75 @@
+[package]
+name = "airbender-crypto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+common_constants = { workspace = true }
+blake2 = { workspace = true }
+sha3 = { workspace = true }
+sha2 = { workspace = true }
+k256 =  { workspace = true, features = ["ecdsa-core", "ecdsa", "arithmetic"] }
+p256 =  { workspace = true, features = ["ecdsa-core", "ecdsa", "arithmetic"] }
+blake2s_u32 = { workspace = true, optional = true }
+ripemd = { workspace = true }
+ruint = { workspace = true }
+
+seq-macro = { workspace = true }
+cfg-if = { workspace = true }
+const_for = { workspace = true }
+
+# zeroize = { version = "1", default-features = false, optional = true }
+# num-traits = { version = "0.2", default-features = false, optional = true }
+# num-bigint = { version = "0.4", default-features = false, optional = true }
+# num-integer = { version = "0.1", default-features = false, optional = true }
+
+ark-std = { workspace = true }
+ark-ff = { workspace = true }
+ark-ec = { workspace = true }
+ark-serialize = { workspace = true }
+ark-bn254 = { workspace = true, features = ["curve", "scalar_field"] }
+ark-bls12-381 = { workspace = true, features = ["curve", "scalar_field"] }
+num-bigint = { workspace = true }
+zeroize = { workspace = true }
+itertools = { workspace = true }
+educe = { workspace = true }
+num-traits = { workspace = true }
+
+# ark-ff = { path = "../../git_copies/algebra/ff", default-features = false }
+# ark-ec = { path = "../../git_copies/algebra/ec", default-features = false }
+# ark-serialize = { path = "../../git_copies/algebra/serialize", default-features = false }
+# ark-bn254 = { path = "../../git_copies/algebra/curves/bn254", default-features = false, features = ["curve", "scalar_field"] }
+# ark-bls12-381 = { path = "../../git_copies/algebra/curves/bls12_381", default-features = false, features = ["curve", "scalar_field"] }
+
+[dev-dependencies]
+ruint = { workspace = true }
+ark-std = { workspace = true, features = ["std"] }
+zeroize = { workspace = true }
+num-traits = { workspace = true }
+num-bigint = { workspace = true }
+num-integer = { workspace = true }
+proptest = { workspace = true, features = ["std"] }
+hex-literal = { workspace = true }
+ark-test-curves = { workspace = true, features = ["secp256k1", "bls12_381_curve"] }
+rand_core = { workspace = true, features = ["getrandom"] }
+
+[features]
+# forward = ["blake2"]
+forward = []
+proving = ["single_round_with_control", "bigint_ops", "secp256k1-static-context", "keccak_special5"]
+default = ["forward", "secp256k1-static-context"]
+# bigint_ops = ["zeroize", "num-bigint", "num-traits", "num-integer"]
+bigint_ops = []
+keccak_special5 = []
+single_round_with_control = ["blake2s_u32/blake2_with_compression"]
+blake2s_tests = []
+secp256k1-static-context = []
+alloc = []
+sha3_tests = []
+testing = []

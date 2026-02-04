@@ -1,0 +1,21 @@
+[package]
+name = "airbender-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+airbender-core = { path = "../airbender-core" }
+airbender-codec = { path = "../airbender-codec" }
+serde = { workspace = true, features = ["derive"] }
+risc_v_simulator = { workspace = true }
+execution_utils = { workspace = true, features = ["gpu_prover"] }
+gpu_prover = { workspace = true }
+riscv_transpiler = { workspace = true, features = ["jit"] }
+sha3 = { workspace = true }
+tracing = { workspace = true }

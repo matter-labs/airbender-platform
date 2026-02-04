@@ -1,0 +1,22 @@
+[package]
+name = "airbender-sdk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "airbender"
+
+[dependencies]
+airbender-codec = { path = "../airbender-codec" }
+airbender-guest = { path = "../airbender-guest" }
+airbender-macros = { path = "../airbender-macros" }
+airbender-rt = { path = "../airbender-rt" }
+
+[features]
+std = ["airbender-guest/std", "airbender-rt/std"]

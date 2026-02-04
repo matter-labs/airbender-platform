@@ -1,0 +1,8 @@
+[package]
+name = "airbender-u256-add-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender-host = { path = "../../../crates/airbender-host" }
+ruint = { version = "1.16", default-features = false, features = ["serde"] }

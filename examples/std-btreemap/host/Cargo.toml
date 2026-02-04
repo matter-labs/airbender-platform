@@ -1,0 +1,7 @@
+[package]
+name = "airbender-std-btreemap-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender-host = { path = "../../../crates/airbender-host" }

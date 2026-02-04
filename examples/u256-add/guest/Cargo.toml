@@ -1,0 +1,8 @@
+[package]
+name = "airbender-u256-add"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", path = "../../../crates/airbender-sdk" }
+ruint = { version = "1.16", default-features = false, features = ["serde"] }

@@ -1,0 +1,14 @@
+[package]
+name = "airbender-codec"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+serde = { workspace = true, default-features = false, features = ["alloc", "derive"] }
+bincode = { workspace = true, default-features = false, features = ["alloc", "serde"] }

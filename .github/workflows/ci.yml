@@ -5,19 +5,103 @@ on:
   pull_request:
 
 jobs:
+  lints:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read Rust toolchain
+        id: rust-toolchain
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          toolchain = tomllib.loads(pathlib.Path("rust-toolchain.toml").read_text())["toolchain"]
+          channel = toolchain["channel"]
+          components = ",".join(toolchain.get("components", []))
+
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"channel={channel}\n")
+              output.write(f"components={components}\n")
+
+          print(f"Using toolchain channel: {channel}")
+          print(f"Using toolchain components: {components}")
+          PY
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+          components: ${{ steps.rust-toolchain.outputs.components }},rustfmt
+      - name: Verify active Rust toolchain
+        run: |
+          active_toolchain="$(rustup show active-toolchain | awk '{print $1}')"
+          expected_channel="${{ steps.rust-toolchain.outputs.channel }}"
+
+          if [[ "$active_toolchain" != "$expected_channel"* ]]; then
+            echo "active toolchain '$active_toolchain' does not match expected '$expected_channel'"
+            exit 1
+          fi
+
+          rustc --version
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
+      - name: Clippy (workspace code)
+        run: cargo clippy --workspace --lib --bins --examples --benches --exclude airbender-crypto -- -D warnings
+      - name: Clippy (workspace tests)
+        run: cargo clippy --workspace --tests --exclude airbender-crypto -- -D warnings
+      - name: Clippy (airbender-crypto code)
+        run: cargo clippy -p airbender-crypto --lib --examples --benches -- -D warnings
+      - name: Clippy (airbender-crypto tests)
+        run: cargo clippy -p airbender-crypto --tests -- -D warnings
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Read Rust toolchain
+        id: rust-toolchain
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          toolchain = tomllib.loads(pathlib.Path("rust-toolchain.toml").read_text())["toolchain"]
+          channel = toolchain["channel"]
+          components = ",".join(toolchain.get("components", []))
+
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"channel={channel}\n")
+              output.write(f"components={components}\n")
+
+          print(f"Using toolchain channel: {channel}")
+          print(f"Using toolchain components: {components}")
+          PY
+      - uses: dtolnay/rust-toolchain@master
         with:
-          components: clippy
+          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+          components: ${{ steps.rust-toolchain.outputs.components }}
+      - name: Verify active Rust toolchain
+        run: |
+          active_toolchain="$(rustup show active-toolchain | awk '{print $1}')"
+          expected_channel="${{ steps.rust-toolchain.outputs.channel }}"
+
+          if [[ "$active_toolchain" != "$expected_channel"* ]]; then
+            echo "active toolchain '$active_toolchain' does not match expected '$expected_channel'"
+            exit 1
+          fi
+
+          rustc --version
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
       - name: Build
         run: cargo build --workspace
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo nextest run --workspace
+      - name: Smoke cargo-airbender CLI
+        run: |
+          cargo run -p cargo-airbender -- airbender --help
+          tmp_dir="$(mktemp -d)"
+          cargo run -p cargo-airbender -- airbender new "$tmp_dir/guest" --name smoke
+          test -f "$tmp_dir/guest/Cargo.toml"

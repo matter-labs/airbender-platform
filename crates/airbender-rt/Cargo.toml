@@ -1,0 +1,17 @@
+[package]
+name = "airbender-rt"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+riscv_common = { workspace = true, features = ["boot_sequence", "custom_allocator", "custom_panic"] }
+getrandom = { workspace = true, default-features = false, features = ["custom"] }
+
+[features]
+std = []

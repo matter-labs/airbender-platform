@@ -8,5 +8,18 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+include = [
+    "src/**",
+    "templates/**",
+    "Cargo.toml",
+]
 
 [dependencies]
+airbender-build = { version = "0.1.0", path = "../airbender-build" }
+airbender-host = { version = "0.1.0", path = "../airbender-host" }
+anyhow = { workspace = true }
+bincode = { workspace = true, features = ["alloc", "serde"] }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

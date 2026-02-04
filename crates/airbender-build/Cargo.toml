@@ -1,0 +1,17 @@
+[package]
+name = "airbender-build"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+airbender-codec = { path = "../airbender-codec" }
+airbender-core = { path = "../airbender-core" }
+cargo_metadata = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }

@@ -1,5 +1,24 @@
 [workspace]
-members = ["crates/cargo-airbender"]
+members = [
+    "crates/airbender-crypto",
+    "crates/airbender-core",
+    "crates/airbender-build",
+    "crates/airbender-codec",
+    "crates/airbender-guest",
+    "crates/airbender-host",
+    "crates/airbender-macros",
+    "crates/airbender-rt",
+    "crates/airbender-sdk",
+    "crates/cargo-airbender",
+]
+exclude = [
+    "examples/fibonacci/guest",
+    "examples/fibonacci/host",
+    "examples/u256-add/guest",
+    "examples/u256-add/host",
+    "examples/std-btreemap/guest",
+    "examples/std-btreemap/host",
+]
 resolver = "2"
 
 [workspace.package]
@@ -13,3 +32,65 @@ keywords = ["blockchain", "zksync", "zk", "risc-v"]
 categories = ["cryptography"]
 
 [workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", default-features = false }
+bincode = { version = "2", default-features = false }
+clap = "4"
+sha3 = { version = "0.10", default-features = false }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+getrandom = { version = "0.2", default-features = false }
+toml = "0.8"
+cargo_metadata = "0.18"
+thiserror = "2"
+
+# Dependencies for airbender-crypto
+common_constants = { git = "https://github.com/matter-labs/zksync-airbender", branch = "popzxc-optimize-verifier-native", default-features = false }
+blake2 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+k256 = { version = "0.13", default-features = false }
+p256 = { version = "0.13", default-features = false }
+blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender", branch = "popzxc-optimize-verifier-native", default-features = false }
+ripemd = { version = "0.1", default-features = false }
+ruint = { version = "1.16", default-features = false }
+seq-macro = { version = "0.3.6", default-features = false }
+cfg-if = { version = "1.0.0", default-features = false }
+const_for = { version = "0.1.5", default-features = false }
+ark-std = { version = "0.5", default-features = false }
+ark-ff = { version = "0.5", default-features = false }
+ark-ec = { version = "0.5", default-features = false }
+ark-serialize = { version = "0.5", default-features = false }
+ark-bn254 = { version = "0.5", default-features = false }
+ark-bls12-381 = { version = "0.5", default-features = false }
+num-bigint = { version = "0.4", default-features = false }
+zeroize = { version = "1", default-features = false }
+itertools = { version = "0.14.0", default-features = false }
+educe = { version = "0.6.0", default-features = false }
+num-traits = { version = "0.2", default-features = false }
+num-integer = { version = "0.1", default-features = false }
+proptest = { version = "1.0.0", default-features = false }
+hex-literal = { version = "0.4.1", default-features = false }
+ark-test-curves = { version = "0.5", default-features = false }
+rand_core = { version = "0.6.4", default-features = false }
+
+riscv_common = { git = "https://github.com/matter-labs/zksync-airbender", branch = "popzxc-optimize-verifier-native" }
+risc_v_simulator = { git = "https://github.com/matter-labs/zksync-airbender", branch = "popzxc-optimize-verifier-native" }
+execution_utils = { git = "https://github.com/matter-labs/zksync-airbender", branch = "popzxc-optimize-verifier-native" }
+gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender", branch = "popzxc-optimize-verifier-native" }
+riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender", branch = "popzxc-optimize-verifier-native" }
+
+# These packages can require too much stack space to compile,
+# which can be increased with `RUST_MIN_STACK=16777216` environment variable.
+# However, it would increase the memory usage for the compilation.
+# TODO: figure out a better approach.
+[profile.dev.package.keccak_special5]
+debug = 0
+[profile.dev.package.setups]
+debug = 0
+[profile.release.package.keccak_special5]
+debug = 0
+[profile.release.package.setups]
+debug = 0
