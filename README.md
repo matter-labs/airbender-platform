@@ -61,7 +61,7 @@ cargo run -- --prove
 
 ## Create a New Guest Project
 
-Default local SDK detection (current default):
+Default SDK dependency (git repository on `main`):
 
 ```sh
 cargo airbender new ./my-guest
@@ -73,7 +73,7 @@ Explicit local SDK path:
 cargo airbender new ./my-guest --sdk-path /path/to/airbender-platform/crates/airbender-sdk
 ```
 
-Published SDK version (future-default workflow once published):
+Published SDK version (once published):
 
 ```sh
 cargo airbender new ./my-guest --sdk-version 0.1.0

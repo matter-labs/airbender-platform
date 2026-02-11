@@ -3,6 +3,9 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const DEFAULT_SDK_GIT_REPOSITORY: &str = "https://github.com/popzxc/airbender-platform";
+const DEFAULT_SDK_GIT_BRANCH: &str = "main";
+
 const TEMPLATE_FILES: &[(&str, &str)] = &[
     (
         "Cargo.toml",
@@ -57,28 +60,21 @@ fn resolve_sdk_dependency(
         return Ok(format!("version = \"{version}\""));
     }
 
-    // TODO: switch the default to crates.io once airbender-sdk is published.
-    let sdk_path = sdk_path.unwrap_or_else(default_sdk_path);
-    if !sdk_path.exists() {
-        bail!(
-            "failed to locate airbender-sdk at {} (pass --sdk-path <path> or --sdk-version <version>)",
-            sdk_path.display()
-        );
+    if let Some(sdk_path) = sdk_path {
+        if !sdk_path.exists() {
+            bail!("failed to locate airbender-sdk at {}", sdk_path.display());
+        }
+
+        let sdk_path = sdk_path
+            .canonicalize()
+            .with_context(|| format!("while attempting to canonicalize {}", sdk_path.display()))?;
+        let sdk_relative = relative_path(destination_dir, &sdk_path)?;
+        return Ok(format!("path = \"{}\"", sdk_relative.to_string_lossy()));
     }
 
-    let sdk_path = sdk_path
-        .canonicalize()
-        .with_context(|| format!("while attempting to canonicalize {}", sdk_path.display()))?;
-    let sdk_relative = relative_path(destination_dir, &sdk_path)?;
-    Ok(format!("path = \"{}\"", sdk_relative.to_string_lossy()))
-}
-
-fn default_sdk_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("crates")
-        .join("airbender-sdk")
+    Ok(format!(
+        "git = \"{DEFAULT_SDK_GIT_REPOSITORY}\", branch = \"{DEFAULT_SDK_GIT_BRANCH}\""
+    ))
 }
 
 fn ensure_empty_dir(path: &Path) -> Result<()> {
@@ -140,4 +136,65 @@ fn relative_path(from: &Path, to: &Path) -> Result<PathBuf> {
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn defaults_to_sdk_git_repository() {
+        let dependency = resolve_sdk_dependency(Path::new("."), None, None)
+            .expect("resolve default SDK dependency");
+        assert_eq!(
+            dependency,
+            "git = \"https://github.com/popzxc/airbender-platform\", branch = \"main\""
+        );
+    }
+
+    #[test]
+    fn prefers_explicit_sdk_version() {
+        let dependency = resolve_sdk_dependency(Path::new("."), None, Some("0.1.0".to_string()))
+            .expect("resolve version SDK dependency");
+        assert_eq!(dependency, "version = \"0.1.0\"");
+    }
+
+    #[test]
+    fn rejects_empty_sdk_version() {
+        let err = resolve_sdk_dependency(Path::new("."), None, Some(String::new()))
+            .expect_err("empty version should fail");
+        assert!(err.to_string().contains("--sdk-version cannot be empty"));
+    }
+
+    #[test]
+    fn prefers_explicit_sdk_path() {
+        let root = test_workspace_dir("sdk-path");
+        let destination = root.join("destination");
+        let sdk = root.join("sdk");
+
+        fs::create_dir_all(&destination).expect("create destination dir");
+        fs::create_dir_all(&sdk).expect("create sdk dir");
+
+        let dependency = resolve_sdk_dependency(&destination, Some(sdk.clone()), None)
+            .expect("resolve path SDK dependency");
+        assert_eq!(dependency, "path = \"../sdk\"");
+
+        fs::remove_dir_all(&root).expect("remove test directories");
+    }
+
+    fn test_workspace_dir(suffix: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("tmp")
+            .join(format!(
+                "cargo-airbender-new-tests-{suffix}-{timestamp}-{}",
+                std::process::id()
+            ))
+    }
 }
