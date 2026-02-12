@@ -1,7 +1,8 @@
 use crate::cli::{FlamegraphArgs, RunArgs, RunTranspilerArgs};
+use crate::error::{CliError, Result};
 use crate::input;
+use crate::ui;
 use airbender_host::Runner;
-use anyhow::{Context, Result};
 
 // Keep parity with the legacy airbender-cli defaults for simulator-oriented commands.
 const DEFAULT_CYCLE_LIMIT: usize = 90_000_000_000;
@@ -9,30 +10,39 @@ const DEFAULT_CYCLE_LIMIT: usize = 90_000_000_000;
 pub fn run(args: RunArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
     let cycle_limit = args.cycles.unwrap_or(DEFAULT_CYCLE_LIMIT);
+
     let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
         .with_cycles(cycle_limit)
         .build()
-        .with_context(|| {
-            format!(
-                "while attempting to initialize simulator runner for {}",
-                args.app_bin.display()
+        .map_err(|err| {
+            CliError::with_source(
+                format!(
+                    "failed to initialize simulator runner for `{}`",
+                    args.app_bin.display()
+                ),
+                err,
             )
         })?;
 
-    tracing::info!("running simulator");
-    let outcome = runner.run(&input_words).with_context(|| {
-        format!(
-            "while attempting to run simulator for {}",
-            args.app_bin.display()
+    let outcome = runner.run(&input_words).map_err(|err| {
+        CliError::with_source(
+            format!(
+                "simulator execution failed for `{}`",
+                args.app_bin.display()
+            ),
+            err,
         )
     })?;
-    report_execution_outcome(&outcome);
+
+    report_execution_outcome("simulator", &outcome);
+
     Ok(())
 }
 
 pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
     let cycle_limit = args.cycles.unwrap_or(DEFAULT_CYCLE_LIMIT);
+    let flamegraph_output = args.output.clone();
     let flamegraph = airbender_host::FlamegraphConfig {
         output: args.output,
         sampling_rate: args.sampling_rate,
@@ -44,21 +54,29 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
         .with_cycles(cycle_limit)
         .with_flamegraph(flamegraph)
         .build()
-        .with_context(|| {
-            format!(
-                "while attempting to initialize simulator runner for {}",
-                args.app_bin.display()
+        .map_err(|err| {
+            CliError::with_source(
+                format!(
+                    "failed to initialize simulator runner for `{}`",
+                    args.app_bin.display()
+                ),
+                err,
             )
         })?;
 
-    tracing::info!("running simulator with profiler");
-    let outcome = runner.run(&input_words).with_context(|| {
-        format!(
-            "while attempting to generate flamegraph for {}",
-            args.app_bin.display()
+    let outcome = runner.run(&input_words).map_err(|err| {
+        CliError::with_source(
+            format!(
+                "failed to generate flamegraph for `{}`",
+                args.app_bin.display()
+            ),
+            err,
         )
     })?;
-    report_execution_outcome(&outcome);
+
+    report_execution_outcome("simulator", &outcome);
+    ui::field("flamegraph", flamegraph_output.display());
+
     Ok(())
 }
 
@@ -70,35 +88,48 @@ pub fn run_transpiler(args: RunTranspilerArgs) -> Result<()> {
     if let Some(text_path) = args.text_path.as_ref() {
         builder = builder.with_text_path(text_path);
     }
-    let runner = builder.build().with_context(|| {
-        format!(
-            "while attempting to initialize transpiler runner for {}",
-            args.app_bin.display()
+    let runner = builder.build().map_err(|err| {
+        CliError::with_source(
+            format!(
+                "failed to initialize transpiler runner for `{}`",
+                args.app_bin.display()
+            ),
+            err,
         )
     })?;
 
-    tracing::info!("running transpiler JIT");
-    let outcome = runner.run(&input_words).with_context(|| {
-        format!(
-            "while attempting to run transpiler for {}",
-            args.app_bin.display()
+    let outcome = runner.run(&input_words).map_err(|err| {
+        CliError::with_source(
+            format!(
+                "transpiler execution failed for `{}`",
+                args.app_bin.display()
+            ),
+            err,
         )
     })?;
-    report_execution_outcome(&outcome);
+
+    report_execution_outcome("transpiler", &outcome);
+
     Ok(())
 }
 
-fn report_execution_outcome(outcome: &airbender_host::ExecutionResult) {
-    tracing::info!(
-        "execution finished: cycles_executed={}, reached_end={}",
-        outcome.cycles_executed,
-        outcome.reached_end
-    );
+fn report_execution_outcome(mode: &str, outcome: &airbender_host::ExecutionResult) {
+    ui::success(format!("{mode} execution finished"));
+    ui::field("cycles", outcome.cycles_executed);
+    ui::field("reached_end", outcome.reached_end);
+    ui::field("outputs", format_output_registers(&outcome.receipt.output));
+}
+
+fn format_output_registers(output: &[u32]) -> String {
+    if output.is_empty() {
+        return "<none>".to_string();
+    }
 
     let mut registers = String::new();
-    for (offset, value) in outcome.receipt.output.iter().enumerate() {
+    for (offset, value) in output.iter().enumerate() {
         use std::fmt::Write;
         let _ = write!(registers, "x{}={} ", offset + 10, value);
     }
-    tracing::info!("output values: {}", registers.trim_end());
+
+    registers.trim_end().to_string()
 }

@@ -5,7 +5,7 @@ mod run;
 mod vk;
 
 use crate::cli::{Cli, Commands};
-use anyhow::Result;
+use crate::error::Result;
 
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {

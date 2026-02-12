@@ -737,10 +737,13 @@ version = "0.1.0"
 dependencies = [
  "airbender-build",
  "airbender-host",
+ "anstream",
+ "anstyle",
  "anyhow",
  "bincode 2.0.1",
  "clap",
  "serde",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
 ]

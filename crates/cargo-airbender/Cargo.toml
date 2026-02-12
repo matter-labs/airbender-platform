@@ -18,8 +18,11 @@ include = [
 airbender-build = { version = "0.1.0", path = "../airbender-build" }
 airbender-host = { version = "0.1.0", path = "../airbender-host" }
 anyhow = { workspace = true }
+anstream = { workspace = true }
+anstyle = { workspace = true }
 bincode = { workspace = true, features = ["alloc", "serde"] }
 clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

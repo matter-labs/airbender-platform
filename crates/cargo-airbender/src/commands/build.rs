@@ -1,6 +1,7 @@
 use crate::cli::{BuildArgs, BuildProfile};
+use crate::error::{CliError, Result};
+use crate::ui;
 use airbender_build::{build_dist, BuildConfig, Profile};
-use anyhow::{Context, Result};
 
 pub fn run(args: BuildArgs) -> Result<()> {
     let BuildArgs {
@@ -17,8 +18,19 @@ pub fn run(args: BuildArgs) -> Result<()> {
 
     let project_dir = match project {
         Some(path) => path,
-        None => std::env::current_dir().context("while attempting to resolve current directory")?,
+        None => std::env::current_dir().map_err(|err| {
+            CliError::with_source("failed to resolve current working directory", err)
+        })?,
     };
+
+    let manifest_path = project_dir.join("Cargo.toml");
+    if !manifest_path.is_file() {
+        return Err(CliError::new(format!(
+            "guest project `{}` does not contain a Cargo.toml",
+            project_dir.display()
+        ))
+        .with_hint("use --project <path-to-guest-crate>"));
+    }
 
     let mut config = BuildConfig::new(project_dir);
     config.app_name = app_name;
@@ -28,13 +40,24 @@ pub fn run(args: BuildArgs) -> Result<()> {
     config.profile = resolve_profile(profile, debug, release);
     config.cargo_args = cargo_args;
 
-    let artifacts = build_dist(&config)
-        .map_err(|err| anyhow::anyhow!("while attempting to build guest artifacts: {err}"))?;
-    tracing::info!("dist: {}", artifacts.dist_dir.display());
-    tracing::info!("app.bin: {}", artifacts.app_bin.display());
-    tracing::info!("app.elf: {}", artifacts.app_elf.display());
-    tracing::info!("app.text: {}", artifacts.app_text.display());
-    tracing::info!("manifest: {}", artifacts.manifest.display());
+    let artifacts = build_dist(&config).map_err(|err| {
+        CliError::with_source("failed to build guest artifacts", err)
+            .with_hint("set `RUST_LOG=info` if you need backend diagnostic logs")
+    })?;
+
+    ui::success("built guest artifacts");
+    ui::field("dist", artifacts.dist_dir.display());
+    ui::field("app.bin", artifacts.app_bin.display());
+    ui::field("app.elf", artifacts.app_elf.display());
+    ui::field("app.text", artifacts.app_text.display());
+    ui::field("manifest", artifacts.manifest.display());
+    ui::blank_line();
+    ui::info("next step");
+    ui::command(format!(
+        "cargo airbender run \"{}\" --input <input.hex>",
+        artifacts.app_bin.display()
+    ));
+
     Ok(())
 }
 

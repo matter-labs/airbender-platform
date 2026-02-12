@@ -39,6 +39,8 @@ clap = "4"
 sha3 = { version = "0.10", default-features = false }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+anstream = "0.6"
+anstyle = "1"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"

@@ -1,6 +1,7 @@
 use crate::cli::{NewAllocatorArg, NewArgs};
+use crate::error::{CliError, Result};
+use crate::ui;
 use airbender_build::DEFAULT_GUEST_TOOLCHAIN;
-use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -52,28 +53,43 @@ pub fn run(args: NewArgs) -> Result<()> {
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
     });
-    let project_name = project_name.context("while attempting to determine project name")?;
+    let project_name = project_name.ok_or_else(|| {
+        CliError::new(format!(
+            "could not infer project name from destination `{}`",
+            args.path.display()
+        ))
+        .with_hint("pass an explicit project name with `--name <project-name>`")
+    })?;
 
     ensure_empty_dir(&args.path)?;
-    fs::create_dir_all(&args.path).with_context(|| {
-        format!(
-            "while attempting to create destination directory {}",
-            args.path.display()
+    fs::create_dir_all(&args.path).map_err(|err| {
+        CliError::with_source(
+            format!(
+                "failed to create destination directory `{}`",
+                args.path.display()
+            ),
+            err,
         )
     })?;
 
     let guest_destination_dir = args.path.join("guest");
-    fs::create_dir_all(&guest_destination_dir).with_context(|| {
-        format!(
-            "while attempting to create destination directory {}",
-            guest_destination_dir.display()
+    fs::create_dir_all(&guest_destination_dir).map_err(|err| {
+        CliError::with_source(
+            format!(
+                "failed to create destination directory `{}`",
+                guest_destination_dir.display()
+            ),
+            err,
         )
     })?;
     let host_destination_dir = args.path.join("host");
-    fs::create_dir_all(&host_destination_dir).with_context(|| {
-        format!(
-            "while attempting to create destination directory {}",
-            host_destination_dir.display()
+    fs::create_dir_all(&host_destination_dir).map_err(|err| {
+        CliError::with_source(
+            format!(
+                "failed to create destination directory `{}`",
+                host_destination_dir.display()
+            ),
+            err,
         )
     })?;
 
@@ -147,7 +163,17 @@ pub fn run(args: NewArgs) -> Result<()> {
     ];
 
     write_template(&args.path, &replacements)?;
-    tracing::info!("created project at {}", args.path.display());
+
+    ui::success(format!("created Airbender project `{project_name}`"));
+    ui::field("path", args.path.display());
+    ui::field("guest", guest_destination_dir.display());
+    ui::field("host", host_destination_dir.display());
+    ui::blank_line();
+    ui::info("next steps");
+    ui::command(format!("cd \"{}\"", args.path.display()));
+    ui::command("cd guest && cargo airbender build");
+    ui::command("cd ../host && ZKSYNC_USE_CUDA_STUBS=true cargo run");
+
     Ok(())
 }
 
@@ -159,14 +185,19 @@ fn resolve_crate_dependency(
 ) -> Result<String> {
     if let Some(version) = sdk_version {
         if version.is_empty() {
-            bail!("--sdk-version cannot be empty");
+            return Err(CliError::new("`--sdk-version` cannot be empty"));
         }
         return Ok(format!("version = \"{version}\""));
     }
 
     if let Some(sdk_path) = sdk_path {
         if !sdk_path.exists() {
-            bail!("failed to locate SDK path at {}", sdk_path.display());
+            return Err(
+                CliError::new(format!("SDK path `{}` does not exist", sdk_path.display()))
+                    .with_hint(
+                        "pass `--sdk-path` pointing to an existing airbender-platform checkout",
+                    ),
+            );
         }
 
         let crate_path = resolve_dependency_crate_path(sdk_path, crate_name)?;
@@ -197,28 +228,42 @@ fn resolve_dependency_crate_path(sdk_path: &Path, crate_name: &str) -> Result<Pa
 
     for candidate in candidates {
         if candidate.join("Cargo.toml").exists() {
-            return candidate.canonicalize().with_context(|| {
-                format!("while attempting to canonicalize {}", candidate.display())
+            return candidate.canonicalize().map_err(|err| {
+                CliError::with_source(
+                    format!("failed to canonicalize `{}`", candidate.display()),
+                    err,
+                )
             });
         }
     }
 
-    bail!(
-        "failed to locate {crate_name} crate under {}",
+    Err(CliError::new(format!(
+        "failed to locate `{crate_name}` under `{}`",
         sdk_path.display()
-    )
+    ))
+    .with_hint("point `--sdk-path` to the workspace root or crate directory"))
 }
 
 fn ensure_empty_dir(path: &Path) -> Result<()> {
     if path.exists()
         && path
             .read_dir()
-            .with_context(|| format!("while attempting to list {}", path.display()))?
+            .map_err(|err| {
+                CliError::with_source(
+                    format!("failed to list directory `{}`", path.display()),
+                    err,
+                )
+            })?
             .next()
             .is_some()
     {
-        bail!("destination directory is not empty: {}", path.display());
+        return Err(CliError::new(format!(
+            "destination directory `{}` is not empty",
+            path.display()
+        ))
+        .with_hint("choose a new path or remove existing files in that directory"));
     }
+
     Ok(())
 }
 
@@ -226,27 +271,36 @@ fn write_template(destination_root: &Path, replacements: &[(&str, &str)]) -> Res
     for (relative_path, source) in TEMPLATE_FILES {
         let destination_path = destination_root.join(relative_path);
         if let Some(parent) = destination_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("while attempting to create {}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|err| {
+                CliError::with_source(
+                    format!("failed to create directory `{}`", parent.display()),
+                    err,
+                )
+            })?;
         }
 
         let mut content = source.to_string();
         for (from, to) in replacements {
             content = content.replace(from, to);
         }
-        fs::write(&destination_path, content)
-            .with_context(|| format!("while attempting to write {}", destination_path.display()))?;
+        fs::write(&destination_path, content).map_err(|err| {
+            CliError::with_source(
+                format!("failed to write `{}`", destination_path.display()),
+                err,
+            )
+        })?;
     }
+
     Ok(())
 }
 
 fn relative_path(from: &Path, to: &Path) -> Result<PathBuf> {
-    let from = from
-        .canonicalize()
-        .with_context(|| format!("while attempting to canonicalize {}", from.display()))?;
-    let to = to
-        .canonicalize()
-        .with_context(|| format!("while attempting to canonicalize {}", to.display()))?;
+    let from = from.canonicalize().map_err(|err| {
+        CliError::with_source(format!("failed to canonicalize `{}`", from.display()), err)
+    })?;
+    let to = to.canonicalize().map_err(|err| {
+        CliError::with_source(format!("failed to canonicalize `{}`", to.display()), err)
+    })?;
 
     let from_components: Vec<_> = from.components().collect();
     let to_components: Vec<_> = to.components().collect();
@@ -297,7 +351,7 @@ mod tests {
     fn rejects_empty_sdk_version() {
         let err = resolve_crate_dependency(Path::new("."), None, Some(""), "airbender-sdk")
             .expect_err("empty version should fail");
-        assert!(err.to_string().contains("--sdk-version cannot be empty"));
+        assert!(err.to_string().contains("--sdk-version"));
     }
 
     #[test]
