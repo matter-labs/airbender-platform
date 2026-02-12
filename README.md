@@ -1,119 +1,42 @@
 # Airbender Platform
 
-Airbender Platform is a development workspace for building zk-provable applications with Airbender.
+Airbender Platform is a workspace for building zk-provable programs with guest and host tooling.
 
-It includes:
-- `airbender-sdk` for guest programs.
-- `airbender-host` for execute/prove/verify host flows.
-- `cargo-airbender` (`cargo airbender`) for project scaffolding, guest builds, and runtime proving commands.
-- guest/host example applications under `examples/`.
+This project provides:
+
+- `cargo airbender`: an utility to manage airbender projects and interact with the built RISC-V programs:
+    - Create projects with `cargo airbender new`
+    - Build projects with `cargo airbender build`
+    - Run RISC-V programs with `cargo airbender run` and `cargo airbender run-transpiler`
+    - Benchmark programs with `cargo airbender flamegraph`
+    - Prove and verify proofs from CLI via `cargo airbender prove` & `cargo airbender verify-proof`.
+- Guest SDK: a set of utilities to make building guest programs convenient:
+    - Project scaffolding: entrypoint, `std` bindings, allocator.
+    - Reading input from host.
+    - Committing values.
+    - Passing debug logs.
+    - Accessing prover-accelerated crypto primitives.
+- Host SDK: a set of utilities to interact with your program:
+    - Load and run RISC-V projects from Rust.
+    - Generate verification keys, prove execution, verify proofs.
+
+## Documentation
+
+The user manual lives in [`docs/`](./docs/).
+
+Start here:
+
+- [`docs/README.md`](./docs/README.md) (table of contents)
+- [`docs/01-installation-and-hello-world.md`](./docs/01-installation-and-hello-world.md)
+- [`docs/02-host-program-api.md`](./docs/02-host-program-api.md)
+- [`docs/03-guest-program-api.md`](./docs/03-guest-program-api.md)
+- [`docs/04-crypto-on-guest-and-host.md`](./docs/04-crypto-on-guest-and-host.md)
+- [`docs/05-cli-reference.md`](./docs/05-cli-reference.md)
+
+## Examples
+
+Complete guest + host examples are in [`examples/`](./examples/).
 
 ## Status
 
 This repository is under active development.
-
-## Prerequisites
-
-- Rust toolchain from `rust-toolchain.toml`.
-- `clang` available in `PATH` (in case of C++ dependencies being used).
-- `cargo-binutils` for `cargo objcopy`:
-
-```sh
-cargo install cargo-binutils --locked
-```
-
-## Install `cargo airbender`
-
-```sh
-cargo install --path crates/cargo-airbender --force
-```
-
-## Quick Start
-
-Build a guest:
-
-```sh
-cd examples/fibonacci/guest
-cargo airbender build
-```
-
-Build outputs are now namespaced by app name (`app` by default), so artifacts are written to
-`dist/<app-name>/` (for example `dist/app/app.bin`). You can create multiple build variants:
-
-```sh
-cargo airbender build --app-name with_extra_feature -- --features my_extra_feature
-```
-
-Use `--` to forward additional `cargo build` flags.
-
-Run the corresponding host (execute only):
-
-```sh
-cd ../host
-cargo run
-```
-
-Run proof generation + verification:
-
-```sh
-cargo run -- --prove
-```
-
-## Create a New Guest Project
-
-Default SDK dependency (git repository on `main`):
-
-```sh
-cargo airbender new ./my-guest
-```
-
-Explicit local SDK path:
-
-```sh
-cargo airbender new ./my-guest --sdk-path /path/to/airbender-platform/crates/airbender-sdk
-```
-
-Published SDK version (once published):
-
-```sh
-cargo airbender new ./my-guest --sdk-version 0.1.0
-```
-
-## Tuning
-
-- Default simulator cycle budget: `100_000_000`.
-- Override per run with `AIRBENDER_MAX_CYCLES`:
-
-```sh
-AIRBENDER_MAX_CYCLES=500000000 cargo run
-```
-
-## Runtime Commands
-
-`cargo airbender` also exposes runtime flows:
-
-```sh
-# Run with simulator
-cargo airbender run ./dist/app/app.bin --input ./input.hex
-
-# Run via transpiler JIT
-cargo airbender run-transpiler ./dist/app/app.bin --input ./input.hex
-
-# Emit flamegraph SVG
-cargo airbender flamegraph ./dist/app/app.bin --input ./input.hex --output flamegraph.svg
-
-# Generate proof
-cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
-
-# Generate verification keys
-cargo airbender generate-vk ./dist/app/app.bin --output vk.bin
-
-# Verify proof
-cargo airbender verify-proof ./proof.bin --vk ./vk.bin
-```
-
-By default, command logs use `info` level. Override with `RUST_LOG`, for example:
-
-```sh
-RUST_LOG=debug cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
-```
