@@ -70,8 +70,10 @@ This produces artifacts in `dist/app/` by default:
 
 Create an input file (`u32` words encoded as hex, 8 hex chars per word):
 
+> Note: this is a manual codec-v0 payload for `u32 = 41` (used by the template's `read::<u32>()`).
+
 ```sh
-printf '00000029' > input.hex
+printf '00000001\n29000000\n' > input.hex
 ```
 
 Run in the simulator:
@@ -80,7 +82,9 @@ Run in the simulator:
 cargo airbender run ./dist/app/app.bin --input ./input.hex
 ```
 
-`0x00000029` is decimal `41`, so the template guest should produce `42` in output register `x10`.
+This input represents a codec-v0 encoded `u32 = 41`, so the template guest should produce `42` in output register `x10`.
+
+For non-trivial input files, generate words from host-side values via `Inputs` methods (see [`docs/02-host-program-api.md`](./02-host-program-api.md)).
 
 Generate and verify a proof:
 

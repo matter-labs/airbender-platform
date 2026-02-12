@@ -170,11 +170,15 @@ Runtime/prover commands that accept `--input` expect hex-encoded `u32` words:
 - whitespace is ignored
 - total hex length must be a multiple of 8
 - each 8-hex chunk is parsed as one `u32`
+- words must match guest input expectations (for `read::<T>()`, this means codec-framed payload words)
+
+Recommended: construct inputs with `airbender_host::Inputs` (`push`, `push_bytes`) and write files with `write_hex_file(...)`. See [`docs/02-host-program-api.md`](./02-host-program-api.md).
 
 Example file:
 
 ```text
-0000000a
+00000001
+29000000
 ```
 
 ## Logging

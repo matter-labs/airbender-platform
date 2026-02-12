@@ -46,6 +46,7 @@ fn run() -> Result<()> {
 - `Inputs::push(&value)` serializes typed data via Airbender codec
 - `Inputs::push_bytes(&bytes)` pushes raw framed bytes
 - `Inputs::words()` exposes the low-level `u32` word stream
+- `Inputs::write_hex_file(path)` writes CLI-compatible hex input (`--input`)
 
 Guest-side `read::<T>()` calls consume values in the same order they were pushed.
 
