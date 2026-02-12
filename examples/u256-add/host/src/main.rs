@@ -1,4 +1,4 @@
-use airbender_host::{Inputs, Program, ProverLevel, Result};
+use airbender_host::{Inputs, Program, Prover, ProverLevel, Result, Runner};
 use ruint::aliases::U256;
 use std::path::PathBuf;
 
@@ -15,7 +15,8 @@ fn main() -> Result<()> {
     inputs.push(&b)?;
     inputs.push(&c)?;
 
-    let execution = program.execute(&inputs, None)?;
+    let simulator = program.simulator_runner().build()?;
+    let execution = simulator.run(inputs.words())?;
     let exec_valid = execution.receipt.output[0] == 1;
     println!(
         "Execution finished: cycles={}, reached_end={}, valid={}",
@@ -32,7 +33,7 @@ fn main() -> Result<()> {
         .gpu_prover()
         .with_level(ProverLevel::RecursionUnified)
         .build()?;
-    let prove_result = program.prove(&prover, &inputs)?;
+    let prove_result = prover.prove(inputs.words())?;
     let proof_valid = prove_result.receipt.output[0] == 1;
     println!(
         "Proof generated: cycles={}, valid={}",

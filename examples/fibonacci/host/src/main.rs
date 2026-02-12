@@ -1,4 +1,4 @@
-use airbender_host::{Inputs, Program, ProverLevel, Result};
+use airbender_host::{Inputs, Program, Prover, ProverLevel, Result, Runner};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
@@ -10,7 +10,8 @@ fn main() -> Result<()> {
     let mut inputs = Inputs::new();
     inputs.push(&n)?;
 
-    let execution = program.execute(&inputs, None)?;
+    let simulator = program.simulator_runner().build()?;
+    let execution = simulator.run(inputs.words())?;
     let exec_output = execution.receipt.output[0];
     println!(
         "Execution finished: cycles={}, reached_end={}, output={}",
@@ -27,7 +28,7 @@ fn main() -> Result<()> {
         .gpu_prover()
         .with_level(ProverLevel::RecursionUnified)
         .build()?;
-    let prove_result = program.prove(&prover, &inputs)?;
+    let prove_result = prover.prove(inputs.words())?;
     let proof_output = prove_result.receipt.output[0];
     println!(
         "Proof generated: cycles={}, output={}",

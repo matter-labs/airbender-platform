@@ -1,5 +1,6 @@
 use crate::cli::{FlamegraphArgs, RunArgs, RunTranspilerArgs};
 use crate::input;
+use airbender_host::Runner;
 use anyhow::{Context, Result};
 
 // Keep parity with the legacy airbender-cli defaults for simulator-oriented commands.
@@ -8,14 +9,23 @@ const DEFAULT_CYCLE_LIMIT: usize = 90_000_000_000;
 pub fn run(args: RunArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
     let cycle_limit = args.cycles.unwrap_or(DEFAULT_CYCLE_LIMIT);
-    tracing::info!("running simulator");
-    let outcome = airbender_host::run_simulator(&args.app_bin, &input_words, cycle_limit)
+    let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
+        .with_cycles(cycle_limit)
+        .build()
         .with_context(|| {
             format!(
-                "while attempting to run simulator for {}",
+                "while attempting to initialize simulator runner for {}",
                 args.app_bin.display()
             )
         })?;
+
+    tracing::info!("running simulator");
+    let outcome = runner.run(&input_words).with_context(|| {
+        format!(
+            "while attempting to run simulator for {}",
+            args.app_bin.display()
+        )
+    })?;
     report_execution_outcome(&outcome);
     Ok(())
 }
@@ -30,14 +40,19 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
         elf_path: args.elf_path,
     };
 
+    let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
+        .with_cycles(cycle_limit)
+        .with_flamegraph(flamegraph)
+        .build()
+        .with_context(|| {
+            format!(
+                "while attempting to initialize simulator runner for {}",
+                args.app_bin.display()
+            )
+        })?;
+
     tracing::info!("running simulator with profiler");
-    let outcome = airbender_host::run_simulator_with_flamegraph(
-        &args.app_bin,
-        &input_words,
-        cycle_limit,
-        &flamegraph,
-    )
-    .with_context(|| {
+    let outcome = runner.run(&input_words).with_context(|| {
         format!(
             "while attempting to generate flamegraph for {}",
             args.app_bin.display()
@@ -50,14 +65,20 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
 pub fn run_transpiler(args: RunTranspilerArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
     let cycle_limit = args.cycles.unwrap_or(DEFAULT_CYCLE_LIMIT);
+    let mut builder =
+        airbender_host::TranspilerRunnerBuilder::new(&args.app_bin).with_cycles(cycle_limit);
+    if let Some(text_path) = args.text_path.as_ref() {
+        builder = builder.with_text_path(text_path);
+    }
+    let runner = builder.build().with_context(|| {
+        format!(
+            "while attempting to initialize transpiler runner for {}",
+            args.app_bin.display()
+        )
+    })?;
+
     tracing::info!("running transpiler JIT");
-    let outcome = airbender_host::run_transpiler(
-        &args.app_bin,
-        &input_words,
-        cycle_limit,
-        args.text_path.as_deref(),
-    )
-    .with_context(|| {
+    let outcome = runner.run(&input_words).with_context(|| {
         format!(
             "while attempting to run transpiler for {}",
             args.app_bin.display()

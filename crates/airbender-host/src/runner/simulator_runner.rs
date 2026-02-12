@@ -1,3 +1,4 @@
+use super::{resolve_cycles, ExecutionResult, Runner};
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
 use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
@@ -7,11 +8,7 @@ use risc_v_simulator::setup::BaselineWithND;
 use risc_v_simulator::sim::{
     BinarySource, DiagnosticsConfig, ProfilerConfig, Simulator, SimulatorConfig,
 };
-use std::env::VarError;
 use std::path::{Path, PathBuf};
-
-pub const DEFAULT_CYCLES: usize = 100_000_000;
-pub const MAX_CYCLES_ENV: &str = "AIRBENDER_MAX_CYCLES";
 
 /// Flamegraph collection options for simulator execution.
 #[derive(Clone, Debug)]
@@ -22,66 +19,64 @@ pub struct FlamegraphConfig {
     pub elf_path: Option<PathBuf>,
 }
 
-/// Simulator execution outcome.
-#[derive(Clone, Debug)]
-pub struct ExecutionResult {
-    pub receipt: Receipt,
-    pub cycles_executed: usize,
-    pub reached_end: bool,
+/// Builder for creating a configured simulator runner.
+pub struct SimulatorRunnerBuilder {
+    app_bin_path: PathBuf,
+    cycles: Option<usize>,
+    flamegraph: Option<FlamegraphConfig>,
 }
 
-/// Resolve the simulator cycle budget from an explicit override or environment.
-pub fn resolve_cycles(explicit_cycles: Option<usize>) -> Result<usize> {
-    if let Some(cycles) = explicit_cycles {
-        if cycles == 0 {
-            return Err(HostError::Simulator(
-                "cycle budget must be greater than zero".to_string(),
-            ));
+impl SimulatorRunnerBuilder {
+    pub fn new(app_bin_path: impl AsRef<Path>) -> Self {
+        Self {
+            app_bin_path: app_bin_path.as_ref().to_path_buf(),
+            cycles: None,
+            flamegraph: None,
         }
-        return Ok(cycles);
     }
 
-    match std::env::var(MAX_CYCLES_ENV) {
-        Ok(value) => parse_cycles(&value).map_err(|reason| {
-            HostError::Simulator(format!(
-                "invalid {MAX_CYCLES_ENV} value `{value}`: {reason}"
-            ))
-        }),
-        Err(VarError::NotPresent) => Ok(DEFAULT_CYCLES),
-        Err(err) => Err(HostError::Simulator(format!(
-            "failed to read {MAX_CYCLES_ENV}: {err}"
-        ))),
+    pub fn with_cycles(mut self, cycles: usize) -> Self {
+        self.cycles = Some(cycles);
+        self
+    }
+
+    pub fn with_flamegraph(mut self, flamegraph: FlamegraphConfig) -> Self {
+        self.flamegraph = Some(flamegraph);
+        self
+    }
+
+    pub fn build(self) -> Result<SimulatorRunner> {
+        let app_bin_path = resolve_app_bin_path(&self.app_bin_path)?;
+        let cycles = resolve_cycles(self.cycles)?;
+
+        if let Some(flamegraph) = self.flamegraph.as_ref() {
+            profiler_diagnostics(&app_bin_path, flamegraph)?;
+        }
+
+        Ok(SimulatorRunner {
+            app_bin_path,
+            cycles,
+            flamegraph: self.flamegraph,
+        })
     }
 }
 
-fn parse_cycles(raw: &str) -> std::result::Result<usize, &'static str> {
-    let cycles = raw
-        .trim()
-        .parse::<usize>()
-        .map_err(|_| "expected an integer")?;
-    if cycles == 0 {
-        return Err("must be greater than zero");
-    }
-    Ok(cycles)
-}
-
-pub fn run_simulator(
-    bin_path: &Path,
-    input_words: &[u32],
+/// Simulator-based execution runner.
+pub struct SimulatorRunner {
+    app_bin_path: PathBuf,
     cycles: usize,
-) -> Result<ExecutionResult> {
-    run_simulator_with_diagnostics(bin_path, input_words, cycles, None)
+    flamegraph: Option<FlamegraphConfig>,
 }
 
-/// Run the simulator and emit a flamegraph profile.
-pub fn run_simulator_with_flamegraph(
-    bin_path: &Path,
-    input_words: &[u32],
-    cycles: usize,
-    flamegraph: &FlamegraphConfig,
-) -> Result<ExecutionResult> {
-    let diagnostics = profiler_diagnostics(bin_path, flamegraph)?;
-    run_simulator_with_diagnostics(bin_path, input_words, cycles, Some(diagnostics))
+impl Runner for SimulatorRunner {
+    fn run(&self, input_words: &[u32]) -> Result<ExecutionResult> {
+        let diagnostics = self
+            .flamegraph
+            .as_ref()
+            .map(|flamegraph| profiler_diagnostics(&self.app_bin_path, flamegraph))
+            .transpose()?;
+        run_simulator_with_diagnostics(&self.app_bin_path, input_words, self.cycles, diagnostics)
+    }
 }
 
 fn run_simulator_with_diagnostics(
@@ -90,12 +85,6 @@ fn run_simulator_with_diagnostics(
     cycles: usize,
     diagnostics: Option<DiagnosticsConfig>,
 ) -> Result<ExecutionResult> {
-    if !bin_path.exists() {
-        return Err(HostError::Simulator(format!(
-            "binary not found: {}",
-            bin_path.display()
-        )));
-    }
     let config = SimulatorConfig::new(
         BinarySource::Path(bin_path.to_path_buf()),
         CUSTOM_ENTRY_POINT,
@@ -117,6 +106,22 @@ fn run_simulator_with_diagnostics(
         receipt: Receipt::from_registers(result.state.registers),
         cycles_executed,
         reached_end: result.reached_end,
+    })
+}
+
+fn resolve_app_bin_path(path: &Path) -> Result<PathBuf> {
+    if !path.exists() {
+        return Err(HostError::Simulator(format!(
+            "binary not found: {}",
+            path.display()
+        )));
+    }
+
+    path.canonicalize().map_err(|err| {
+        HostError::Simulator(format!(
+            "failed to canonicalize binary path {}: {err}",
+            path.display()
+        ))
     })
 }
 
@@ -153,26 +158,4 @@ fn derive_elf_path(bin_path: &Path) -> PathBuf {
     let mut elf_path = bin_path.to_path_buf();
     elf_path.set_extension("elf");
     elf_path
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_cycles;
-
-    #[test]
-    fn parse_cycles_accepts_positive_integer() {
-        assert_eq!(parse_cycles("100").expect("cycles"), 100);
-    }
-
-    #[test]
-    fn parse_cycles_rejects_zero() {
-        let err = parse_cycles("0").expect_err("error");
-        assert_eq!(err, "must be greater than zero");
-    }
-
-    #[test]
-    fn parse_cycles_rejects_non_numeric() {
-        let err = parse_cycles("abc").expect_err("error");
-        assert_eq!(err, "expected an integer");
-    }
 }

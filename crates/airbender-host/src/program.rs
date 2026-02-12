@@ -1,7 +1,6 @@
 use crate::error::{HostError, Result};
-use crate::inputs::Inputs;
-use crate::prover::{CpuProverBuilder, GpuProverBuilder, ProveResult, Prover};
-use crate::sim::{resolve_cycles, run_simulator, ExecutionResult};
+use crate::prover::{CpuProverBuilder, GpuProverBuilder};
+use crate::runner::{SimulatorRunnerBuilder, TranspilerRunnerBuilder};
 use crate::vk::{compute_unified_vk, verify_proof, UnifiedVk};
 use airbender_core::manifest::Manifest;
 use sha3::Digest;
@@ -72,10 +71,14 @@ impl Program {
         &self.app_text
     }
 
-    /// Execute the program in the simulator.
-    pub fn execute(&self, inputs: &Inputs, cycles: Option<usize>) -> Result<ExecutionResult> {
-        let cycles = resolve_cycles(cycles)?;
-        run_simulator(self.app_bin(), inputs.words(), cycles)
+    /// Create a simulator runner builder bound to this program.
+    pub fn simulator_runner(&self) -> SimulatorRunnerBuilder {
+        SimulatorRunnerBuilder::new(self.app_bin())
+    }
+
+    /// Create a transpiler runner builder bound to this program.
+    pub fn transpiler_runner(&self) -> TranspilerRunnerBuilder {
+        TranspilerRunnerBuilder::new(self.app_bin())
     }
 
     /// Create a GPU prover builder bound to this program.
@@ -86,11 +89,6 @@ impl Program {
     /// Create a CPU prover builder bound to this program.
     pub fn cpu_prover(&self) -> CpuProverBuilder {
         CpuProverBuilder::new(self.app_bin())
-    }
-
-    /// Prove the program and return the proof plus receipt.
-    pub fn prove(&self, prover: &impl Prover, inputs: &Inputs) -> Result<ProveResult> {
-        prover.prove(self.app_bin(), inputs.words())
     }
 
     /// Compute the unified verification key for this program.

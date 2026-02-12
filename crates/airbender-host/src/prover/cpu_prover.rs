@@ -1,8 +1,9 @@
 use super::{
-    ensure_prover_program_match, receipt_from_proof, resolve_app_bin_path, resolve_text_path,
-    resolve_worker_threads, ProveResult, Prover, DEFAULT_CPU_CYCLE_BOUND, DEFAULT_RAM_BOUND_BYTES,
+    receipt_from_proof, resolve_app_bin_path, resolve_text_path, resolve_worker_threads,
+    ProveResult, Prover, DEFAULT_CPU_CYCLE_BOUND, DEFAULT_RAM_BOUND_BYTES,
 };
 use crate::error::{HostError, Result};
+use crate::runner::{Runner, TranspilerRunnerBuilder};
 use execution_utils::setups;
 use execution_utils::unrolled;
 use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
@@ -107,18 +108,15 @@ impl CpuProver {
 }
 
 impl Prover for CpuProver {
-    fn prove(&self, app_bin_path: &Path, input_words: &[u32]) -> Result<ProveResult> {
-        ensure_prover_program_match(&self.app_bin_path, app_bin_path)?;
-
+    fn prove(&self, input_words: &[u32]) -> Result<ProveResult> {
         let cycles_bound = match self.cycles {
             Some(value) => value,
             None => {
-                let outcome = crate::transpiler::run_transpiler(
-                    &self.app_bin_path,
-                    input_words,
-                    DEFAULT_CPU_CYCLE_BOUND,
-                    Some(&self.app_text_path),
-                )?;
+                let cycle_estimator = TranspilerRunnerBuilder::new(&self.app_bin_path)
+                    .with_cycles(DEFAULT_CPU_CYCLE_BOUND)
+                    .with_text_path(&self.app_text_path)
+                    .build()?;
+                let outcome = cycle_estimator.run(input_words)?;
                 outcome.cycles_executed
             }
         };

@@ -5,8 +5,7 @@ mod inputs;
 mod program;
 mod prover;
 mod receipt;
-mod sim;
-mod transpiler;
+mod runner;
 mod vk;
 
 pub use error::{HostError, Result};
@@ -16,11 +15,11 @@ pub use prover::{
     CpuProver, CpuProverBuilder, GpuProver, GpuProverBuilder, ProveResult, Prover, ProverLevel,
 };
 pub use receipt::Receipt;
-pub use sim::{
-    resolve_cycles, run_simulator, run_simulator_with_flamegraph, ExecutionResult,
-    FlamegraphConfig, DEFAULT_CYCLES, MAX_CYCLES_ENV,
+pub use runner::{
+    resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, SimulatorRunner,
+    SimulatorRunnerBuilder, TranspilerRunner, TranspilerRunnerBuilder, DEFAULT_CYCLES,
+    MAX_CYCLES_ENV,
 };
-pub use transpiler::run_transpiler;
 pub use vk::{
     compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
     UnrolledVk,

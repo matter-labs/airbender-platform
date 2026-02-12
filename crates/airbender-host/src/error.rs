@@ -10,6 +10,8 @@ pub enum HostError {
     Simulator(String),
     #[error("transpiler error: {0}")]
     Transpiler(String),
+    #[error("runner error: {0}")]
+    Runner(String),
     #[error("prover error: {0}")]
     Prover(String),
     #[error("verification error: {0}")]

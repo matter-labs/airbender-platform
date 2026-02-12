@@ -13,10 +13,10 @@ airbender-host = { path = "../../crates/airbender-host" }
 
 `Program` is the highest-level API.
 
-Create a prover once (`gpu_prover` / `cpu_prover`) and reuse it across multiple `Program::prove(...)` calls.
+Create runners/provers once and reuse them across multiple `runner.run(...)` / `prover.prove(...)` calls.
 
 ```rust
-use airbender_host::{Inputs, Program, ProverLevel, Result};
+use airbender_host::{Inputs, Program, Prover, ProverLevel, Result, Runner};
 
 fn run() -> Result<()> {
     let program = Program::load("../guest/dist/app")?;
@@ -24,14 +24,15 @@ fn run() -> Result<()> {
     let mut inputs = Inputs::new();
     inputs.push(&10u32)?;
 
-    let execution = program.execute(&inputs, None)?;
+    let simulator = program.simulator_runner().build()?;
+    let execution = simulator.run(inputs.words())?;
     println!("output x10={}", execution.receipt.output[0]);
 
     let prover = program
         .gpu_prover()
         .with_level(ProverLevel::RecursionUnified)
         .build()?;
-    let prove_result = program.prove(&prover, &inputs)?;
+    let prove_result = prover.prove(inputs.words())?;
     let vk = program.compute_vk()?;
     program.verify(&prove_result.proof, &vk)?;
     Ok(())
@@ -52,18 +53,19 @@ Guest-side `read::<T>()` calls consume values in the same order they were pushed
 
 High-level:
 
-- `Program::execute(&inputs, cycles)`
+- `Program::simulator_runner()`
+- `Program::transpiler_runner()`
 - `Program::gpu_prover()`
 - `Program::cpu_prover()`
-- `Program::prove(&prover, &inputs)`
+- `Runner::run(&input_words)`
+- `Prover::prove(&input_words)`
 - `Program::compute_vk()`
 - `Program::verify(&proof, &vk)`
 
 Lower-level:
 
-- `run_simulator(...)`
-- `run_simulator_with_flamegraph(...)`
-- `run_transpiler(...)`
+- `SimulatorRunnerBuilder::new(app_bin).with_...().build()`
+- `TranspilerRunnerBuilder::new(app_bin).with_...().build()`
 - `GpuProverBuilder::new(app_bin).with_...().build()`
 - `CpuProverBuilder::new(app_bin).with_...().build()`
 - `compute_unified_vk(...)`, `compute_unrolled_vk(...)`
@@ -84,6 +86,11 @@ These correspond to guest commit helpers and `#[airbender::main]` return values.
 - `CpuProverBuilder::new(...)` accepts path and supports `with_worker_threads(...)`, `with_cycles(...)`, `with_ram_bound(...)`, then `build()`.
 - `build()` returns `Result<...>` and performs path/config validation.
 - CPU proving currently supports base-layer proving (`ProverLevel::Base`) only.
+
+## Runner Construction
+
+- `SimulatorRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_flamegraph(...)`, then `build()`.
+- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, then `build()`.
 
 ## Cycle Budget
 

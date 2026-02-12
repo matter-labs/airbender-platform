@@ -1,6 +1,5 @@
 use super::{
-    base_path, ensure_prover_program_match, receipt_from_proof, resolve_app_bin_path, ProveResult,
-    Prover, ProverLevel,
+    base_path, receipt_from_proof, resolve_app_bin_path, ProveResult, Prover, ProverLevel,
 };
 use crate::error::{HostError, Result};
 use execution_utils::unrolled_gpu::UnrolledProver;
@@ -41,7 +40,6 @@ impl GpuProverBuilder {
 
 /// GPU prover wrapper that owns and reuses a single `UnrolledProver` instance.
 pub struct GpuProver {
-    app_bin_path: PathBuf,
     prover: UnrolledProver,
 }
 
@@ -57,17 +55,12 @@ impl GpuProver {
         let prover =
             create_unrolled_prover(&app_bin_path, worker_threads, level.as_unrolled_level())?;
 
-        Ok(Self {
-            app_bin_path,
-            prover,
-        })
+        Ok(Self { prover })
     }
 }
 
 impl Prover for GpuProver {
-    fn prove(&self, app_bin_path: &Path, input_words: &[u32]) -> Result<ProveResult> {
-        ensure_prover_program_match(&self.app_bin_path, app_bin_path)?;
-
+    fn prove(&self, input_words: &[u32]) -> Result<ProveResult> {
         let oracle = QuasiUARTSource::new_with_reads(input_words.to_vec());
         let (proof, cycles) = self.prover.prove(0, oracle);
         let receipt = receipt_from_proof(&proof);

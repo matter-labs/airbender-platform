@@ -21,7 +21,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
                     args.app_bin.display()
                 )
             })?;
-            prover.prove(&args.app_bin, &input_words)
+            prover.prove(&input_words)
         }
         ProverBackendArg::Cpu => {
             if level != airbender_host::ProverLevel::Base {
@@ -47,7 +47,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
                     args.app_bin.display()
                 )
             })?;
-            prover.prove(&args.app_bin, &input_words)
+            prover.prove(&input_words)
         }
     }
     .with_context(|| {
