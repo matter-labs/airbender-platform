@@ -1,7 +1,0 @@
-[package]
-name = "__AIRBENDER_PROJECT_NAME__"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-airbender = { package = "airbender-sdk", __AIRBENDER_SDK_DEP__ }
