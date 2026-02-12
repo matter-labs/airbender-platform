@@ -13,7 +13,7 @@ pub use error::{HostError, Result};
 pub use inputs::Inputs;
 pub use program::Program;
 pub use prover::{
-    prove, prove_with_options, ProveOptions, ProveResult, ProverBackend, ProverLevel,
+    CpuProver, CpuProverBuilder, GpuProver, GpuProverBuilder, ProveResult, Prover, ProverLevel,
 };
 pub use receipt::Receipt;
 pub use sim::{

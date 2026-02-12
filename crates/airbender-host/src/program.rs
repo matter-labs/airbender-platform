@@ -1,6 +1,6 @@
 use crate::error::{HostError, Result};
 use crate::inputs::Inputs;
-use crate::prover::ProveResult;
+use crate::prover::{CpuProverBuilder, GpuProverBuilder, ProveResult, Prover};
 use crate::sim::{resolve_cycles, run_simulator, ExecutionResult};
 use crate::vk::{compute_unified_vk, verify_proof, UnifiedVk};
 use airbender_core::manifest::Manifest;
@@ -78,9 +78,19 @@ impl Program {
         run_simulator(self.app_bin(), inputs.words(), cycles)
     }
 
+    /// Create a GPU prover builder bound to this program.
+    pub fn gpu_prover(&self) -> GpuProverBuilder {
+        GpuProverBuilder::new(self.app_bin())
+    }
+
+    /// Create a CPU prover builder bound to this program.
+    pub fn cpu_prover(&self) -> CpuProverBuilder {
+        CpuProverBuilder::new(self.app_bin())
+    }
+
     /// Prove the program and return the proof plus receipt.
-    pub fn prove(&self, inputs: &Inputs, worker_threads: Option<usize>) -> Result<ProveResult> {
-        crate::prover::prove(self.app_bin(), inputs.words(), worker_threads)
+    pub fn prove(&self, prover: &impl Prover, inputs: &Inputs) -> Result<ProveResult> {
+        prover.prove(self.app_bin(), inputs.words())
     }
 
     /// Compute the unified verification key for this program.

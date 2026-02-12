@@ -1,4 +1,4 @@
-use airbender_host::{Inputs, Program, Result};
+use airbender_host::{Inputs, Program, ProverLevel, Result};
 use ruint::aliases::U256;
 use std::path::PathBuf;
 
@@ -28,7 +28,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let prove_result = program.prove(&inputs, None)?;
+    let prover = program
+        .gpu_prover()
+        .with_level(ProverLevel::RecursionUnified)
+        .build()?;
+    let prove_result = program.prove(&prover, &inputs)?;
     let proof_valid = prove_result.receipt.output[0] == 1;
     println!(
         "Proof generated: cycles={}, valid={}",

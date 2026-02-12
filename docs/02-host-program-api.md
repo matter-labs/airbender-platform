@@ -13,8 +13,10 @@ airbender-host = { path = "../../crates/airbender-host" }
 
 `Program` is the highest-level API.
 
+Create a prover once (`gpu_prover` / `cpu_prover`) and reuse it across multiple `Program::prove(...)` calls.
+
 ```rust
-use airbender_host::{Inputs, Program, Result};
+use airbender_host::{Inputs, Program, ProverLevel, Result};
 
 fn run() -> Result<()> {
     let program = Program::load("../guest/dist/app")?;
@@ -25,7 +27,11 @@ fn run() -> Result<()> {
     let execution = program.execute(&inputs, None)?;
     println!("output x10={}", execution.receipt.output[0]);
 
-    let prove_result = program.prove(&inputs, None)?;
+    let prover = program
+        .gpu_prover()
+        .with_level(ProverLevel::RecursionUnified)
+        .build()?;
+    let prove_result = program.prove(&prover, &inputs)?;
     let vk = program.compute_vk()?;
     program.verify(&prove_result.proof, &vk)?;
     Ok(())
@@ -47,16 +53,19 @@ Guest-side `read::<T>()` calls consume values in the same order they were pushed
 High-level:
 
 - `Program::execute(&inputs, cycles)`
-- `Program::prove(&inputs, worker_threads)`
+- `Program::gpu_prover()`
+- `Program::cpu_prover()`
+- `Program::prove(&prover, &inputs)`
 - `Program::compute_vk()`
 - `Program::verify(&proof, &vk)`
 
-Lower-level (function-style):
+Lower-level:
 
 - `run_simulator(...)`
 - `run_simulator_with_flamegraph(...)`
 - `run_transpiler(...)`
-- `prove_with_options(...)`
+- `GpuProverBuilder::new(app_bin).with_...().build()`
+- `CpuProverBuilder::new(app_bin).with_...().build()`
 - `compute_unified_vk(...)`, `compute_unrolled_vk(...)`
 - `verify_proof(...)`, `verify_unrolled_proof(...)`
 
@@ -69,17 +78,12 @@ Lower-level (function-style):
 
 These correspond to guest commit helpers and `#[airbender::main]` return values.
 
-## Proof Options
+## Prover Construction
 
-`ProveOptions` controls proof behavior:
-
-- `backend`: `Gpu` (default) or `Cpu`
-- `worker_threads`: optional thread count
-- `cycles`: optional cycle bound
-- `ram_bound`: optional RAM bound (CPU backend)
-- `level`: `Base`, `RecursionUnrolled`, `RecursionUnified`
-
-Use GPU backend for recursion-friendly defaults. CPU backend is currently base-layer oriented.
+- `GpuProverBuilder::new(...)` accepts path and supports `with_worker_threads(...)`, `with_level(...)`, then `build()`.
+- `CpuProverBuilder::new(...)` accepts path and supports `with_worker_threads(...)`, `with_cycles(...)`, `with_ram_bound(...)`, then `build()`.
+- `build()` returns `Result<...>` and performs path/config validation.
+- CPU proving currently supports base-layer proving (`ProverLevel::Base`) only.
 
 ## Cycle Budget
 
