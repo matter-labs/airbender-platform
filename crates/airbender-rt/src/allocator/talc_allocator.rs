@@ -88,6 +88,7 @@ unsafe impl GlobalAlloc for TalcAllocator {
 #[global_allocator]
 static GLOBAL_ALLOCATOR: TalcAllocator = TalcAllocator::uninit();
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // TODO: consider making it unsafe?
 pub fn init(start: *mut usize, end: *mut usize) {
     unsafe { GLOBAL_ALLOCATOR.init(start, end) };
 }

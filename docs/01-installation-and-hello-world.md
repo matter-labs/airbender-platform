@@ -57,6 +57,7 @@ The template includes:
 
 - `guest/`: guest program (default: `no_std`; or `std` with `--enable-std`)
 - `host/`: host app that runs and optionally proves guest execution
+- `guest/.cargo/config.toml` with guest target/build flags used by both `cargo airbender build` and regular `cargo` tooling
 - `rust-toolchain.toml` in both crates to pin the compiler channel
 
 The generated guest reads a `u32` input and returns `value + 1`.
@@ -67,6 +68,8 @@ Build the guest:
 cd hello-airbender/guest
 cargo airbender build
 ```
+
+The generated `guest/.cargo/config.toml` also makes plain `cargo build` and `cargo check` use the same guest target and flags.
 
 This produces artifacts in `dist/app/` by default:
 

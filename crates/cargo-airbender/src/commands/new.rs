@@ -25,6 +25,10 @@ const TEMPLATE_FILES: &[(&str, &str)] = &[
         include_str!("../../templates/guest/rust-toolchain.toml.template"),
     ),
     (
+        "guest/.cargo/config.toml",
+        include_str!("../../templates/guest/.cargo/config.toml.template"),
+    ),
+    (
         "host/Cargo.toml",
         include_str!("../../templates/host/Cargo.toml.template"),
     ),
@@ -383,6 +387,8 @@ mod tests {
             fs::read_to_string(destination.join("guest/src/main.rs")).expect("read guest main");
         let guest_toolchain = fs::read_to_string(destination.join("guest/rust-toolchain.toml"))
             .expect("read guest rust-toolchain");
+        let guest_cargo_config = fs::read_to_string(destination.join("guest/.cargo/config.toml"))
+            .expect("read guest cargo config");
         let host_cargo =
             fs::read_to_string(destination.join("host/Cargo.toml")).expect("read host Cargo");
         let host_main =
@@ -396,6 +402,9 @@ mod tests {
         assert!(guest_toolchain.contains(&format!("channel = \"{}\"", DEFAULT_GUEST_TOOLCHAIN)));
         assert!(guest_toolchain
             .contains("components = [\"clippy\", \"rust-src\", \"llvm-tools-preview\"]"));
+        assert!(guest_cargo_config.contains("target = \"riscv32im-risc0-zkvm-elf\""));
+        assert!(guest_cargo_config
+            .contains("build-std = [\"alloc\", \"core\", \"panic_abort\", \"compiler_builtins\", \"std\", \"proc_macro\"]"));
         assert!(host_cargo.contains("name = \"hello-airbender-host\""));
         assert!(host_cargo.contains("airbender-host"));
         assert!(host_main.contains("Program::load"));

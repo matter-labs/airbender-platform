@@ -27,7 +27,7 @@ Key options:
 
 - `--app-name <name>`: output namespace under dist root (default: `app`)
 - `--bin <name>`: explicit Cargo binary target
-- `--target <triple>`: explicit target triple
+- `--target <triple>`: explicit target triple override (otherwise Cargo config defaults are used)
 - `--dist <path>`: dist root directory (app folder is created under this root)
 - `--project <path>`: guest project directory
 - `--profile <debug|release>`, `--debug`, `--release`
@@ -77,6 +77,7 @@ Generated layout:
 <project>/
   README.md
   guest/
+    .cargo/config.toml
     Cargo.toml
     rust-toolchain.toml
     src/main.rs

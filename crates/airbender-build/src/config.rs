@@ -1,10 +1,9 @@
 //! Build configuration and artifact packaging flow.
 
-use crate::constants::{DEFAULT_APP_NAME, DEFAULT_GUEST_TARGET};
+use crate::constants::DEFAULT_APP_NAME;
 use crate::errors::Result;
 use crate::utils::{
-    configure_guest_build_std, configure_guest_cargo_env, find_package, load_metadata, run_command,
-    select_bin_name, sha256_file_hex, validate_app_name,
+    find_package, load_metadata, run_command, select_bin_name, sha256_file_hex, validate_app_name,
 };
 use crate::{Manifest, Profile, MANIFEST_FORMAT_VERSION};
 use std::fs;
@@ -95,14 +94,8 @@ impl BuildConfig {
     /// Runs `cargo build` using this config and optional target override.
     fn run_cargo_build(&self, bin_name: &str, target: Option<&str>) -> Result<()> {
         let mut cmd = Command::new("cargo");
-        if target.is_some() {
-            configure_guest_cargo_env(&mut cmd);
-        }
 
         cmd.arg("build");
-        if target.is_some() {
-            configure_guest_build_std(&mut cmd);
-        }
         if self.profile == Profile::Release {
             cmd.arg("--release");
         }
@@ -126,14 +119,8 @@ impl BuildConfig {
         output: &Path,
     ) -> Result<()> {
         let mut cmd = Command::new("cargo");
-        if target.is_some() {
-            configure_guest_cargo_env(&mut cmd);
-        }
 
         cmd.arg("objcopy");
-        if target.is_some() {
-            configure_guest_build_std(&mut cmd);
-        }
         if self.profile == Profile::Release {
             cmd.arg("--release");
         }
@@ -169,12 +156,9 @@ impl BuildConfig {
         Ok(self.app_name.clone())
     }
 
-    /// Resolves the build target, defaulting to the guest triple.
+    /// Resolves the build target, using explicit override when provided.
     fn resolve_target(&self) -> Result<Option<String>> {
-        if let Some(target) = &self.target {
-            return Ok(Some(target.clone()));
-        }
-        Ok(Some(DEFAULT_GUEST_TARGET.to_string()))
+        Ok(self.target.clone())
     }
 
     /// Resolves the final dist directory for this app configuration.
@@ -212,10 +196,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_to_guest_target() {
+    fn defaults_to_no_target_override() {
         let config = BuildConfig::new(PathBuf::from("."));
         let target = config.resolve_target().expect("target resolution");
-        assert_eq!(target.as_deref(), Some(DEFAULT_GUEST_TARGET));
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn accepts_explicit_target_override() {
+        let mut config = BuildConfig::new(PathBuf::from("."));
+        config.target = Some("riscv32im-risc0-zkvm-elf".to_string());
+        let target = config.resolve_target().expect("target resolution");
+        assert_eq!(target.as_deref(), Some("riscv32im-risc0-zkvm-elf"));
     }
 
     #[test]

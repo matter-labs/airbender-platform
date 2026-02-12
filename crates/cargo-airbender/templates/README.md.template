@@ -4,6 +4,7 @@ This template contains:
 
 - `guest/`: Airbender guest program
 - `host/`: host-side runner/prover application
+- `guest/.cargo/config.toml`: guest target and build flags for local tooling
 
 ## Quick Start
 

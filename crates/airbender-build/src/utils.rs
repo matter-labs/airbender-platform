@@ -1,45 +1,11 @@
 //! Internal helpers for command execution, metadata loading, and validation.
 
-use crate::constants::{
-    DEFAULT_GUEST_BUILD_STD, DEFAULT_GUEST_BUILD_STD_FEATURES, DEFAULT_GUEST_CC,
-    DEFAULT_GUEST_RUSTFLAGS, DEFAULT_GUEST_TOOLCHAIN,
-};
 use crate::errors::{BuildError, Result};
 use cargo_metadata::{Metadata, MetadataCommand, Package};
 use sha2::Digest;
 use std::fmt::Write;
 use std::path::{Component, Path};
 use std::process::Command;
-
-/// Configures process environment for guest-oriented cargo commands.
-///
-/// This pins guest tooling behavior by setting a default toolchain, compiler,
-/// and extra rustflags required by the target runtime.
-pub(crate) fn configure_guest_cargo_env(cmd: &mut Command) {
-    if std::env::var_os("RUSTUP_TOOLCHAIN").is_none() {
-        cmd.env("RUSTUP_TOOLCHAIN", DEFAULT_GUEST_TOOLCHAIN);
-    }
-    cmd.env("CC", DEFAULT_GUEST_CC);
-
-    let mut rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
-    if !rustflags.is_empty() {
-        rustflags.push(' ');
-    }
-    rustflags.push_str(&DEFAULT_GUEST_RUSTFLAGS.join(" "));
-    cmd.env("RUSTFLAGS", rustflags);
-}
-
-/// Appends the `-Z build-std` arguments required for guest builds.
-///
-/// `cargo-objcopy` internally invokes `cargo build` to locate artifacts,
-/// so these flags must be attached to each cargo subcommand invocation.
-pub(crate) fn configure_guest_build_std(cmd: &mut Command) {
-    cmd.arg("-Z")
-        .arg(format!("build-std={DEFAULT_GUEST_BUILD_STD}"));
-    cmd.arg("-Z").arg(format!(
-        "build-std-features={DEFAULT_GUEST_BUILD_STD_FEATURES}"
-    ));
-}
 
 /// Runs a command and maps non-success exit codes into [`BuildError`].
 pub(crate) fn run_command(mut cmd: Command, name: &str) -> Result<()> {
