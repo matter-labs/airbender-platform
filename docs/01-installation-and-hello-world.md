@@ -28,11 +28,15 @@ You can also install from the public repository:
 cargo install --git https://github.com/popzxc/airbender-platform --branch main cargo-airbender --force
 ```
 
-If you need `cargo airbender generate-vk`, install with GPU support enabled:
+By default, GPU support is disabled in the tool itself, so to be able to generate VKs or prove programs,
+install with GPU support enabled:
 
 ```sh
 cargo install --path crates/cargo-airbender --features gpu-prover --force
 ```
+
+You can still build (but not run) the project without having Nvidia GPU or CUDA installed by setting
+`ZKSYNC_USE_CUDA_STUBS=true` in your environment.
 
 ## Hello World (Template Project)
 
