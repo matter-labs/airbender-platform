@@ -11,6 +11,11 @@ pub mod codec {
     pub use airbender_codec::*;
 }
 
+#[cfg(feature = "crypto")]
+pub mod crypto {
+    pub use airbender_crypto::*;
+}
+
 pub mod guest {
     pub use airbender_guest::*;
 }

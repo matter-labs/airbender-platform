@@ -20,6 +20,15 @@ airbender-crypto = { path = "../../crates/airbender-crypto", features = ["provin
 
 The `proving` feature turns on delegation-related features (`bigint_ops`, `keccak_special5`, `single_round_with_control`).
 
+If you're already using `airbender-sdk`, you can also access this crate via SDK re-export:
+
+```toml
+[dependencies]
+airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk", features = ["crypto"] }
+```
+
+Then import from `airbender::crypto`. The SDK `crypto` feature always enables `airbender-crypto/proving`.
+
 ## What the Crate Exposes
 
 Common entry points include:

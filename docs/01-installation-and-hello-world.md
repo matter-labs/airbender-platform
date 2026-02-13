@@ -30,22 +30,32 @@ cargo install --git https://github.com/popzxc/airbender-platform --branch main c
 
 ## Hello World (Template Project)
 
-Create a new host+guest template project:
+Create a new host+guest template project.
+
+When called without a path, the project is initialized in the current directory:
+
+```sh
+cargo airbender new
+```
+
+The destination directory must be empty.
+
+When called with a path, the project is initialized there:
 
 ```sh
 cargo airbender new ./hello-airbender
 ```
 
-To generate a guest with `std` support enabled, use:
+`cargo airbender new` asks interactive questions for:
+
+- project name
+- `std` enablement
+- allocator (`talc`, `bump`, `custom`)
+
+Flags like `--name`, `--enable-std`, and `--allocator` prefill prompt defaults. For CI/non-interactive usage, add `--yes`:
 
 ```sh
-cargo airbender new ./hello-airbender --enable-std
-```
-
-To choose allocator mode in generated guest code, use:
-
-```sh
-cargo airbender new ./hello-airbender --allocator talc
+cargo airbender new ./hello-airbender --yes --name hello-airbender --enable-std --allocator talc
 ```
 
 By default, generated projects depend on `airbender-sdk` from this repository (`main` branch). You can override this with:

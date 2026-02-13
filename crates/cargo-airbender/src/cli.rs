@@ -75,13 +75,15 @@ pub enum BuildProfile {
 
 #[derive(Args, Debug)]
 pub struct NewArgs {
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
     #[arg(long)]
     pub name: Option<String>,
     #[arg(long)]
     pub enable_std: bool,
     #[arg(long, value_enum, default_value_t = NewAllocatorArg::Talc)]
     pub allocator: NewAllocatorArg,
+    #[arg(short = 'y', long)]
+    pub yes: bool,
     #[arg(long, conflicts_with = "sdk_version")]
     pub sdk_path: Option<PathBuf>,
     #[arg(long, conflicts_with = "sdk_path")]
@@ -249,7 +251,7 @@ mod tests {
         ]);
         match cli.command {
             Commands::New(args) => {
-                assert_eq!(args.path, PathBuf::from("./hello-airbender"));
+                assert_eq!(args.path, Some(PathBuf::from("./hello-airbender")));
                 assert!(args.enable_std);
                 assert_eq!(args.allocator, NewAllocatorArg::Talc);
             }
@@ -268,8 +270,32 @@ mod tests {
         ]);
         match cli.command {
             Commands::New(args) => {
-                assert_eq!(args.path, PathBuf::from("./hello-airbender"));
+                assert_eq!(args.path, Some(PathBuf::from("./hello-airbender")));
                 assert_eq!(args.allocator, NewAllocatorArg::Custom);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_new_without_path() {
+        let cli = Cli::parse_from(["cargo-airbender", "new"]);
+        match cli.command {
+            Commands::New(args) => {
+                assert_eq!(args.path, None);
+                assert!(!args.yes);
+                assert_eq!(args.allocator, NewAllocatorArg::Talc);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_new_yes_flag() {
+        let cli = Cli::parse_from(["cargo-airbender", "new", "--yes"]);
+        match cli.command {
+            Commands::New(args) => {
+                assert!(args.yes);
             }
             other => panic!("unexpected command: {other:?}"),
         }

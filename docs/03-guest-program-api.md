@@ -15,6 +15,12 @@ Enable `std` guest support only when needed:
 airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk", features = ["std"] }
 ```
 
+Enable `crypto` to expose `airbender::crypto` from the SDK. This is guest-oriented and always enables `airbender-crypto`'s `proving` feature:
+
+```toml
+airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk", features = ["crypto"] }
+```
+
 Allocator selection is feature-based (`allocator-talc` default, or `allocator-bump` / `allocator-custom`):
 
 ```toml

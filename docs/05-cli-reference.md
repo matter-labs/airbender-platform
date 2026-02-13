@@ -52,14 +52,26 @@ dist/<app-name>/manifest.toml
 Creates a new host+guest project template.
 
 ```sh
-cargo airbender new ./my-guest
+cargo airbender new [path]
 ```
+
+This command always runs in interactive mode and asks:
+
+- project name
+- whether to enable `std`
+- allocator mode (`talc`, `bump`, `custom`)
+
+If `[path]` is omitted, the project is initialized in the current directory.
+The destination directory must be empty.
+
+Use `--yes` to skip prompts and run non-interactively.
 
 Options:
 
-- `--name <name>`: override package name
-- `--enable-std`: generate guest with `airbender-sdk` `std` feature
-- `--allocator <talc|bump|custom>`: select guest allocator mode (default: `talc`)
+- `--name <name>`: default project name for interactive mode (or value used with `--yes`)
+- `--enable-std`: default `std` answer for interactive mode (or value used with `--yes`)
+- `--allocator <talc|bump|custom>`: default allocator answer for interactive mode (or value used with `--yes`)
+- `--yes`: skip prompts and accept values from flags/defaults
 - `--sdk-path <path>`: use local SDK path (workspace root, `crates/`, or crate path)
 - `--sdk-version <version>`: use versioned SDK dependency
 
