@@ -4,8 +4,8 @@ use crate::input;
 use crate::ui;
 use airbender_host::Runner;
 
-// Keep parity with the legacy airbender-cli defaults for simulator-oriented commands.
-const DEFAULT_CYCLE_LIMIT: usize = 90_000_000_000;
+// Keep CLI defaults aligned with host runner defaults.
+const DEFAULT_CYCLE_LIMIT: usize = airbender_host::DEFAULT_CYCLES;
 
 pub fn run(args: RunArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;

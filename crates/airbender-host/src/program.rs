@@ -3,6 +3,7 @@ use crate::prover::{CpuProverBuilder, DevProverBuilder, GpuProverBuilder, Prover
 use crate::runner::{SimulatorRunnerBuilder, TranspilerRunnerBuilder};
 use crate::verifier::{DevVerifierBuilder, RealVerifierBuilder};
 use airbender_core::host::manifest::Manifest;
+use sha2::Digest;
 use std::path::{Path, PathBuf};
 
 /// Loaded Airbender program distribution, including manifest and artifacts.
@@ -40,6 +41,8 @@ impl Program {
                 )));
             }
         }
+
+        verify_manifest_bin_sha256(&app_bin, &manifest.bin_sha256)?;
 
         Ok(Self {
             dist_dir,
@@ -103,5 +106,93 @@ impl Program {
     /// Create a real verifier builder bound to this program.
     pub fn real_verifier(&self, level: ProverLevel) -> RealVerifierBuilder {
         RealVerifierBuilder::new(self.app_bin(), level)
+    }
+}
+
+fn verify_manifest_bin_sha256(app_bin: &Path, expected_hex: &str) -> Result<()> {
+    if expected_hex.is_empty() {
+        return Err(HostError::InvalidManifest(
+            "missing `bin_sha256` in manifest; rebuild artifacts with current tooling".to_string(),
+        ));
+    }
+
+    if expected_hex.len() != 64 || !expected_hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(HostError::InvalidManifest(format!(
+            "invalid `bin_sha256` in manifest: `{expected_hex}`"
+        )));
+    }
+
+    let actual_hex = sha256_file_hex(app_bin)?;
+    if !expected_hex.eq_ignore_ascii_case(&actual_hex) {
+        return Err(HostError::InvalidManifest(format!(
+            "`bin_sha256` mismatch for {}: expected `{expected_hex}`, got `{actual_hex}`",
+            app_bin.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn sha256_file_hex(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path)?;
+    let digest = sha2::Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing to string cannot fail");
+    }
+
+    Ok(encoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifies_matching_manifest_digest() {
+        let temp_file = unique_temp_file_path("matching-digest");
+        std::fs::write(&temp_file, b"hello world").expect("write test file");
+        let expected = sha256_file_hex(&temp_file).expect("compute expected digest");
+
+        verify_manifest_bin_sha256(&temp_file, &expected).expect("digest verification must pass");
+
+        std::fs::remove_file(&temp_file).expect("remove test file");
+    }
+
+    #[test]
+    fn rejects_mismatching_manifest_digest() {
+        let temp_file = unique_temp_file_path("mismatching-digest");
+        std::fs::write(&temp_file, b"hello world").expect("write test file");
+        let wrong = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        let err = verify_manifest_bin_sha256(&temp_file, wrong)
+            .expect_err("digest verification must fail for mismatching hash");
+        assert!(err.to_string().contains("bin_sha256` mismatch"));
+
+        std::fs::remove_file(&temp_file).expect("remove test file");
+    }
+
+    #[test]
+    fn rejects_missing_manifest_digest() {
+        let temp_file = unique_temp_file_path("missing-digest");
+        std::fs::write(&temp_file, b"hello world").expect("write test file");
+
+        let err = verify_manifest_bin_sha256(&temp_file, "")
+            .expect_err("digest verification must fail when digest is missing");
+        assert!(err.to_string().contains("missing `bin_sha256`"));
+
+        std::fs::remove_file(&temp_file).expect("remove test file");
+    }
+
+    fn unique_temp_file_path(label: &str) -> PathBuf {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time must be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "airbender-host-program-{label}-{}-{now}.bin",
+            std::process::id()
+        ))
     }
 }

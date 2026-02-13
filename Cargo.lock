@@ -166,6 +166,7 @@ dependencies = [
  "risc_v_simulator",
  "riscv_transpiler",
  "serde",
+ "sha2",
  "sha3",
  "thiserror 2.0.18",
  "tracing",

@@ -8,7 +8,7 @@ mod transpiler_runner;
 pub use self::simulator_runner::{FlamegraphConfig, SimulatorRunner, SimulatorRunnerBuilder};
 pub use self::transpiler_runner::{TranspilerRunner, TranspilerRunnerBuilder};
 
-pub const DEFAULT_CYCLES: usize = 100_000_000;
+pub const DEFAULT_CYCLES: usize = 90_000_000_000;
 pub const MAX_CYCLES_ENV: &str = "AIRBENDER_MAX_CYCLES";
 
 /// Host runner interface.

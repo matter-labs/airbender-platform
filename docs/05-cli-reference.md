@@ -28,7 +28,7 @@ Key options:
 - `--app-name <name>`: output namespace under dist root (default: `app`)
 - `--bin <name>`: explicit Cargo binary target
 - `--target <triple>`: explicit target triple override (otherwise Cargo config defaults are used)
-- `--dist <path>`: dist root directory (app folder is created under this root)
+- `--dist <path>`: dist root directory (app folder is created under this root; relative paths are resolved from command invocation cwd)
 - `--project <path>`: guest project directory
 - `--profile <debug|release>`, `--debug`, `--release`
 

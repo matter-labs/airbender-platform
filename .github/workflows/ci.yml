@@ -103,5 +103,5 @@ jobs:
         run: |
           cargo run -p cargo-airbender -- airbender --help
           tmp_dir="$(mktemp -d)"
-          cargo run -p cargo-airbender -- airbender new "$tmp_dir/guest" --name smoke
+          cargo run -p cargo-airbender -- airbender new "$tmp_dir/guest" --yes --name smoke
           test -f "$tmp_dir/guest/Cargo.toml"

@@ -45,21 +45,37 @@ impl BuildConfig {
 
     /// Builds the guest binary and writes a dist package for this configuration.
     fn build_dist(&self) -> Result<DistArtifacts> {
+        let invocation_cwd = std::env::current_dir()?;
+        let project_dir = self.resolve_project_dir(&invocation_cwd);
+
         let app_name = self.resolve_app_name()?;
-        let bin_name = self.resolve_bin_name()?;
+        let bin_name = self.resolve_bin_name(&project_dir)?;
         let target = self.resolve_target()?;
-        let dist_dir = self.resolve_dist_dir(&app_name);
+        let dist_dir = self.resolve_dist_dir(&app_name, &project_dir, &invocation_cwd);
         fs::create_dir_all(&dist_dir)?;
 
-        self.run_cargo_build(&bin_name, target.as_deref())?;
+        self.run_cargo_build(&project_dir, &bin_name, target.as_deref())?;
 
         let app_bin = dist_dir.join("app.bin");
         let app_elf = dist_dir.join("app.elf");
         let app_text = dist_dir.join("app.text");
 
-        self.run_cargo_objcopy(&bin_name, target.as_deref(), &["-O", "binary"], &app_bin)?;
-        self.run_cargo_objcopy(&bin_name, target.as_deref(), &["-R", ".text"], &app_elf)?;
         self.run_cargo_objcopy(
+            &project_dir,
+            &bin_name,
+            target.as_deref(),
+            &["-O", "binary"],
+            &app_bin,
+        )?;
+        self.run_cargo_objcopy(
+            &project_dir,
+            &bin_name,
+            target.as_deref(),
+            &["-R", ".text"],
+            &app_elf,
+        )?;
+        self.run_cargo_objcopy(
+            &project_dir,
             &bin_name,
             target.as_deref(),
             &["-O", "binary", "--only-section=.text"],
@@ -92,7 +108,12 @@ impl BuildConfig {
     }
 
     /// Runs `cargo build` using this config and optional target override.
-    fn run_cargo_build(&self, bin_name: &str, target: Option<&str>) -> Result<()> {
+    fn run_cargo_build(
+        &self,
+        project_dir: &Path,
+        bin_name: &str,
+        target: Option<&str>,
+    ) -> Result<()> {
         let mut cmd = Command::new("cargo");
 
         cmd.arg("build");
@@ -106,13 +127,14 @@ impl BuildConfig {
         }
 
         cmd.args(&self.cargo_args);
-        cmd.current_dir(&self.project_dir);
+        cmd.current_dir(project_dir);
         run_command(cmd, "cargo build")
     }
 
     /// Runs `cargo objcopy` to generate one concrete output artifact.
     fn run_cargo_objcopy(
         &self,
+        project_dir: &Path,
         bin_name: &str,
         target: Option<&str>,
         objcopy_args: &[&str],
@@ -134,17 +156,17 @@ impl BuildConfig {
         cmd.arg("--");
         cmd.args(objcopy_args);
         cmd.arg(output);
-        cmd.current_dir(&self.project_dir);
+        cmd.current_dir(project_dir);
         run_command(cmd, "cargo objcopy")
     }
 
     /// Resolves the binary name from config or Cargo metadata.
-    fn resolve_bin_name(&self) -> Result<String> {
+    fn resolve_bin_name(&self, project_dir: &Path) -> Result<String> {
         if let Some(bin) = &self.bin_name {
             return Ok(bin.clone());
         }
 
-        let manifest_path = self.project_dir.join("Cargo.toml");
+        let manifest_path = project_dir.join("Cargo.toml");
         let metadata = load_metadata(&manifest_path)?;
         let package = find_package(&metadata, &manifest_path)?;
         Ok(select_bin_name(package))
@@ -161,12 +183,35 @@ impl BuildConfig {
         Ok(self.target.clone())
     }
 
+    /// Resolves the project directory relative to the command invocation cwd.
+    fn resolve_project_dir(&self, invocation_cwd: &Path) -> PathBuf {
+        if self.project_dir.is_absolute() {
+            self.project_dir.clone()
+        } else {
+            invocation_cwd.join(&self.project_dir)
+        }
+    }
+
     /// Resolves the final dist directory for this app configuration.
-    fn resolve_dist_dir(&self, app_name: &str) -> PathBuf {
-        let dist_root = self
-            .dist_dir
-            .clone()
-            .unwrap_or_else(|| self.project_dir.join("dist"));
+    ///
+    /// `--dist` follows standard CLI semantics: relative paths are interpreted
+    /// from command invocation cwd, not from the guest project directory.
+    fn resolve_dist_dir(
+        &self,
+        app_name: &str,
+        project_dir: &Path,
+        invocation_cwd: &Path,
+    ) -> PathBuf {
+        let dist_root = self.dist_dir.clone().map_or_else(
+            || project_dir.join("dist"),
+            |dist_dir| {
+                if dist_dir.is_absolute() {
+                    dist_dir
+                } else {
+                    invocation_cwd.join(dist_dir)
+                }
+            },
+        );
         dist_root.join(app_name)
     }
 }
@@ -238,7 +283,9 @@ mod tests {
         let mut config = BuildConfig::new(PathBuf::from("/workspace/project"));
         config.app_name = "gpu-profile".to_string();
         let app_name = config.resolve_app_name().expect("app-name resolution");
-        let dist_dir = config.resolve_dist_dir(&app_name);
+        let invocation_cwd = Path::new("/workspace/caller");
+        let project_dir = config.resolve_project_dir(invocation_cwd);
+        let dist_dir = config.resolve_dist_dir(&app_name, &project_dir, invocation_cwd);
         assert_eq!(
             dist_dir,
             PathBuf::from("/workspace/project/dist/gpu-profile")
@@ -246,12 +293,42 @@ mod tests {
     }
 
     #[test]
-    fn resolves_custom_dist_root_as_parent_directory() {
+    fn resolves_custom_relative_dist_root_from_invocation_cwd() {
+        let mut config = BuildConfig::new(PathBuf::from("/workspace/project"));
+        config.dist_dir = Some(PathBuf::from("builds"));
+        config.app_name = "gpu-profile".to_string();
+        let app_name = config.resolve_app_name().expect("app-name resolution");
+        let invocation_cwd = Path::new("/workspace/caller");
+        let project_dir = config.resolve_project_dir(invocation_cwd);
+        let dist_dir = config.resolve_dist_dir(&app_name, &project_dir, invocation_cwd);
+        assert_eq!(
+            dist_dir,
+            PathBuf::from("/workspace/caller/builds/gpu-profile")
+        );
+    }
+
+    #[test]
+    fn resolves_relative_project_dir_from_invocation_cwd() {
+        let config = BuildConfig::new(PathBuf::from("examples/fibonacci/guest"));
+        let invocation_cwd = Path::new("/workspace/repo");
+        let project_dir = config.resolve_project_dir(invocation_cwd);
+
+        assert_eq!(
+            project_dir,
+            PathBuf::from("/workspace/repo/examples/fibonacci/guest")
+        );
+    }
+
+    #[test]
+    fn resolves_custom_absolute_dist_root_without_rebasing() {
         let mut config = BuildConfig::new(PathBuf::from("/workspace/project"));
         config.dist_dir = Some(PathBuf::from("/workspace/builds"));
         config.app_name = "gpu-profile".to_string();
         let app_name = config.resolve_app_name().expect("app-name resolution");
-        let dist_dir = config.resolve_dist_dir(&app_name);
+        let invocation_cwd = Path::new("/workspace/caller");
+        let project_dir = config.resolve_project_dir(invocation_cwd);
+        let dist_dir = config.resolve_dist_dir(&app_name, &project_dir, invocation_cwd);
+
         assert_eq!(dist_dir, PathBuf::from("/workspace/builds/gpu-profile"));
     }
 }
