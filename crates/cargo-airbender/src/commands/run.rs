@@ -4,25 +4,22 @@ use crate::input;
 use crate::ui;
 use airbender_host::Runner;
 
-// Keep CLI defaults aligned with host runner defaults.
-const DEFAULT_CYCLE_LIMIT: usize = airbender_host::DEFAULT_CYCLES;
-
 pub fn run(args: RunArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
-    let cycle_limit = args.cycles.unwrap_or(DEFAULT_CYCLE_LIMIT);
+    let mut builder = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin);
+    if let Some(cycle_limit) = args.cycles {
+        builder = builder.with_cycles(cycle_limit);
+    }
 
-    let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
-        .with_cycles(cycle_limit)
-        .build()
-        .map_err(|err| {
-            CliError::with_source(
-                format!(
-                    "failed to initialize simulator runner for `{}`",
-                    args.app_bin.display()
-                ),
-                err,
-            )
-        })?;
+    let runner = builder.build().map_err(|err| {
+        CliError::with_source(
+            format!(
+                "failed to initialize simulator runner for `{}`",
+                args.app_bin.display()
+            ),
+            err,
+        )
+    })?;
 
     let outcome = runner.run(&input_words).map_err(|err| {
         CliError::with_source(
@@ -41,7 +38,6 @@ pub fn run(args: RunArgs) -> Result<()> {
 
 pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
-    let cycle_limit = args.cycles.unwrap_or(DEFAULT_CYCLE_LIMIT);
     let flamegraph_output = args.output.clone();
     let flamegraph = airbender_host::FlamegraphConfig {
         output: args.output,
@@ -49,20 +45,21 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
         inverse: args.inverse,
         elf_path: args.elf_path,
     };
+    let mut builder =
+        airbender_host::SimulatorRunnerBuilder::new(&args.app_bin).with_flamegraph(flamegraph);
+    if let Some(cycle_limit) = args.cycles {
+        builder = builder.with_cycles(cycle_limit);
+    }
 
-    let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
-        .with_cycles(cycle_limit)
-        .with_flamegraph(flamegraph)
-        .build()
-        .map_err(|err| {
-            CliError::with_source(
-                format!(
-                    "failed to initialize simulator runner for `{}`",
-                    args.app_bin.display()
-                ),
-                err,
-            )
-        })?;
+    let runner = builder.build().map_err(|err| {
+        CliError::with_source(
+            format!(
+                "failed to initialize simulator runner for `{}`",
+                args.app_bin.display()
+            ),
+            err,
+        )
+    })?;
 
     let outcome = runner.run(&input_words).map_err(|err| {
         CliError::with_source(
@@ -82,9 +79,10 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
 
 pub fn run_transpiler(args: RunTranspilerArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
-    let cycle_limit = args.cycles.unwrap_or(DEFAULT_CYCLE_LIMIT);
-    let mut builder =
-        airbender_host::TranspilerRunnerBuilder::new(&args.app_bin).with_cycles(cycle_limit);
+    let mut builder = airbender_host::TranspilerRunnerBuilder::new(&args.app_bin);
+    if let Some(cycle_limit) = args.cycles {
+        builder = builder.with_cycles(cycle_limit);
+    }
     if let Some(text_path) = args.text_path.as_ref() {
         builder = builder.with_text_path(text_path);
     }
