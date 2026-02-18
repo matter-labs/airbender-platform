@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 fn main() -> Result<()> {
     let prove = std::env::args().skip(1).any(|arg| arg == "--prove");
-    let program = Program::load(dist_dir())?;
+    // We assume that the guest program is located in `../guest/dist/app`,
+    // which is the default behavior of `cargo airbender build`.
+    let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../guest/dist/app");
+    let program = Program::load(&dist_dir)?;
 
     let a = U256::from(1u64);
     let b = U256::from(2u64);
@@ -52,8 +55,4 @@ fn main() -> Result<()> {
     );
 
     Ok(())
-}
-
-fn dist_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../guest/dist/app")
 }
