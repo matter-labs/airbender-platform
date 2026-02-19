@@ -3,9 +3,10 @@
 use crate::constants::DEFAULT_APP_NAME;
 use crate::errors::Result;
 use crate::utils::{
-    find_package, load_metadata, run_command, select_bin_name, sha256_file_hex, validate_app_name,
+    find_package, load_metadata, resolve_git_metadata, run_command, select_bin_name,
+    sha256_file_hex, validate_app_name,
 };
-use crate::{Manifest, Profile, MANIFEST_FORMAT_VERSION};
+use crate::{ArtifactEntry, BuildMetadata, Manifest, Profile, MANIFEST_VERSION_V1};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -49,12 +50,12 @@ impl BuildConfig {
         let project_dir = self.resolve_project_dir(&invocation_cwd);
 
         let app_name = self.resolve_app_name()?;
-        let bin_name = self.resolve_bin_name(&project_dir)?;
+        let manifest_names = self.resolve_manifest_names(&project_dir)?;
         let target = self.resolve_target()?;
         let dist_dir = self.resolve_dist_dir(&app_name, &project_dir, &invocation_cwd);
         fs::create_dir_all(&dist_dir)?;
 
-        self.run_cargo_build(&project_dir, &bin_name, target.as_deref())?;
+        self.run_cargo_build(&project_dir, &manifest_names.bin_name, target.as_deref())?;
 
         let app_bin = dist_dir.join("app.bin");
         let app_elf = dist_dir.join("app.elf");
@@ -62,39 +63,57 @@ impl BuildConfig {
 
         self.run_cargo_objcopy(
             &project_dir,
-            &bin_name,
+            &manifest_names.bin_name,
             target.as_deref(),
             &["-O", "binary"],
             &app_bin,
         )?;
         self.run_cargo_objcopy(
             &project_dir,
-            &bin_name,
+            &manifest_names.bin_name,
             target.as_deref(),
             &["-R", ".text"],
             &app_elf,
         )?;
         self.run_cargo_objcopy(
             &project_dir,
-            &bin_name,
+            &manifest_names.bin_name,
             target.as_deref(),
             &["-O", "binary", "--only-section=.text"],
             &app_text,
         )?;
 
         let bin_sha256 = sha256_file_hex(&app_bin)?;
+        let elf_sha256 = sha256_file_hex(&app_elf)?;
+        let text_sha256 = sha256_file_hex(&app_text)?;
+        let git_metadata = resolve_git_metadata(&project_dir);
+        let manifest_bin_name = manifest_names.manifest_bin_name();
 
         let manifest_path = dist_dir.join("manifest.toml");
         let manifest = Manifest {
-            format_version: MANIFEST_FORMAT_VERSION,
-            codec_version: airbender_codec::AIRBENDER_CODEC_V0,
-            bin_name,
+            package: manifest_names.package,
+            bin_name: manifest_bin_name,
+            manifest: MANIFEST_VERSION_V1.to_string(),
+            codec: format!("v{}", airbender_codec::AIRBENDER_CODEC_V0),
             target,
-            profile: self.profile,
-            bin_file: "app.bin".to_string(),
-            elf_file: "app.elf".to_string(),
-            text_file: "app.text".to_string(),
-            bin_sha256,
+            bin: ArtifactEntry {
+                path: "app.bin".to_string(),
+                sha256: bin_sha256,
+            },
+            elf: ArtifactEntry {
+                path: "app.elf".to_string(),
+                sha256: elf_sha256,
+            },
+            text: ArtifactEntry {
+                path: "app.text".to_string(),
+                sha256: text_sha256,
+            },
+            build: BuildMetadata {
+                profile: self.profile,
+                git_branch: git_metadata.branch,
+                git_commit: git_metadata.commit,
+                is_dirty: git_metadata.is_dirty,
+            },
         };
         manifest.write_to_file(&manifest_path)?;
 
@@ -160,16 +179,20 @@ impl BuildConfig {
         run_command(cmd, "cargo objcopy")
     }
 
-    /// Resolves the binary name from config or Cargo metadata.
-    fn resolve_bin_name(&self, project_dir: &Path) -> Result<String> {
-        if let Some(bin) = &self.bin_name {
-            return Ok(bin.clone());
-        }
-
+    /// Resolves names used during build and manifest generation.
+    fn resolve_manifest_names(&self, project_dir: &Path) -> Result<ManifestNames> {
         let manifest_path = project_dir.join("Cargo.toml");
         let metadata = load_metadata(&manifest_path)?;
         let package = find_package(&metadata, &manifest_path)?;
-        Ok(select_bin_name(package))
+        let bin_name = self
+            .bin_name
+            .clone()
+            .unwrap_or_else(|| select_bin_name(package));
+
+        Ok(ManifestNames {
+            package: package.name.clone(),
+            bin_name,
+        })
     }
 
     /// Validates and returns the configured app name.
@@ -213,6 +236,22 @@ impl BuildConfig {
             },
         );
         dist_root.join(app_name)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ManifestNames {
+    package: String,
+    bin_name: String,
+}
+
+impl ManifestNames {
+    fn manifest_bin_name(&self) -> Option<String> {
+        if self.bin_name == self.package {
+            None
+        } else {
+            Some(self.bin_name.clone())
+        }
     }
 }
 

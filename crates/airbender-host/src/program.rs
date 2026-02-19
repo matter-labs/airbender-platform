@@ -24,16 +24,17 @@ impl Program {
         let manifest_path = dist_dir.join("manifest.toml");
         let manifest = Manifest::read_from_file(&manifest_path)
             .map_err(|err| HostError::InvalidManifest(err.to_string()))?;
-        if manifest.codec_version != airbender_codec::AIRBENDER_CODEC_V0 {
+        let supported_codec = format!("v{}", airbender_codec::AIRBENDER_CODEC_V0);
+        if manifest.codec != supported_codec {
             return Err(HostError::InvalidManifest(format!(
-                "unsupported codec_version {}",
-                manifest.codec_version
+                "unsupported codec `{}`",
+                manifest.codec
             )));
         }
 
-        let app_bin = dist_dir.join(&manifest.bin_file);
-        let app_elf = dist_dir.join(&manifest.elf_file);
-        let app_text = dist_dir.join(&manifest.text_file);
+        let app_bin = dist_dir.join(&manifest.bin.path);
+        let app_elf = dist_dir.join(&manifest.elf.path);
+        let app_text = dist_dir.join(&manifest.text.path);
 
         for path in [&app_bin, &app_elf, &app_text] {
             if !path.exists() {
@@ -44,7 +45,9 @@ impl Program {
             }
         }
 
-        verify_manifest_bin_sha256(&app_bin, &manifest.bin_sha256)?;
+        verify_manifest_artifact_sha256(&app_bin, "bin.sha256", &manifest.bin.sha256)?;
+        verify_manifest_artifact_sha256(&app_elf, "elf.sha256", &manifest.elf.sha256)?;
+        verify_manifest_artifact_sha256(&app_text, "text.sha256", &manifest.text.sha256)?;
 
         Ok(Self {
             dist_dir,
@@ -112,24 +115,28 @@ impl Program {
     }
 }
 
-fn verify_manifest_bin_sha256(app_bin: &Path, expected_hex: &str) -> Result<()> {
+fn verify_manifest_artifact_sha256(
+    path: &Path,
+    field_name: &str,
+    expected_hex: &str,
+) -> Result<()> {
     if expected_hex.is_empty() {
-        return Err(HostError::InvalidManifest(
-            "missing `bin_sha256` in manifest; rebuild artifacts with current tooling".to_string(),
-        ));
+        return Err(HostError::InvalidManifest(format!(
+            "missing `{field_name}` in manifest; rebuild artifacts with current tooling"
+        )));
     }
 
     if expected_hex.len() != 64 || !expected_hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(HostError::InvalidManifest(format!(
-            "invalid `bin_sha256` in manifest: `{expected_hex}`"
+            "invalid `{field_name}` in manifest: `{expected_hex}`"
         )));
     }
 
-    let actual_hex = sha256_file_hex(app_bin)?;
+    let actual_hex = sha256_file_hex(path)?;
     if !expected_hex.eq_ignore_ascii_case(&actual_hex) {
         return Err(HostError::InvalidManifest(format!(
-            "`bin_sha256` mismatch for {}: expected `{expected_hex}`, got `{actual_hex}`",
-            app_bin.display()
+            "`{field_name}` mismatch for {}: expected `{expected_hex}`, got `{actual_hex}`",
+            path.display()
         )));
     }
 
@@ -158,7 +165,8 @@ mod tests {
         std::fs::write(&temp_file, b"hello world").expect("write test file");
         let expected = sha256_file_hex(&temp_file).expect("compute expected digest");
 
-        verify_manifest_bin_sha256(&temp_file, &expected).expect("digest verification must pass");
+        verify_manifest_artifact_sha256(&temp_file, "bin.sha256", &expected)
+            .expect("digest verification must pass");
 
         std::fs::remove_file(&temp_file).expect("remove test file");
     }
@@ -169,9 +177,9 @@ mod tests {
         std::fs::write(&temp_file, b"hello world").expect("write test file");
         let wrong = "0000000000000000000000000000000000000000000000000000000000000000";
 
-        let err = verify_manifest_bin_sha256(&temp_file, wrong)
+        let err = verify_manifest_artifact_sha256(&temp_file, "bin.sha256", wrong)
             .expect_err("digest verification must fail for mismatching hash");
-        assert!(err.to_string().contains("bin_sha256` mismatch"));
+        assert!(err.to_string().contains("bin.sha256` mismatch"));
 
         std::fs::remove_file(&temp_file).expect("remove test file");
     }
@@ -181,9 +189,9 @@ mod tests {
         let temp_file = unique_temp_file_path("missing-digest");
         std::fs::write(&temp_file, b"hello world").expect("write test file");
 
-        let err = verify_manifest_bin_sha256(&temp_file, "")
+        let err = verify_manifest_artifact_sha256(&temp_file, "bin.sha256", "")
             .expect_err("digest verification must fail when digest is missing");
-        assert!(err.to_string().contains("missing `bin_sha256`"));
+        assert!(err.to_string().contains("missing `bin.sha256`"));
 
         std::fs::remove_file(&temp_file).expect("remove test file");
     }

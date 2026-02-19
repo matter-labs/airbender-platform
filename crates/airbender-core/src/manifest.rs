@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-pub const MANIFEST_FORMAT_VERSION: u32 = 1;
+pub const MANIFEST_VERSION_V1: &str = "v1";
+pub const CODEC_VERSION_V0: &str = "v0";
 
 /// Build profile recorded in the manifest for reproducibility.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,19 +27,48 @@ impl Profile {
 /// Serialized manifest describing the build artifacts for a guest program.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
-    pub format_version: u32,
-    pub codec_version: u32,
-    pub bin_name: String,
+    /// Cargo package identity this dist bundle comes from.
+    pub package: String,
+    /// Optional binary target name when it differs from `package`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bin_name: Option<String>,
+    /// Manifest schema version for compatibility checks.
+    pub manifest: String,
+    /// Host/guest codec version used to encode runtime payloads.
+    pub codec: String,
+    /// Optional target triple used for the build.
     pub target: Option<String>,
+    /// Binary image consumed by runtime and proving flows.
+    pub bin: ArtifactEntry,
+    /// ELF image used for symbol/debug workflows.
+    pub elf: ArtifactEntry,
+    /// Text-section image used by transpiler execution.
+    pub text: ArtifactEntry,
+    /// Build provenance metadata captured at packaging time.
+    pub build: BuildMetadata,
+}
+
+/// One artifact entry recorded in the manifest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactEntry {
+    /// Artifact path relative to the dist directory.
+    pub path: String,
+    /// SHA-256 digest for artifact integrity verification.
+    pub sha256: String,
+}
+
+/// Build metadata captured while creating dist artifacts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildMetadata {
+    /// Cargo build profile used to produce artifacts.
     pub profile: Profile,
-    #[serde(alias = "app_bin")]
-    pub bin_file: String,
-    #[serde(alias = "app_elf")]
-    pub elf_file: String,
-    #[serde(alias = "app_text")]
-    pub text_file: String,
-    #[serde(default)]
-    pub bin_sha256: String,
+    /// Git branch name at build time, or `N/A` if unavailable.
+    pub git_branch: String,
+    /// Git commit hash at build time, or `N/A` if unavailable.
+    pub git_commit: String,
+    /// Indicates unstaged changes at build time.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_dirty: bool,
 }
 
 /// Errors returned by manifest read, write, and parse operations.
@@ -50,8 +80,8 @@ pub enum ManifestError {
     Parse(#[from] toml::de::Error),
     #[error("failed to serialize manifest: {0}")]
     Serialize(#[from] toml::ser::Error),
-    #[error("unsupported format_version {0}")]
-    UnsupportedFormatVersion(u32),
+    #[error("unsupported manifest version `{0}`")]
+    UnsupportedManifestVersion(String),
 }
 
 impl Manifest {
@@ -71,10 +101,8 @@ impl Manifest {
     /// Parse and validate a manifest from TOML text.
     pub fn parse(content: &str) -> Result<Self, ManifestError> {
         let manifest: Self = toml::from_str(content)?;
-        if manifest.format_version != MANIFEST_FORMAT_VERSION {
-            return Err(ManifestError::UnsupportedFormatVersion(
-                manifest.format_version,
-            ));
+        if manifest.manifest != MANIFEST_VERSION_V1 {
+            return Err(ManifestError::UnsupportedManifestVersion(manifest.manifest));
         }
         Ok(manifest)
     }
@@ -85,6 +113,10 @@ impl Manifest {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,64 +124,154 @@ mod tests {
     #[test]
     fn manifest_roundtrip() {
         let manifest = Manifest {
-            format_version: MANIFEST_FORMAT_VERSION,
-            codec_version: 0,
-            bin_name: "demo".to_string(),
+            package: "demo".to_string(),
+            bin_name: None,
+            manifest: MANIFEST_VERSION_V1.to_string(),
+            codec: CODEC_VERSION_V0.to_string(),
             target: None,
-            profile: Profile::Release,
-            bin_file: "app.bin".to_string(),
-            elf_file: "app.elf".to_string(),
-            text_file: "app.text".to_string(),
-            bin_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                .to_string(),
+            bin: ArtifactEntry {
+                path: "app.bin".to_string(),
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+            },
+            elf: ArtifactEntry {
+                path: "app.elf".to_string(),
+                sha256: "b8f1d1d6b064577aa66013024e69c0dcde721573ae58da439b84e1c862437288"
+                    .to_string(),
+            },
+            text: ArtifactEntry {
+                path: "app.text".to_string(),
+                sha256: "0476bd0bb997b387b72f721b3f0f38f112e43e32f151e1d1f2ec20bc7c5ad5a6"
+                    .to_string(),
+            },
+            build: BuildMetadata {
+                profile: Profile::Release,
+                git_branch: "main".to_string(),
+                git_commit: "abc123".to_string(),
+                is_dirty: false,
+            },
         };
         let toml = manifest.to_toml().expect("serialize");
-        assert!(toml.contains("bin_file"));
-        assert!(toml.contains("elf_file"));
-        assert!(toml.contains("text_file"));
-        assert!(toml.contains("bin_sha256"));
-        assert!(!toml.contains("app_bin"));
-        assert!(!toml.contains("app_elf"));
-        assert!(!toml.contains("app_text"));
+        let first_line = toml
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .expect("manifest must have at least one line");
+        assert_eq!(first_line, "package = \"demo\"");
+        assert!(!toml.contains("bin_name"));
+        assert!(toml.contains("[bin]"));
+        assert!(toml.contains("[elf]"));
+        assert!(toml.contains("[text]"));
+        assert!(toml.contains("[build]"));
+        assert!(!toml.contains("is_dirty"));
         let parsed = Manifest::parse(&toml).expect("parse");
         assert_eq!(parsed, manifest);
     }
 
     #[test]
-    fn rejects_unknown_format_version() {
-        let mut manifest = Manifest {
-            format_version: MANIFEST_FORMAT_VERSION,
-            codec_version: 0,
-            bin_name: "demo".to_string(),
+    fn includes_dirty_flag_when_true() {
+        let manifest = Manifest {
+            package: "demo".to_string(),
+            bin_name: None,
+            manifest: MANIFEST_VERSION_V1.to_string(),
+            codec: CODEC_VERSION_V0.to_string(),
             target: None,
-            profile: Profile::Release,
-            bin_file: "app.bin".to_string(),
-            elf_file: "app.elf".to_string(),
-            text_file: "app.text".to_string(),
-            bin_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                .to_string(),
+            bin: ArtifactEntry {
+                path: "app.bin".to_string(),
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+            },
+            elf: ArtifactEntry {
+                path: "app.elf".to_string(),
+                sha256: "b8f1d1d6b064577aa66013024e69c0dcde721573ae58da439b84e1c862437288"
+                    .to_string(),
+            },
+            text: ArtifactEntry {
+                path: "app.text".to_string(),
+                sha256: "0476bd0bb997b387b72f721b3f0f38f112e43e32f151e1d1f2ec20bc7c5ad5a6"
+                    .to_string(),
+            },
+            build: BuildMetadata {
+                profile: Profile::Release,
+                git_branch: "main".to_string(),
+                git_commit: "abc123".to_string(),
+                is_dirty: true,
+            },
         };
-        manifest.format_version += 1;
+
         let toml = manifest.to_toml().expect("serialize");
-        let err = Manifest::parse(&toml).expect_err("error");
-        assert!(matches!(err, ManifestError::UnsupportedFormatVersion(_)));
+        assert!(toml.contains("is_dirty = true"));
     }
 
     #[test]
-    fn parses_legacy_artifact_field_names() {
-        let legacy = r#"
-format_version = 1
-codec_version = 0
-bin_name = "demo"
-profile = "release"
-app_bin = "app.bin"
-app_elf = "app.elf"
-app_text = "app.text"
-"#;
-        let manifest = Manifest::parse(legacy).expect("parse legacy manifest");
-        assert_eq!(manifest.bin_file, "app.bin");
-        assert_eq!(manifest.elf_file, "app.elf");
-        assert_eq!(manifest.text_file, "app.text");
-        assert_eq!(manifest.bin_sha256, "");
+    fn includes_bin_name_when_present() {
+        let manifest = Manifest {
+            package: "demo".to_string(),
+            bin_name: Some("worker".to_string()),
+            manifest: MANIFEST_VERSION_V1.to_string(),
+            codec: CODEC_VERSION_V0.to_string(),
+            target: None,
+            bin: ArtifactEntry {
+                path: "app.bin".to_string(),
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+            },
+            elf: ArtifactEntry {
+                path: "app.elf".to_string(),
+                sha256: "b8f1d1d6b064577aa66013024e69c0dcde721573ae58da439b84e1c862437288"
+                    .to_string(),
+            },
+            text: ArtifactEntry {
+                path: "app.text".to_string(),
+                sha256: "0476bd0bb997b387b72f721b3f0f38f112e43e32f151e1d1f2ec20bc7c5ad5a6"
+                    .to_string(),
+            },
+            build: BuildMetadata {
+                profile: Profile::Release,
+                git_branch: "main".to_string(),
+                git_commit: "abc123".to_string(),
+                is_dirty: false,
+            },
+        };
+
+        let toml = manifest.to_toml().expect("serialize");
+        assert!(toml.contains("bin_name = \"worker\""));
+        let parsed = Manifest::parse(&toml).expect("parse");
+        assert_eq!(parsed.bin_name.as_deref(), Some("worker"));
+    }
+
+    #[test]
+    fn rejects_unknown_manifest_version() {
+        let mut manifest = Manifest {
+            package: "demo".to_string(),
+            bin_name: None,
+            manifest: MANIFEST_VERSION_V1.to_string(),
+            codec: CODEC_VERSION_V0.to_string(),
+            target: None,
+            bin: ArtifactEntry {
+                path: "app.bin".to_string(),
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+            },
+            elf: ArtifactEntry {
+                path: "app.elf".to_string(),
+                sha256: "b8f1d1d6b064577aa66013024e69c0dcde721573ae58da439b84e1c862437288"
+                    .to_string(),
+            },
+            text: ArtifactEntry {
+                path: "app.text".to_string(),
+                sha256: "0476bd0bb997b387b72f721b3f0f38f112e43e32f151e1d1f2ec20bc7c5ad5a6"
+                    .to_string(),
+            },
+            build: BuildMetadata {
+                profile: Profile::Release,
+                git_branch: "main".to_string(),
+                git_commit: "abc123".to_string(),
+                is_dirty: false,
+            },
+        };
+        manifest.manifest = "v2".to_string();
+        let toml = manifest.to_toml().expect("serialize");
+        let err = Manifest::parse(&toml).expect_err("error");
+        assert!(matches!(err, ManifestError::UnsupportedManifestVersion(_)));
     }
 }
