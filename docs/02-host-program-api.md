@@ -121,9 +121,8 @@ Verification APIs can enforce expected public outputs (`x10..x17`) in addition t
 For simulator execution, you can:
 
 - pass an explicit cycle limit
-- or rely on `AIRBENDER_MAX_CYCLES`
 
-If neither is set through your flow, host utilities default to `100_000_000` cycles.
+If no explicit cycle limit is set through your flow, a default high value will be used.
 
 ## Complete Working Examples
 

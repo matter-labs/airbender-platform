@@ -24,7 +24,6 @@ pub use receipt::Receipt;
 pub use runner::{
     resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, SimulatorRunner,
     SimulatorRunnerBuilder, TranspilerRunner, TranspilerRunnerBuilder, DEFAULT_CYCLES,
-    MAX_CYCLES_ENV,
 };
 pub use verifier::{
     verify_real_proof_with_vk, DevVerificationKey, DevVerifier, DevVerifierBuilder,
