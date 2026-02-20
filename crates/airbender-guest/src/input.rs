@@ -70,7 +70,7 @@ mod tests {
             bytes: vec![10u8, 20, 30],
         };
         let encoded = AirbenderCodecV0::encode(&payload).expect("encode");
-        let words = frame_words_from_bytes(&encoded);
+        let words = frame_words_from_bytes(&encoded).expect("frame words");
         let mut transport = MockTransport::new(words);
         let decoded: Payload = read_with(&mut transport).expect("read");
         assert_eq!(decoded, payload);

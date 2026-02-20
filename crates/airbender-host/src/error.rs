@@ -4,6 +4,8 @@ pub enum HostError {
     Io(#[from] std::io::Error),
     #[error("codec error: {0}")]
     Codec(airbender_codec::CodecError),
+    #[error("wire error: {0}")]
+    Wire(airbender_core::wire::WireError),
     #[error("invalid manifest: {0}")]
     InvalidManifest(String),
     #[error("simulator error: {0}")]
@@ -23,5 +25,11 @@ pub type Result<T> = std::result::Result<T, HostError>;
 impl From<airbender_codec::CodecError> for HostError {
     fn from(err: airbender_codec::CodecError) -> Self {
         Self::Codec(err)
+    }
+}
+
+impl From<airbender_core::wire::WireError> for HostError {
+    fn from(err: airbender_core::wire::WireError) -> Self {
+        Self::Wire(err)
     }
 }

@@ -18,14 +18,15 @@ impl Inputs {
     /// Serialize and append a typed input value.
     pub fn push<T: serde::Serialize>(&mut self, value: &T) -> Result<()> {
         let bytes = AirbenderCodecV0::encode(value)?;
-        self.push_bytes(&bytes);
+        self.push_bytes(&bytes)?;
         Ok(())
     }
 
     /// Append raw bytes as a framed input payload.
-    pub fn push_bytes(&mut self, bytes: &[u8]) {
-        let words = frame_words_from_bytes(bytes);
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let words = frame_words_from_bytes(bytes)?;
         self.words.extend(words);
+        Ok(())
     }
 
     /// Access the framed input words.
@@ -54,7 +55,7 @@ mod tests {
     #[test]
     fn writes_hex_file_with_one_word_per_line() {
         let mut inputs = Inputs::new();
-        inputs.push_bytes(&[0x29]);
+        inputs.push_bytes(&[0x29]).expect("frame input bytes");
 
         let file_path = test_file_path("inputs-hex");
         if let Some(parent) = file_path.parent() {
