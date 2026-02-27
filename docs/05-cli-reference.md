@@ -88,7 +88,7 @@ module you can replace. The `allocator_init` hook is required for `allocator-cus
 Default behavior (when neither `--sdk-path` nor `--sdk-version` is provided):
 
 - generated project depends on `airbender-sdk` from
-  `https://github.com/popzxc/airbender-platform` (branch `main`)
+  `https://github.com/matter-labs/airbender-platform` (branch `main`)
 
 Generated layout:
 

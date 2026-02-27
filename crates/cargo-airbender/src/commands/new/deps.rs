@@ -1,7 +1,7 @@
 use crate::error::{CliError, Result};
 use std::path::{Path, PathBuf};
 
-const DEFAULT_SDK_GIT_REPOSITORY: &str = "https://github.com/popzxc/airbender-platform";
+const DEFAULT_SDK_GIT_REPOSITORY: &str = "https://github.com/matter-labs/airbender-platform";
 const DEFAULT_SDK_GIT_BRANCH: &str = "main";
 
 pub(super) fn resolve_crate_dependency(

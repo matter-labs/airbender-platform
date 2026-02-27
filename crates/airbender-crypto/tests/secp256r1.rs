@@ -31,10 +31,11 @@ fn split_public_key(pk: &VerifyingKey) -> Option<([u8; 32], [u8; 32])> {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn get_input(msg: [u8; 100]) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
     let digest = {
         let mut hasher = Keccak256::new();
-        hasher.update(&msg);
+        hasher.update(msg);
         let res = hasher.finalize();
         let mut hash_bytes = [0u8; 32];
         hash_bytes.copy_from_slice(&res);
@@ -49,7 +50,7 @@ fn get_input(msg: [u8; 100]) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32
     assert!(verify_key.verify_prehash(&digest, &sig).is_ok());
 
     let (r_bytes, s_bytes) = split_signature(&sig);
-    let (x_bytes, y_bytes) = split_public_key(&verify_key).unwrap();
+    let (x_bytes, y_bytes) = split_public_key(verify_key).unwrap();
 
     (digest, r_bytes, s_bytes, x_bytes, y_bytes)
 }
@@ -168,14 +169,14 @@ fn bad_message() {
             if msg != bad_msg {
                 let bad_digest = {
                     let mut hasher = Keccak256::new();
-                    hasher.update(&bad_msg);
+                    hasher.update(bad_msg);
                     let res = hasher.finalize();
                     let mut hash_bytes = [0u8; 32];
                     hash_bytes.copy_from_slice(&res);
                     hash_bytes
                 };
 
-                let (digest, r, s, x, y) = get_input(msg);
+                let (_digest, r, s, x, y) = get_input(msg);
 
                 let result = verify(&bad_digest, &r, &s, &x, &y);
 
@@ -190,7 +191,7 @@ fn bad_signature() {
     proptest!(|(msg: [u8; 100], sig: [u8; 64])| {
             let digest = {
                 let mut hasher = Keccak256::new();
-                hasher.update(&msg);
+                hasher.update(msg);
                 let res = hasher.finalize();
                 let mut hash_bytes = [0u8; 32];
                 hash_bytes.copy_from_slice(&res);
@@ -206,7 +207,7 @@ fn bad_signature() {
                 prop_assert!(verify_key.verify_prehash(&digest, &sig).is_err());
 
                 let (r_bytes, s_bytes) = split_signature(&sig);
-                let (x_bytes, y_bytes) = split_public_key(&verify_key).unwrap();
+                let (x_bytes, y_bytes) = split_public_key(verify_key).unwrap();
 
                 let result = verify(&digest, &r_bytes, &s_bytes, &x_bytes, &y_bytes);
 
@@ -221,7 +222,7 @@ fn bad_signing_key() {
     proptest!(|(msg: [u8; 100])| {
             let digest = {
                 let mut hasher = Keccak256::new();
-                hasher.update(&msg);
+                hasher.update(msg);
                 let res = hasher.finalize();
                 let mut hash_bytes = [0u8; 32];
                 hash_bytes.copy_from_slice(&res);
@@ -239,7 +240,7 @@ fn bad_signing_key() {
                 prop_assert!(bad_verify_key.verify_prehash(&digest, &sig).is_err());
 
                 let (r_bytes, s_bytes) = split_signature(&sig);
-                let (x_bytes, y_bytes) = split_public_key(&bad_verify_key).unwrap();
+                let (x_bytes, y_bytes) = split_public_key(bad_verify_key).unwrap();
 
                 let result = verify(&digest, &r_bytes, &s_bytes, &x_bytes, &y_bytes);
 

@@ -25,7 +25,7 @@ cargo install --path crates/cargo-airbender --force
 You can also install from the public repository:
 
 ```sh
-cargo install --git https://github.com/popzxc/airbender-platform --branch main cargo-airbender --force
+cargo install --git https://github.com/matter-labs/airbender-platform --branch main cargo-airbender --force
 ```
 
 By default, GPU support is enabled in `cargo-airbender`, so `prove --backend gpu` and `generate-vk`

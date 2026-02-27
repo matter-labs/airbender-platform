@@ -42,22 +42,27 @@ impl ScalarInner {
     const REDUCTION_CONST: Self = Self::from_be_hex_unchecked(
         "D9E8890D6494EF93897F30C127CFAB5E50A51AC834B9EC244B0DFF665588B13F",
     );
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) const MINUS_LAMBDA: Self = Self::from_be_hex_unchecked(
         "acd7bfe87aa729c68c5699f9ad96826d8e1af5392b820beecf54734f06a3d4a3",
     );
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) const MINUS_B1: Self = Self::from_be_hex_unchecked(
         "221208ac9df506c61571b4ae8ac47f711b1c8205faa6ed42c50468d00ad9263c",
     );
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) const MINUS_B2: Self = Self::from_be_hex_unchecked(
         "c25575eb8e173580176cdf65ba244fce1e8a8dc5f3ba59390cac5e506a144696",
     );
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) const G1: Self = Self::from_be_bytes_unchecked(&[
         0x30, 0x86, 0xd2, 0x21, 0xa7, 0xd4, 0x6b, 0xcd, 0xe8, 0x6c, 0x90, 0xe4, 0x92, 0x84, 0xeb,
         0x15, 0x3d, 0xaa, 0x8a, 0x14, 0x71, 0xe8, 0xca, 0x7f, 0xe8, 0x93, 0x20, 0x9a, 0x45, 0xdb,
         0xb0, 0x31,
     ]);
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) const G2: Self = Self::from_be_bytes_unchecked(&[
         0xe4, 0x43, 0x7e, 0xd6, 0x01, 0x0e, 0x88, 0x28, 0x6f, 0x54, 0x7f, 0xa9, 0x0a, 0xbf, 0xe4,
         0xc4, 0x22, 0x12, 0x08, 0xac, 0x9d, 0xf5, 0x06, 0xc6, 0x15, 0x71, 0xb4, 0xae, 0x8a, 0xc4,
@@ -78,6 +83,7 @@ impl ScalarInner {
         t.to_representation()
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn from_k256_scalar(s: crate::k256::Scalar) -> Self {
         // SAFETY: it is reduced, but doesn't use Montgomery form
         // we have to copy here because we have stricter alginment than k256::Scalar
@@ -100,6 +106,7 @@ impl ScalarInner {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn from_u128(n: u128) -> Self {
         Self(BigInt([n as u64, (n >> 64) as u64, 0, 0])).to_representation()
     }
@@ -135,6 +142,7 @@ impl ScalarInner {
         Self::from_words(res)
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn from_be_hex(hex: &str) -> Self {
         Self::from_be_hex_unchecked(hex).to_representation()
     }
@@ -145,11 +153,13 @@ impl ScalarInner {
         u256::to_be_bytes(t.0)
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     fn as_words(&self) -> &[u64; 4] {
         &self.0 .0
     }
     // This is only called on the results of decompose and decompose_128, so the input is already in integer form
     #[inline(always)]
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn bits(&self, offset: usize, count: usize) -> u32 {
         // check requested bits must be from the same limb
         debug_assert!((offset + count - 1) >> 6 == offset >> 6);
@@ -159,6 +169,7 @@ impl ScalarInner {
 
     // This is only called on the results of decompose and decompose_128, so the input is already in integer form
     #[inline(always)]
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn bits_var(&self, offset: usize, count: usize) -> u32 {
         debug_assert!(count <= 32);
         debug_assert!(offset + count <= 256);
@@ -176,6 +187,7 @@ impl ScalarInner {
 
     // The input should be in montgomery form, the output is in integer form
     #[inline(always)]
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn decompose_128(&self) -> (Self, Self) {
         let integer_form = self.to_integer();
         let words = integer_form.as_words();
@@ -187,6 +199,7 @@ impl ScalarInner {
     }
 
     // The input should be in montgomery form, the output is in integer form
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn decompose(self) -> (Self, Self) {
         // Not to efficient as we kick out of Montgomery form
         let int_form = self.to_integer();
@@ -216,6 +229,7 @@ impl ScalarInner {
         u256::eq(&self.0, &other.0)
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     fn integer_mul_shift_384_vartime(&mut self, b: &Self) {
         u256::mul_high_assign(&mut self.0, &b.0);
 

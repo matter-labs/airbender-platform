@@ -2,100 +2,41 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep this value in sync with rust-toolchain.toml.
+  RUST_TOOLCHAIN: nightly-2026-02-10
+  ZKSYNC_USE_CUDA_STUBS: "true"
 
 jobs:
   lints:
     runs-on: ubuntu-latest
-    env:
-      ZKSYNC_USE_CUDA_STUBS: "true"
     steps:
       - uses: actions/checkout@v4
-      - name: Read Rust toolchain
-        id: rust-toolchain
-        run: |
-          python - <<'PY'
-          import os
-          import pathlib
-          import tomllib
-
-          toolchain = tomllib.loads(pathlib.Path("rust-toolchain.toml").read_text())["toolchain"]
-          channel = toolchain["channel"]
-          components = ",".join(toolchain.get("components", []))
-
-          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write(f"channel={channel}\n")
-              output.write(f"components={components}\n")
-
-          print(f"Using toolchain channel: {channel}")
-          print(f"Using toolchain components: {components}")
-          PY
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
-          components: ${{ steps.rust-toolchain.outputs.components }},rustfmt
-      - name: Verify active Rust toolchain
-        run: |
-          active_toolchain="$(rustup show active-toolchain | awk '{print $1}')"
-          expected_channel="${{ steps.rust-toolchain.outputs.channel }}"
-
-          if [[ "$active_toolchain" != "$expected_channel"* ]]; then
-            echo "active toolchain '$active_toolchain' does not match expected '$expected_channel'"
-            exit 1
-          fi
-
-          rustc --version
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy,rustfmt,rust-src,llvm-tools-preview
       - name: Rustfmt
         run: cargo fmt --all -- --check
-      - name: Clippy (workspace code)
-        run: cargo clippy --workspace --lib --bins --examples --benches --exclude airbender-crypto -- -D warnings
-      - name: Clippy (workspace tests)
-        run: cargo clippy --workspace --tests --exclude airbender-crypto -- -D warnings
-      - name: Clippy (airbender-crypto code)
-        run: cargo clippy -p airbender-crypto --lib --examples --benches -- -D warnings
-      - name: Clippy (airbender-crypto tests)
-        run: cargo clippy -p airbender-crypto --tests -- -D warnings
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   build-and-test:
     runs-on: ubuntu-latest
-    env:
-      ZKSYNC_USE_CUDA_STUBS: "true"
     steps:
       - uses: actions/checkout@v4
-      - name: Read Rust toolchain
-        id: rust-toolchain
-        run: |
-          python - <<'PY'
-          import os
-          import pathlib
-          import tomllib
-
-          toolchain = tomllib.loads(pathlib.Path("rust-toolchain.toml").read_text())["toolchain"]
-          channel = toolchain["channel"]
-          components = ",".join(toolchain.get("components", []))
-
-          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write(f"channel={channel}\n")
-              output.write(f"components={components}\n")
-
-          print(f"Using toolchain channel: {channel}")
-          print(f"Using toolchain components: {components}")
-          PY
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
-          components: ${{ steps.rust-toolchain.outputs.components }}
-      - name: Verify active Rust toolchain
-        run: |
-          active_toolchain="$(rustup show active-toolchain | awk '{print $1}')"
-          expected_channel="${{ steps.rust-toolchain.outputs.channel }}"
-
-          if [[ "$active_toolchain" != "$expected_channel"* ]]; then
-            echo "active toolchain '$active_toolchain' does not match expected '$expected_channel'"
-            exit 1
-          fi
-
-          rustc --version
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rust-src,llvm-tools-preview
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
@@ -103,9 +44,32 @@ jobs:
         run: cargo build --workspace
       - name: Test
         run: cargo nextest run --workspace
-      - name: Smoke cargo-airbender CLI
+
+  cli-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rust-src,llvm-tools-preview
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --locked
+      - name: Install cargo-airbender
+        run: cargo install --path crates/cargo-airbender --locked --force --debug
+      - name: Run cargo-airbender integration flow
         run: |
-          cargo run -p cargo-airbender -- airbender --help
+          # TODO: this is a mess, but it's better than nothing -- to be properly refactored.
           tmp_dir="$(mktemp -d)"
-          cargo run -p cargo-airbender -- airbender new "$tmp_dir/guest" --yes --name smoke
-          test -f "$tmp_dir/guest/Cargo.toml"
+          project_dir="$tmp_dir/smoke"
+
+          cargo airbender new "$project_dir" --yes --name smoke --prover-backend dev --sdk-path "$PWD"
+          cargo airbender build --project "$project_dir/guest"
+
+          printf '00000001\n29000000\n' > "$tmp_dir/input.hex"
+
+          cargo airbender run "$project_dir/guest/dist/app/app.bin" --input "$tmp_dir/input.hex"
+          cargo airbender prove "$project_dir/guest/dist/app/app.bin" --input "$tmp_dir/input.hex" --output "$tmp_dir/proof.bin" --backend dev
+
+          # Intentionally only verify command success and proof artifact presence for now.
+          test -f "$tmp_dir/proof.bin"
