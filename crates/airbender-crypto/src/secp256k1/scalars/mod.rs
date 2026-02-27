@@ -53,6 +53,7 @@ impl Scalar {
         Self(ScalarInner::from_u128(n))
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[cfg(test)]
     pub(crate) fn from_be_hex(hex: &str) -> Self {
         Self(ScalarInner::from_be_hex(hex))
@@ -136,6 +137,7 @@ impl proptest::arbitrary::Arbitrary for Scalar {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         use proptest::prelude::{any, Strategy};
 
+        #[allow(clippy::redundant_closure)]
         any::<ScalarInner>().prop_map(|inner| Self(inner))
     }
 
@@ -235,7 +237,7 @@ mod tests {
     #[test]
     fn test_decompose() {
         proptest!(|(k: Scalar)| {
-            let (mut r1, mut r2) = k.decompose();
+            let (r1, r2) = k.decompose();
             let lambda = -Scalar::MINUS_LAMBDA;
 
             #[cfg(feature = "bigint_ops")]

@@ -16,6 +16,7 @@ impl crate::MiniDigest for Keccak256 {
         <Keccak256 as Digest>::update(&mut hasher, input);
         let digest = <Keccak256 as Digest>::finalize(hasher);
         let mut result = [0u8; 32];
+        #[allow(deprecated)] // TODO: to be fixed in `zksync-os/crypto` first
         result.copy_from_slice(digest.as_slice());
         result
     }

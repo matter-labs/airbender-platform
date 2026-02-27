@@ -376,6 +376,8 @@ fn table_verify(n: i32, w: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
+
     use super::ecmult;
     use crate::secp256k1::scalars::Scalar;
     use crate::secp256k1::{context::ECRECOVER_CONTEXT, test_vectors::MUL_TEST_VECTORS};
@@ -557,7 +559,7 @@ mod tests {
     #[test]
     fn test_generator_multipules() {
         for (k, x, y) in MUL_TEST_VECTORS {
-            let k = Scalar::from_repr(k.clone().into());
+            let k = Scalar::from_repr((*k).into());
 
             let computed_ctx =
                 ecmult(&Jacobian::INFINITY, &Scalar::ZERO, &k, &ECRECOVER_CONTEXT).to_affine();

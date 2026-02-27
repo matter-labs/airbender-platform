@@ -29,6 +29,7 @@ impl DelegatedBarretParams<4> for FieldParams {
 
 impl FieldElement8x32 {
     pub(super) const ZERO: Self = Self(BigInt::zero());
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) const BETA: Self = Self(BigIntMacro!(
         "55594575648329892869085402983802832744385952214688224221778511981742606582254"
     ));
@@ -44,6 +45,7 @@ impl FieldElement8x32 {
         Self(u256::from_bytes_unchecked(bytes))
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
         let value = Self::from_bytes_unchecked(bytes);
@@ -60,6 +62,7 @@ impl FieldElement8x32 {
         u256::to_be_bytes(self.0).into()
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn from_words(words: [u64; 4]) -> Self {
         Self(BigInt(words))
     }
@@ -71,6 +74,7 @@ impl FieldElement8x32 {
         }
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn mul_int_in_place(&mut self, rhs: u32) {
         let rhs = BigInt([rhs as u64, 0, 0, 0]);
@@ -86,6 +90,7 @@ impl FieldElement8x32 {
         }
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn add_int_in_place(&mut self, rhs: u32) {
         let rhs = BigInt([rhs as u64, 0, 0, 0]);
@@ -101,6 +106,7 @@ impl FieldElement8x32 {
         }
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn double_in_place(&mut self) {
         unsafe {
@@ -113,11 +119,13 @@ impl FieldElement8x32 {
         unsafe { u256::sub_mod_assign::<FieldParams>(&mut self.0, &rhs.0) };
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn negate_in_place(&mut self, _magnitude: u32) {
         unsafe { u256::neg_mod_assign::<FieldParams>(&mut self.0) };
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn normalize_in_place(&mut self) {
         // the 8x32 implementation is always normalized
@@ -128,11 +136,13 @@ impl FieldElement8x32 {
         unsafe { u256::is_zero_mod::<FieldParams>(&self.0) }
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn is_odd(&self) -> bool {
         self.0.is_odd()
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) const fn to_storage(self) -> FieldStorage10x26 {
         let mut res = [0; 8];

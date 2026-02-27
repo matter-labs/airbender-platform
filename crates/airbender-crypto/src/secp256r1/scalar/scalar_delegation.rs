@@ -4,6 +4,7 @@ use crate::secp256r1::Secp256r1Err;
 
 static MODULUS: BigInt<4> = BigInt::<4>(super::MODULUS);
 static REDUCTION_CONST: BigInt<4> = BigInt::<4>(super::REDUCTION_CONST);
+#[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
 static R2: BigInt<4> = BigInt::<4>(super::R2);
 
 #[derive(Default, Debug)]
@@ -23,9 +24,11 @@ impl DelegatedMontParams<4> for ScalarParams {
     }
 }
 
+#[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Scalar(BigInt<4>);
 
+#[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
 impl Scalar {
     pub(crate) const ZERO: Self = Self(BigInt::zero());
     // montgomery form
@@ -117,7 +120,7 @@ mod tests {
     impl proptest::arbitrary::Arbitrary for Scalar {
         type Parameters = ();
 
-        fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
             use proptest::prelude::{any, Strategy};
             any::<u256::U256Wrapper<ScalarParams>>().prop_map(|x| Self(x.0).to_repressentation())
         }

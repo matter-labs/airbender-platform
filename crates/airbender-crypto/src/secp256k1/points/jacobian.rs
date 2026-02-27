@@ -561,6 +561,7 @@ mod tests {
 
         let mut p = g.to_jacobian();
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..ADD_TEST_VECTORS.len() {
             let a = p.to_affine();
 
@@ -582,6 +583,7 @@ mod tests {
 
         let mut p = g.to_jacobian();
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..ADD_TEST_VECTORS.len() {
             let a = p.to_affine_const();
 

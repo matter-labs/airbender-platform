@@ -71,6 +71,7 @@ where
         let scalar: BigInt = k.into_bigint().into().into();
 
         let coeff_bigints: [BigInt; 4] = Self::SCALAR_DECOMP_COEFFS.map(|x| {
+            #[allow(clippy::obfuscated_if_else)]
             BigInt::from_biguint(x.0.then_some(Sign::Plus).unwrap_or(Sign::Minus), x.1.into())
         });
 

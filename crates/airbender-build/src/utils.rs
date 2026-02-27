@@ -113,7 +113,7 @@ fn resolve_bin_name_from_candidates(
     explicit_bin: Option<&str>,
 ) -> Result<String> {
     if let Some(explicit_bin) = explicit_bin {
-        if bin_names.iter().any(|bin_name| *bin_name == explicit_bin) {
+        if bin_names.contains(&explicit_bin) {
             return Ok(explicit_bin.to_string());
         }
 

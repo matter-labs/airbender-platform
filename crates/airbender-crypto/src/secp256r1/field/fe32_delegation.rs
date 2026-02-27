@@ -4,6 +4,7 @@ use crate::{
 };
 use core::ops::{AddAssign, MulAssign, SubAssign};
 
+#[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
 #[derive(Clone, Copy, Default)]
 pub struct FieldElement(pub(super) BigInt<4>);
 
@@ -20,6 +21,7 @@ impl core::fmt::Debug for FieldElement {
 
 static MODULUS: BigInt<4> = BigInt::<4>(super::MODULUS);
 static REDUCTION_CONST: BigInt<4> = BigInt::<4>(super::REDUCTION_CONST);
+#[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
 static R2: BigInt<4> = BigInt::<4>(super::R2);
 
 #[derive(Default, Debug)]
@@ -40,8 +42,10 @@ impl DelegatedMontParams<4> for FieldParams {
 }
 
 impl FieldElement {
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) const ZERO: Self = Self::from_words_unchecked([0; 4]);
     // montgomery form
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) const ONE: Self =
         Self::from_words_unchecked([1, 18446744069414584320, 18446744073709551615, 4294967294]);
 
@@ -59,6 +63,7 @@ impl FieldElement {
         self
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) const fn from_be_bytes_unchecked(bytes: &[u8; 32]) -> Self {
         FieldElement(u256::from_bytes_unchecked(bytes))
     }
@@ -75,26 +80,31 @@ impl FieldElement {
         u256::to_be_bytes(self.to_integer().0)
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn is_zero(&self) -> bool {
         u256::is_zero(&self.0)
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn overflow(&self) -> bool {
         !u256::lt(&self.0, &MODULUS)
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn square_assign(&mut self) {
         unsafe {
             u256::square_assign_montgomery::<FieldParams>(&mut self.0);
         }
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn negate_assign(&mut self) {
         unsafe {
             u256::neg_mod_assign::<FieldParams>(&mut self.0);
         }
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn double_assign(&mut self) {
         unsafe {
             u256::double_mod_assign::<FieldParams>(&mut self.0);
@@ -102,12 +112,11 @@ impl FieldElement {
     }
 
     /// Computes `self = other - self`
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn sub_and_negate_assign(&mut self, other: &Self) {
-        unsafe {
-            let borrow = u256::sub_and_negate_assign(&mut self.0, &other.0);
-            if borrow {
-                u256::add_assign(&mut self.0, FieldParams::modulus());
-            }
+        let borrow = u256::sub_and_negate_assign(&mut self.0, &other.0);
+        if borrow {
+            u256::add_assign(&mut self.0, FieldParams::modulus());
         }
     }
 }
@@ -158,7 +167,7 @@ mod tests {
     impl proptest::arbitrary::Arbitrary for FieldElement {
         type Parameters = ();
 
-        fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
             use proptest::prelude::{any, Strategy};
 
             any::<u256::U256Wrapper<FieldParams>>().prop_map(|x| Self(x.0).to_representation())
