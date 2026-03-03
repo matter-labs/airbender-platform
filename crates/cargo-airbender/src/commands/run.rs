@@ -10,14 +10,14 @@ pub fn run(args: RunArgs) -> Result<()> {
         .maybe_cycles(args.cycles)
         .build()
         .map_err(|err| {
-        CliError::with_source(
-            format!(
-                "failed to initialize simulator runner for `{}`",
-                args.app_bin.display()
-            ),
-            err,
-        )
-    })?;
+            CliError::with_source(
+                format!(
+                    "failed to initialize simulator runner for `{}`",
+                    args.app_bin.display()
+                ),
+                err,
+            )
+        })?;
 
     let outcome = runner.run(&input_words).map_err(|err| {
         CliError::with_source(
@@ -48,14 +48,14 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
         .maybe_cycles(args.cycles)
         .build()
         .map_err(|err| {
-        CliError::with_source(
-            format!(
-                "failed to initialize transpiler runner for `{}`",
-                args.app_bin.display()
-            ),
-            err,
-        )
-    })?;
+            CliError::with_source(
+                format!(
+                    "failed to initialize transpiler runner for `{}`",
+                    args.app_bin.display()
+                ),
+                err,
+            )
+        })?;
 
     let outcome = runner.run(&input_words).map_err(|err| {
         CliError::with_source(
