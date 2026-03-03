@@ -6,12 +6,10 @@ use airbender_host::Runner;
 
 pub fn run(args: RunArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
-    let mut builder = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin);
-    if let Some(cycle_limit) = args.cycles {
-        builder = builder.with_cycles(cycle_limit);
-    }
-
-    let runner = builder.build().map_err(|err| {
+    let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
+        .maybe_cycles(args.cycles)
+        .build()
+        .map_err(|err| {
         CliError::with_source(
             format!(
                 "failed to initialize simulator runner for `{}`",
@@ -45,13 +43,11 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
         inverse: args.inverse,
         elf_path: args.elf_path,
     };
-    let mut builder =
-        airbender_host::TranspilerRunnerBuilder::new(&args.app_bin).with_flamegraph(flamegraph);
-    if let Some(cycle_limit) = args.cycles {
-        builder = builder.with_cycles(cycle_limit);
-    }
-
-    let runner = builder.build().map_err(|err| {
+    let runner = airbender_host::TranspilerRunnerBuilder::new(&args.app_bin)
+        .with_flamegraph(flamegraph)
+        .maybe_cycles(args.cycles)
+        .build()
+        .map_err(|err| {
         CliError::with_source(
             format!(
                 "failed to initialize transpiler runner for `{}`",
@@ -79,13 +75,9 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
 
 pub fn run_transpiler(args: RunTranspilerArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
-    let mut builder = airbender_host::TranspilerRunnerBuilder::new(&args.app_bin);
-    if let Some(cycle_limit) = args.cycles {
-        builder = builder.with_cycles(cycle_limit);
-    }
-    if let Some(text_path) = args.text_path.as_ref() {
-        builder = builder.with_text_path(text_path);
-    }
+    let mut builder = airbender_host::TranspilerRunnerBuilder::new(&args.app_bin)
+        .maybe_cycles(args.cycles)
+        .maybe_text_path(args.text_path.as_ref());
     if args.jit {
         builder = builder.with_jit();
     }
