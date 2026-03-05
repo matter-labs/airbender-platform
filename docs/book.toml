@@ -1,0 +1,9 @@
+[book]
+authors = ["Matter Labs"]
+language = "en"
+src = "src"
+title = "Airbender Platform"
+
+[output.html]
+git-repository-url = "https://github.com/matter-labs/airbender-platform"
+edit-url-template = "https://github.com/matter-labs/airbender-platform/edit/main/docs/{path}"
