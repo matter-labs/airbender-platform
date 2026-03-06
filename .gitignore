@@ -1,7 +1,6 @@
 target/
 /dist
 **/dist/
-docs/book/
 
 # Local development artifacts of the main repository developer.
 SESSION.md
