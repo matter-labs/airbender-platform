@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SECP256K1N_HALF","SECP256K1N_HALF_U256"],"enum":["Secp256k1Err"],"fn":["ecrecover_test","recover","recover_with_context","recover_with_context_and_hooks","recover_with_hooks"],"mod":["field","hooks","scalars"],"struct":["ECMultContext"]};

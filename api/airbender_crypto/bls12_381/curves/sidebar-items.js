@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BLS12_381_NUM_ELL_COEFFS"],"mod":["g1","g2"],"struct":["Bls12_381","Config","G2PreparedNoAlloc"]};

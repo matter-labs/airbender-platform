@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["commit","exit_error"],"trait":["Commit"]};

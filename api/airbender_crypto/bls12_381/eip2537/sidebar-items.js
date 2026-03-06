@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["map_fp2_to_g2","map_fp_to_g1","parse_fq2_bytes","parse_fq_bytes","parse_g1_bytes","parse_g2_bytes","serialize_fq2_bytes","serialize_fq_bytes","serialize_g1_bytes","serialize_g2_bytes"]};
