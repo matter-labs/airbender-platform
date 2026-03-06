@@ -31,6 +31,13 @@ impl SimulatorRunnerBuilder {
         self
     }
 
+    pub fn maybe_cycles(self, cycles: Option<usize>) -> Self {
+        match cycles {
+            Some(v) => self.with_cycles(v),
+            None => self,
+        }
+    }
+
     pub fn with_flamegraph(mut self, flamegraph: FlamegraphConfig) -> Self {
         self.flamegraph = Some(flamegraph);
         self
