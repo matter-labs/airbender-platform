@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["fq12","fq2","fq6"],"type":["Fq","Fr"]};

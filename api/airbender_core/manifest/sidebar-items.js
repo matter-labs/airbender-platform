@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CODEC_VERSION_V0","MANIFEST_VERSION_V1"],"enum":["ManifestError","Profile"],"struct":["ArtifactEntry","BuildMetadata","Manifest"]};
