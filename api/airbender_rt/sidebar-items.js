@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["allocator","boot","getrandom","sys","uart"]};

@@ -1,0 +1,439 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>CLI Reference - Airbender Platform</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="css/version-box.css">
+
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Airbender Platform</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/airbender-platform/tree/main/docs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/airbender-platform/edit/main/docs/src/05-cli-reference.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="cli-reference"><a class="header" href="#cli-reference">CLI Reference</a></h1>
+<p><code>cargo airbender</code> is the main user CLI for project scaffolding, guest builds, execution, proving, and verification.</p>
+<h2 id="top-level-commands"><a class="header" href="#top-level-commands">Top-Level Commands</a></h2>
+<pre><code class="language-text">build
+new
+run
+flamegraph
+prove
+generate-vk
+verify-proof
+clean
+</code></pre>
+<h2 id="cargo-airbender-build"><a class="header" href="#cargo-airbender-build"><code>cargo airbender build</code></a></h2>
+<p>Builds guest artifacts into a dist app directory.</p>
+<pre><code class="language-sh">cargo airbender build --app-name app
+</code></pre>
+<p>When <code>--project</code> is omitted, the command searches the current directory and its parents for the nearest guest <code>Cargo.toml</code>.</p>
+<p>Key options:</p>
+<ul>
+<li><code>--app-name &lt;name&gt;</code>: output namespace under dist root (default: <code>app</code>)</li>
+<li><code>--bin &lt;name&gt;</code>: explicit Cargo binary target</li>
+<li><code>--target &lt;triple&gt;</code>: explicit target triple override (otherwise Cargo config defaults are used)</li>
+<li><code>--dist &lt;path&gt;</code>: dist root directory (app folder is created under this root; relative paths are resolved from command invocation cwd)</li>
+<li><code>--project &lt;path&gt;</code>: guest project directory</li>
+<li><code>--profile &lt;debug|release&gt;</code>, <code>--debug</code>, <code>--release</code></li>
+<li><code>--reproducible</code>: build inside a pinned Docker container for bit-for-bit identical output across machines and toolchain versions; automatically passes <code>--locked</code> to cargo</li>
+<li><code>--workspace-root &lt;path&gt;</code>: override the directory bind-mounted as <code>/src</code> inside the container; only needed with <code>--reproducible</code> when the guest has path dependencies pointing outside its own cargo workspace root (see <a href="#monorepo-path-dependencies">Monorepo path dependencies</a> below); requires <code>--reproducible</code></li>
+</ul>
+<h3 id="panic-immediate-abort"><a class="header" href="#panic-immediate-abort"><code>panic-immediate-abort</code></a></h3>
+<p>Replaces all panic call sites with an immediate trap instruction, eliminating panic formatting and unwinding infrastructure and significantly reducing binary size. Enable per-profile in the guest <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[package.metadata]
+airbender.profile.release = { panic-immediate-abort = true }
+airbender.profile.debug   = { panic-immediate-abort = true }
+</code></pre>
+<p>Supported profile keys are <code>"release"</code> and <code>"debug"</code>.</p>
+<p>Forward extra Cargo flags after <code>--</code>:</p>
+<pre><code class="language-sh">cargo airbender build --app-name with_extra_feature -- --features my_extra_feature
+</code></pre>
+<p>Reproducible build:</p>
+<pre><code class="language-sh">cargo airbender build --reproducible
+</code></pre>
+<p>This bind-mounts the workspace read-only into a temporary Docker container, compiles the guest inside a pinned image (<code>debian:bullseye-slim</code> at a fixed digest, Rust nightly pinned to the same date as <code>DEFAULT_GUEST_TOOLCHAIN</code>), copies the artifacts back to the host with <code>docker cp</code>, and removes the container. Two builds of the same source on any machine will produce identical <code>app.bin</code>/<code>app.elf</code>/<code>app.text</code> bytes and identical SHA-256 hashes in <code>manifest.toml</code>. Requires Docker.</p>
+<h3 id="monorepo-path-dependencies"><a class="header" href="#monorepo-path-dependencies">Monorepo path dependencies</a></h3>
+<p>The <code>--reproducible</code> flag bind-mounts the guest project’s cargo workspace root as <code>/src</code> inside the container. For most projects this is the guest directory itself. If the guest’s <code>Cargo.toml</code> contains <code>path = "../../.."</code> dependencies pointing to crates outside that directory (typical in platform monorepos where the guest shares crates with the host via local paths), those crates will not be present inside the container and the build will fail.</p>
+<p>Pass <code>--workspace-root</code> to expand the mount to a directory that contains all referenced crates:</p>
+<pre><code class="language-sh">cargo airbender build --reproducible --workspace-root . --project examples/fibonacci/guest
+</code></pre>
+<p>This is a developer-only scenario. End users whose guest depends on published crates (crates.io or git) never need this flag.</p>
+<p><strong>Cargo.lock prerequisite:</strong> the guest project must have a <code>Cargo.lock</code> committed and generated with the same nightly toolchain used inside the container. If your lock file was created with a different toolchain, regenerate it once before the first reproducible build:</p>
+<pre><code class="language-sh">rustup toolchain install nightly-2026-02-10
+cargo +nightly-2026-02-10 generate-lockfile --manifest-path &lt;guest&gt;/Cargo.toml
+git add &lt;guest&gt;/Cargo.lock &amp;&amp; git commit -m "chore: regenerate Cargo.lock for reproducible builds"
+</code></pre>
+<p>When <code>--reproducible</code> is used, <code>manifest.toml</code> records:</p>
+<pre><code class="language-toml">[build]
+profile = "release"
+reproducible = true
+...
+</code></pre>
+<p>Default artifact layout:</p>
+<pre><code class="language-text">dist/&lt;app-name&gt;/app.bin
+dist/&lt;app-name&gt;/app.elf
+dist/&lt;app-name&gt;/app.text
+dist/&lt;app-name&gt;/manifest.toml
+</code></pre>
+<h2 id="cargo-airbender-new"><a class="header" href="#cargo-airbender-new"><code>cargo airbender new</code></a></h2>
+<p>Creates a new host+guest project template.</p>
+<pre><code class="language-sh">cargo airbender new [path]
+</code></pre>
+<p>By default, this command runs in interactive mode and asks:</p>
+<ul>
+<li>project name</li>
+<li>whether to enable <code>std</code></li>
+<li>allocator mode (<code>talc</code>, <code>bump</code>, <code>custom</code>)</li>
+<li>prover backend (<code>dev</code>, <code>gpu</code>)</li>
+</ul>
+<p>If <code>[path]</code> is omitted, the project is initialized in the current directory.
+The destination directory must be empty.</p>
+<p>Use <code>--yes</code> to skip prompts and run non-interactively.</p>
+<p>Options:</p>
+<ul>
+<li><code>--name &lt;name&gt;</code>: default project name for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--enable-std</code>: default <code>std</code> answer for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--allocator &lt;talc|bump|custom&gt;</code>: default allocator answer for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--prover-backend &lt;dev|gpu&gt;</code>: default prover backend answer for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--yes</code>: skip prompts and accept values from flags/defaults</li>
+<li><code>--sdk-path &lt;path&gt;</code>: use local SDK path (workspace root, <code>crates/</code>, or crate path)</li>
+<li><code>--sdk-version &lt;version&gt;</code>: use versioned SDK dependency</li>
+</ul>
+<p>Prover backend choices:</p>
+<ul>
+<li><code>dev</code>: transpiler-backed development flow that emits a mock proof envelope instead of running cryptographic proving</li>
+<li><code>gpu</code>: real proving backend; requires a CUDA-capable NVIDIA GPU at runtime. You can compile with <code>ZKSYNC_USE_CUDA_STUBS=true</code>, but invoking proving without CUDA setup panics.</li>
+</ul>
+<p>If <code>custom</code> allocator is chosen, the guest code will have <code>#[airbender::main(allocator_init = ...)]</code> and an explicit allocator
+module you can replace. The <code>allocator_init</code> hook is required for <code>allocator-custom</code>.</p>
+<p>Default behavior (when neither <code>--sdk-path</code> nor <code>--sdk-version</code> is provided):</p>
+<ul>
+<li>generated project depends on <code>airbender-sdk</code> from
+<code>https://github.com/matter-labs/airbender-platform</code> (branch <code>main</code>)</li>
+</ul>
+<p>Generated layout:</p>
+<pre><code class="language-text">&lt;project&gt;/
+  .gitignore
+  README.md
+  guest/
+    .cargo/config.toml
+    Cargo.toml
+    rust-toolchain.toml
+    src/main.rs
+  host/
+    Cargo.toml
+    rust-toolchain.toml
+    src/main.rs
+</code></pre>
+<h2 id="cargo-airbender-run"><a class="header" href="#cargo-airbender-run"><code>cargo airbender run</code></a></h2>
+<p>Runs <code>app.bin</code> via transpiler execution.</p>
+<pre><code class="language-sh">cargo airbender run ./dist/app/app.bin --input ./input.hex
+</code></pre>
+<p>Options:</p>
+<ul>
+<li><code>--input &lt;file&gt;</code> (required)</li>
+<li><code>--cycles &lt;n&gt;</code> (optional cycle limit)</li>
+<li><code>--text-path &lt;file&gt;</code> (optional path to <code>.text</code> file; defaults to sibling of <code>app.bin</code>)</li>
+<li><code>--jit</code>: enable transpiler JIT on x86_64 (without this flag, transpiler runs in non-JIT mode)</li>
+</ul>
+<h2 id="cargo-airbender-flamegraph"><a class="header" href="#cargo-airbender-flamegraph"><code>cargo airbender flamegraph</code></a></h2>
+<p>Runs transpiler execution with profiling and writes flamegraph output.</p>
+<pre><code class="language-sh">cargo airbender flamegraph ./dist/app/app.bin --input ./input.hex --output flamegraph.svg
+</code></pre>
+<p>Options include:</p>
+<ul>
+<li><code>--sampling-rate &lt;n&gt;</code></li>
+<li><code>--inverse</code></li>
+<li><code>--elf-path &lt;file&gt;</code> (optional custom symbol source)</li>
+</ul>
+<h2 id="cargo-airbender-prove"><a class="header" href="#cargo-airbender-prove"><code>cargo airbender prove</code></a></h2>
+<p>Generates a bincode-encoded proof.</p>
+<pre><code class="language-sh">cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
+</code></pre>
+<p>Key options:</p>
+<ul>
+<li><code>--backend &lt;dev|cpu|gpu&gt;</code> (default: <code>dev</code>)</li>
+<li><code>--threads &lt;n&gt;</code></li>
+<li><code>--cycles &lt;n&gt;</code></li>
+<li><code>--ram-bound &lt;bytes&gt;</code></li>
+<li><code>--level &lt;base|recursion-unrolled|recursion-unified&gt;</code> (default: <code>recursion-unified</code>)</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li><code>dev</code> backend runs transpiler execution and emits a dev proof envelope.</li>
+<li><code>cpu</code> backend can only generate proofs for the base layer, and is not meant to be used outside of the debugging of the airbender itself.</li>
+<li><code>gpu</code> backend requires GPU support in <code>cargo-airbender</code> (enabled by default).</li>
+<li><code>--cycles</code> and <code>--ram-bound</code> are ignored on <code>gpu</code>/<code>dev</code> backends.</li>
+<li><code>verify-proof</code> accepts only real proofs, so use <code>--backend cpu</code> or <code>--backend gpu</code> when preparing proofs for CLI verification.</li>
+</ul>
+<h2 id="cargo-airbender-generate-vk"><a class="header" href="#cargo-airbender-generate-vk"><code>cargo airbender generate-vk</code></a></h2>
+<p>Generates verification keys and writes them as bincode.</p>
+<pre><code class="language-sh">cargo airbender generate-vk ./dist/app/app.bin --output vk.bin
+</code></pre>
+<p>Options:</p>
+<ul>
+<li><code>--output &lt;file&gt;</code> (default: <code>vk.bin</code>)</li>
+<li><code>--level &lt;base|recursion-unrolled|recursion-unified&gt;</code></li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li><code>generate-vk</code> requires GPU support in <code>cargo-airbender</code> (enabled by default).</li>
+<li>If you installed with <code>--no-default-features</code>, the command fails before VK computation.</li>
+<li>Local install example with GPU support disabled: <code>cargo install --path crates/cargo-airbender --no-default-features --force</code>.</li>
+</ul>
+<h2 id="cargo-airbender-verify-proof"><a class="header" href="#cargo-airbender-verify-proof"><code>cargo airbender verify-proof</code></a></h2>
+<p>Verifies a real proof against a real verification key file.</p>
+<pre><code class="language-sh">cargo airbender verify-proof ./proof.bin --vk ./vk.bin
+</code></pre>
+<p>Options:</p>
+<ul>
+<li><code>--vk &lt;file&gt;</code> (required)</li>
+<li><code>--expected-output &lt;words&gt;</code> (optional): comma-separated public output words for <code>x10..x17</code> (decimal or <code>0x</code> hex)</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li>dev proofs are rejected by this command with a dedicated error message.</li>
+<li>if <code>--expected-output</code> is omitted, CLI prints a warning and verifies proof/VK validity only.</li>
+<li>when <code>--expected-output</code> has fewer than 8 words, remaining words are zero-padded.</li>
+</ul>
+<p>Examples:</p>
+<pre><code class="language-sh">cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42
+cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42,0,0,0
+cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 0x2a
+</code></pre>
+<h2 id="cargo-airbender-clean"><a class="header" href="#cargo-airbender-clean"><code>cargo airbender clean</code></a></h2>
+<p>Removes Docker resources created by reproducible builds to reclaim disk space.</p>
+<pre><code class="language-sh">cargo airbender clean
+</code></pre>
+<p>Removes the shared <code>airbender-cargo-registry</code> volume and any stopped <code>airbender-build</code>
+containers left by interrupted builds.</p>
+<p>Notes:</p>
+<ul>
+<li>Each build run uses an isolated temporary container that is removed automatically on
+success or failure. <code>clean</code> is only needed to reclaim the crate download cache or remove
+containers orphaned by a hard kill (<code>SIGKILL</code>/OOM).</li>
+<li>After <code>cargo airbender clean</code>, the next <code>--reproducible</code> build re-downloads all crate
+sources from crates.io before compiling.</li>
+</ul>
+<h2 id="input-file-format---input"><a class="header" href="#input-file-format---input">Input File Format (<code>--input</code>)</a></h2>
+<p>Runtime/prover commands that accept <code>--input</code> expect hex-encoded <code>u32</code> words:</p>
+<ul>
+<li>optional <code>0x</code> prefix is allowed</li>
+<li>whitespace is ignored</li>
+<li>total hex length must be a multiple of 8</li>
+<li>each 8-hex chunk is parsed as one <code>u32</code></li>
+<li>words must match guest input expectations (for <code>read::&lt;T&gt;()</code>, this means Airbender input wire-framed payload words)</li>
+</ul>
+<p>Recommended: construct inputs with <code>airbender_host::Inputs</code> (<code>push</code>, <code>push_bytes</code>) and write files with <code>write_hex_file(...)</code>. See <a href="./02-host-program-api.html"><code>docs/02-host-program-api.md</code></a>.</p>
+<p>Example file:</p>
+<pre><code class="language-text">00000001
+29000000
+</code></pre>
+<h2 id="logging"><a class="header" href="#logging">Logging</a></h2>
+<p>Set <code>RUST_LOG</code> to control verbosity:</p>
+<pre><code class="language-sh">RUST_LOG=debug cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="04-crypto-on-guest-and-host.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="04-crypto-on-guest-and-host.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+            </nav>
+
+        </div>
+
+
+
+        <script>
+            window.playground_line_numbers = true;
+        </script>
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+        <script src="ace.js"></script>
+        <script src="editor.js"></script>
+        <script src="mode-rust.js"></script>
+        <script src="theme-dawn.js"></script>
+        <script src="theme-tomorrow_night.js"></script>
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="js/version-box.js"></script>
+
+
+    </div>
+    </body>
+</html>
