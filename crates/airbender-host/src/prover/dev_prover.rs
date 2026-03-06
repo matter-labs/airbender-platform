@@ -25,9 +25,23 @@ impl DevProverBuilder {
         self
     }
 
+    pub fn maybe_cycles(self, cycles: Option<usize>) -> Self {
+        match cycles {
+            Some(v) => self.with_cycles(v),
+            None => self,
+        }
+    }
+
     pub fn with_text_path(mut self, text_path: impl AsRef<Path>) -> Self {
         self.text_path = Some(text_path.as_ref().to_path_buf());
         self
+    }
+
+    pub fn maybe_text_path(self, text_path: Option<impl AsRef<Path>>) -> Self {
+        match text_path {
+            Some(v) => self.with_text_path(v),
+            None => self,
+        }
     }
 
     pub fn build(self) -> Result<DevProver> {
@@ -46,15 +60,10 @@ impl DevProver {
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
         let app_bin_hash = hash_app_bin(&app_bin_path)?;
 
-        let mut runner_builder = TranspilerRunnerBuilder::new(&app_bin_path);
-        if let Some(cycles) = cycles {
-            runner_builder = runner_builder.with_cycles(cycles);
-        }
-        if let Some(text_path) = text_path {
-            runner_builder = runner_builder.with_text_path(text_path);
-        }
-
-        let runner = runner_builder.build()?;
+        let runner = TranspilerRunnerBuilder::new(&app_bin_path)
+            .maybe_cycles(cycles)
+            .maybe_text_path(text_path)
+            .build()?;
 
         Ok(Self {
             app_bin_hash,

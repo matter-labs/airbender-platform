@@ -19,12 +19,10 @@ pub fn run(args: ProveArgs) -> Result<()> {
                 tracing::warn!("ignoring `--level` for dev backend");
             }
 
-            let mut builder = airbender_host::DevProverBuilder::new(&args.app_bin);
-            if let Some(cycles) = args.cycles {
-                builder = builder.with_cycles(cycles);
-            }
-
-            let prover = builder.build().map_err(|err| {
+            let prover = airbender_host::DevProverBuilder::new(&args.app_bin)
+                .maybe_cycles(args.cycles)
+                .build()
+                .map_err(|err| {
                 CliError::with_source(
                     format!(
                         "failed to initialize dev prover for `{}`",
@@ -47,12 +45,11 @@ pub fn run(args: ProveArgs) -> Result<()> {
             #[cfg(feature = "gpu-prover")]
             {
                 let level = as_host_level(args.level);
-                let mut builder =
-                    airbender_host::GpuProverBuilder::new(&args.app_bin).with_level(level);
-                if let Some(threads) = args.threads {
-                    builder = builder.with_worker_threads(threads);
-                }
-                let prover = builder.build().map_err(|err| {
+                let prover = airbender_host::GpuProverBuilder::new(&args.app_bin)
+                    .with_level(level)
+                    .maybe_worker_threads(args.threads)
+                    .build()
+                    .map_err(|err| {
                     CliError::with_source(
                         format!(
                             "failed to initialize GPU prover for `{}`",
@@ -84,18 +81,12 @@ pub fn run(args: ProveArgs) -> Result<()> {
                 );
             }
 
-            let mut builder = airbender_host::CpuProverBuilder::new(&args.app_bin);
-            if let Some(threads) = args.threads {
-                builder = builder.with_worker_threads(threads);
-            }
-            if let Some(cycles) = args.cycles {
-                builder = builder.with_cycles(cycles);
-            }
-            if let Some(ram_bound) = args.ram_bound {
-                builder = builder.with_ram_bound(ram_bound);
-            }
-
-            let prover = builder.build().map_err(|err| {
+            let prover = airbender_host::CpuProverBuilder::new(&args.app_bin)
+                .maybe_worker_threads(args.threads)
+                .maybe_cycles(args.cycles)
+                .maybe_ram_bound(args.ram_bound)
+                .build()
+                .map_err(|err| {
                 CliError::with_source(
                     format!(
                         "failed to initialize CPU prover for `{}`",
