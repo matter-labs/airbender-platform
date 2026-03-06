@@ -1,0 +1,780 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Airbender Platform</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="css/version-box.css">
+
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Airbender Platform</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/airbender-platform/tree/main/docs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="airbender-platform-user-guide"><a class="header" href="#airbender-platform-user-guide">Airbender Platform User Guide</a></h1>
+<p>This book is the user manual for building and running Airbender programs.</p>
+<h2 id="suggested-reading-order"><a class="header" href="#suggested-reading-order">Suggested Reading Order</a></h2>
+<ul>
+<li>Start with <a href="./01-installation-and-hello-world.html">Installation &amp; Hello World</a>.</li>
+<li>Read the <a href="./02-host-program-api.html">Host</a> and <a href="./03-guest-program-api.html">Guest</a> APIs next.</li>
+<li>Use the <a href="./04-crypto-on-guest-and-host.html">Crypto</a> and <a href="./05-cli-reference.html">CLI</a> chapters as references while building.</li>
+</ul>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<p>Complete guest + host examples live in the repository under <a href="https://github.com/matter-labs/airbender-platform/tree/main/examples"><code>examples/</code></a>:</p>
+<ul>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci"><code>examples/fibonacci</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add"><code>examples/u256-add</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap"><code>examples/std-btreemap</code></a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="installation--hello-world"><a class="header" href="#installation--hello-world">Installation &amp; Hello World</a></h1>
+<p>This chapter gets you from a fresh machine to your first Airbender guest build, run, and proof.</p>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<ul>
+<li>Rust nightly toolchain from <a href="https://github.com/matter-labs/airbender-platform/blob/main/rust-toolchain.toml"><code>rust-toolchain.toml</code></a></li>
+<li><code>clang</code> available in <code>PATH</code></li>
+<li><code>cargo-binutils</code> for <code>cargo objcopy</code></li>
+</ul>
+<p>Install <code>cargo-binutils</code>:</p>
+<pre><code class="language-sh">cargo install cargo-binutils --locked
+</code></pre>
+<h2 id="install-cargo-airbender"><a class="header" href="#install-cargo-airbender">Install <code>cargo airbender</code></a></h2>
+<p>From a local clone:</p>
+<pre><code class="language-sh">cargo install --path crates/cargo-airbender --force
+</code></pre>
+<p>You can also install from the public repository:</p>
+<pre><code class="language-sh">cargo install --git https://github.com/matter-labs/airbender-platform --branch main cargo-airbender --force
+</code></pre>
+<p>By default, GPU support is enabled in <code>cargo-airbender</code>, so <code>prove --backend gpu</code> and <code>generate-vk</code>
+work out of the box.</p>
+<p>If you want to disable GPU support in the CLI binary, install with:</p>
+<pre><code class="language-sh">cargo install --path crates/cargo-airbender --no-default-features --force
+</code></pre>
+<p>You can still build (but not run) the project without having Nvidia GPU or CUDA installed by setting
+<code>ZKSYNC_USE_CUDA_STUBS=true</code> in your environment.</p>
+<h2 id="hello-world-template-project"><a class="header" href="#hello-world-template-project">Hello World (Template Project)</a></h2>
+<p>Create a new host+guest template project.</p>
+<p>When called without a path, the project is initialized in the current directory:</p>
+<pre><code class="language-sh">cargo airbender new
+</code></pre>
+<p>The destination directory must be empty.</p>
+<p>When called with a path, the project is initialized there:</p>
+<pre><code class="language-sh">cargo airbender new ./hello-airbender
+</code></pre>
+<p><code>cargo airbender new</code> asks interactive questions for:</p>
+<ul>
+<li>project name</li>
+<li><code>std</code> enablement</li>
+<li>allocator (<code>talc</code>, <code>bump</code>, <code>custom</code>)</li>
+</ul>
+<p>Flags like <code>--name</code>, <code>--enable-std</code>, and <code>--allocator</code> prefill prompt defaults. For CI/non-interactive usage, add <code>--yes</code>:</p>
+<pre><code class="language-sh">cargo airbender new ./hello-airbender --yes --name hello-airbender --enable-std --allocator talc
+</code></pre>
+<p>By default, generated projects depend on <code>airbender-sdk</code> from this repository (<code>main</code> branch). You can override this with:</p>
+<ul>
+<li><code>--sdk-path &lt;path&gt;</code> for a local checkout (workspace root, <code>crates/</code>, or crate path)</li>
+<li><code>--sdk-version &lt;version&gt;</code> once published versions are available</li>
+</ul>
+<p>The template includes:</p>
+<ul>
+<li><code>.gitignore</code> at project root (ignores <code>target/</code>)</li>
+<li><code>guest/</code>: guest program (default: <code>no_std</code>; or <code>std</code> with <code>--enable-std</code>)</li>
+<li><code>host/</code>: host app that runs and optionally proves guest execution</li>
+<li><code>guest/.cargo/config.toml</code> with guest target/build flags used by both <code>cargo airbender build</code> and regular <code>cargo</code> tooling</li>
+<li><code>rust-toolchain.toml</code> in both crates to pin the compiler channel</li>
+</ul>
+<p>The generated guest reads a <code>u32</code> input and returns <code>value + 1</code>.</p>
+<p>Build the guest:</p>
+<pre><code class="language-sh">cd hello-airbender/guest
+cargo airbender build
+</code></pre>
+<p>The generated <code>guest/.cargo/config.toml</code> also makes plain <code>cargo build</code> and <code>cargo check</code> use the same guest target and flags.</p>
+<p>This produces artifacts in <code>dist/app/</code> by default:</p>
+<ul>
+<li><code>dist/app/app.bin</code></li>
+<li><code>dist/app/app.elf</code></li>
+<li><code>dist/app/app.text</code></li>
+<li><code>dist/app/manifest.toml</code></li>
+</ul>
+<p>Create an input file (<code>u32</code> words encoded as hex, 8 hex chars per word):</p>
+<blockquote>
+<p>Note: this is a manual codec-v0 payload for <code>u32 = 41</code> (used by the template’s <code>read::&lt;u32&gt;()</code>).</p>
+</blockquote>
+<pre><code class="language-sh">printf '00000001\n29000000\n' &gt; input.hex
+</code></pre>
+<p>Run in the simulator:</p>
+<pre><code class="language-sh">cargo airbender run ./dist/app/app.bin --input ./input.hex
+</code></pre>
+<p>This input represents a codec-v0 encoded <code>u32 = 41</code>, so the template guest should produce <code>42</code> in output register <code>x10</code>.</p>
+<p>For non-trivial input files, generate words from host-side values via <code>Inputs</code> methods (see <a href="./02-host-program-api.html"><code>docs/02-host-program-api.md</code></a>).</p>
+<p>Generate and verify a proof:</p>
+<pre><code class="language-sh">cargo airbender prove ./dist/app/app.bin --input ./input.hex --output ./proof.bin --backend cpu --level base
+cargo airbender generate-vk ./dist/app/app.bin --output ./vk.bin --level base
+cargo airbender verify-proof ./proof.bin --vk ./vk.bin
+</code></pre>
+<p>You can also run the generated host flow:</p>
+<pre><code class="language-sh">cd ../host
+cargo run
+cargo run -- --prove
+</code></pre>
+<p>By default, proving uses the dev backend and does not require CUDA.
+<code>airbender-host</code> exposes GPU proving by default; if you disabled default features in your host
+dependency, re-enable <code>gpu-prover</code> to call GPU APIs.</p>
+<h2 id="prefer-full-end-to-end-examples"><a class="header" href="#prefer-full-end-to-end-examples">Prefer Full End-to-End Examples</a></h2>
+<p>For complete guest + host applications, start with:</p>
+<ul>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci"><code>examples/fibonacci</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add"><code>examples/u256-add</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap"><code>examples/std-btreemap</code></a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="host-program-api"><a class="header" href="#host-program-api">Host Program API</a></h1>
+<p>Use <code>airbender-host</code> from native host applications to execute, prove, and verify guest programs.</p>
+<h2 id="add-dependency"><a class="header" href="#add-dependency">Add Dependency</a></h2>
+<pre><code class="language-toml">[dependencies]
+airbender-host = { path = "../../crates/airbender-host" }
+</code></pre>
+<p>GPU support is enabled by default. To keep a dev-only host binary, disable default features:</p>
+<pre><code class="language-toml">[dependencies]
+airbender-host = { path = "../../crates/airbender-host", default-features = false }
+</code></pre>
+<h2 id="core-workflow-with-program"><a class="header" href="#core-workflow-with-program">Core Workflow with <code>Program</code></a></h2>
+<p><code>Program</code> is the highest-level API.</p>
+<p>Create runners/provers once and reuse them across multiple <code>runner.run(...)</code> / <code>prover.prove(...)</code> calls.</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use airbender_host::{
+    Inputs, Program, Prover, Result, Runner, VerificationRequest, Verifier,
+};
+
+fn run() -&gt; Result&lt;()&gt; {
+    let program = Program::load("../guest/dist/app")?;
+
+    let mut inputs = Inputs::new();
+    inputs.push(&amp;10u32)?;
+
+    let simulator = program.simulator_runner().build()?;
+    let execution = simulator.run(inputs.words())?;
+    println!("output x10={}", execution.receipt.output[0]);
+
+    let prover = program.dev_prover().build()?;
+    let prove_result = prover.prove(inputs.words())?;
+
+    let verifier = program.dev_verifier().build()?;
+    let vk = verifier.generate_vk()?;
+    verifier.verify(
+        &amp;prove_result.proof,
+        &amp;vk,
+        VerificationRequest::dev(inputs.words(), &amp;55u32),
+    )?;
+    Ok(())
+}
+<span class="boring">}</span></code></pre></pre>
+<h2 id="inputs"><a class="header" href="#inputs"><code>Inputs</code></a></h2>
+<p><code>Inputs</code> frames host data for guest reads.</p>
+<ul>
+<li><code>Inputs::push(&amp;value)</code> serializes typed data via Airbender codec</li>
+<li><code>Inputs::push_bytes(&amp;bytes)</code> pushes raw bytes using the canonical input wire framing (<code>airbender_core::wire::frame_words_from_bytes</code>)</li>
+<li><code>Inputs::words()</code> exposes the low-level <code>u32</code> word stream</li>
+<li><code>Inputs::write_hex_file(path)</code> writes CLI-compatible hex input (<code>--input</code>)</li>
+</ul>
+<p>Guest-side <code>read::&lt;T&gt;()</code> calls consume values in the same order they were pushed.</p>
+<h2 id="execution-apis"><a class="header" href="#execution-apis">Execution APIs</a></h2>
+<p>High-level:</p>
+<ul>
+<li><code>Program::simulator_runner()</code></li>
+<li><code>Program::transpiler_runner()</code></li>
+<li><code>Program::dev_prover()</code></li>
+<li><code>Program::gpu_prover()</code></li>
+<li><code>Program::cpu_prover()</code></li>
+<li><code>Program::dev_verifier()</code></li>
+<li><code>Program::real_verifier(level)</code></li>
+<li><code>Runner::run(&amp;input_words)</code></li>
+<li><code>Prover::prove(&amp;input_words)</code></li>
+<li><code>Verifier::generate_vk()</code></li>
+<li><code>Verifier::verify(&amp;proof, &amp;vk, request)</code></li>
+<li><code>VerificationRequest::dev(...)</code> / <code>VerificationRequest::real(...)</code></li>
+</ul>
+<p>Lower-level:</p>
+<ul>
+<li><code>SimulatorRunnerBuilder::new(app_bin).with_...().build()</code></li>
+<li><code>TranspilerRunnerBuilder::new(app_bin).with_...().with_jit().build()</code> (<code>with_jit()</code> is optional and x86_64-only)</li>
+<li><code>DevProverBuilder::new(app_bin).with_...().build()</code></li>
+<li><code>GpuProverBuilder::new(app_bin).with_...().build()</code></li>
+<li><code>CpuProverBuilder::new(app_bin).with_...().build()</code></li>
+<li><code>DevVerifierBuilder::new(app_bin).build()</code></li>
+<li><code>RealVerifierBuilder::new(app_bin, level).build()</code></li>
+<li><code>compute_unified_vk(...)</code>, <code>compute_unrolled_vk(...)</code></li>
+<li><code>verify_proof(...)</code>, <code>verify_unrolled_proof(...)</code></li>
+</ul>
+<p>Verification APIs can enforce expected public outputs (<code>x10..x17</code>) in addition to proof validity.</p>
+<h2 id="receipt-output"><a class="header" href="#receipt-output"><code>Receipt</code> Output</a></h2>
+<p><code>Receipt</code> captures post-execution registers and output slices:</p>
+<ul>
+<li><code>receipt.output</code> maps to <code>x10..x17</code> (8 words)</li>
+<li><code>receipt.output_extended</code> maps to <code>x10..x25</code> (16 words, includes recursion-chain fields)</li>
+</ul>
+<p><code>#[airbender::main]</code> return values and <code>guest::commit(...)</code> map to <code>receipt.output</code>.</p>
+<h2 id="prover-construction"><a class="header" href="#prover-construction">Prover Construction</a></h2>
+<ul>
+<li><code>DevProverBuilder::new(...)</code> accepts path and supports <code>with_cycles(...)</code>, <code>with_text_path(...)</code>, then <code>build()</code>.</li>
+<li><code>GpuProverBuilder::new(...)</code> accepts path and supports <code>with_worker_threads(...)</code>, <code>with_level(...)</code>, then <code>build()</code>.</li>
+<li><code>CpuProverBuilder::new(...)</code> accepts path and supports <code>with_worker_threads(...)</code>, <code>with_cycles(...)</code>, <code>with_ram_bound(...)</code>, then <code>build()</code>.</li>
+<li><code>build()</code> returns <code>Result&lt;...&gt;</code> and performs path/config validation.</li>
+<li>CPU proving currently supports base-layer proving (<code>ProverLevel::Base</code>) only.</li>
+<li>GPU proving is enabled by default; if you disable default features, re-enable <code>gpu-prover</code>.</li>
+</ul>
+<h2 id="runner-construction"><a class="header" href="#runner-construction">Runner Construction</a></h2>
+<ul>
+<li><code>SimulatorRunnerBuilder::new(...)</code> accepts path and supports <code>with_cycles(...)</code>, then <code>build()</code>.</li>
+<li><code>TranspilerRunnerBuilder::new(...)</code> accepts path and supports <code>with_cycles(...)</code>, <code>with_text_path(...)</code>, <code>with_flamegraph(...)</code>, then <code>build()</code>.</li>
+</ul>
+<h2 id="cycle-budget"><a class="header" href="#cycle-budget">Cycle Budget</a></h2>
+<p>For simulator execution, you can:</p>
+<ul>
+<li>pass an explicit cycle limit</li>
+</ul>
+<p>If no explicit cycle limit is set through your flow, a default high value will be used.</p>
+<h2 id="complete-working-examples"><a class="header" href="#complete-working-examples">Complete Working Examples</a></h2>
+<p>See full host-side usage in:</p>
+<ul>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/host"><code>examples/fibonacci/host</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/host"><code>examples/u256-add/host</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/host"><code>examples/std-btreemap/host</code></a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="guest-program-api"><a class="header" href="#guest-program-api">Guest Program API</a></h1>
+<p>Guest programs use <code>airbender-sdk</code> (imported as <code>airbender</code>) to read host inputs and commit outputs.</p>
+<h2 id="add-dependency-1"><a class="header" href="#add-dependency-1">Add Dependency</a></h2>
+<pre><code class="language-toml">[dependencies]
+airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk" }
+</code></pre>
+<p>Enable <code>std</code> guest support only when needed:</p>
+<pre><code class="language-toml">airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk", features = ["std"] }
+</code></pre>
+<p>Enable <code>crypto</code> to expose <code>airbender::crypto</code> from the SDK. This is guest-oriented and always enables <code>airbender-crypto</code>’s <code>proving</code> feature:</p>
+<pre><code class="language-toml">airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk", features = ["crypto"] }
+</code></pre>
+<p>Allocator selection is feature-based (<code>allocator-talc</code> default, or <code>allocator-bump</code> / <code>allocator-custom</code>):</p>
+<pre><code class="language-toml">airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk", default-features = false, features = ["allocator-bump"] }
+</code></pre>
+<h2 id="entry-point-airbendermain"><a class="header" href="#entry-point-airbendermain">Entry Point: <code>#[airbender::main]</code></a></h2>
+<p>Write a regular Rust function and annotate it:</p>
+<pre><pre class="playground"><code class="language-rust">#[airbender::main]
+fn main() -&gt; u32 {
+    42
+}</code></pre></pre>
+<p>Rules:</p>
+<ul>
+<li>function must not take arguments</li>
+<li>function must not be <code>async</code></li>
+<li>function should return a value that can be committed (or <code>()</code>)</li>
+</ul>
+<p>The macro provides the runtime entry point and commits the function result as guest output.</p>
+<p>For custom allocator wiring (<code>allocator-custom</code>), you must provide an init hook:</p>
+<pre><pre class="playground"><code class="language-rust">#[airbender::main(allocator_init = crate::custom_allocator::init)]
+fn main() -&gt; u32 {
+    42
+}</code></pre></pre>
+<h2 id="reading-input-data"><a class="header" href="#reading-input-data">Reading Input Data</a></h2>
+<p>Use <code>airbender::guest::read::&lt;T&gt;()</code> for typed values:</p>
+<pre><pre class="playground"><code class="language-rust">use airbender::guest::read;
+
+#[airbender::main]
+fn main() -&gt; u32 {
+    let n: u32 = read().expect("failed to read input");
+    n + 1
+}</code></pre></pre>
+<p>For custom transports (e.g. tests), use <code>read_with(&amp;mut transport)</code>.</p>
+<h2 id="committing-output"><a class="header" href="#committing-output">Committing Output</a></h2>
+<p>You have two common patterns:</p>
+<ol>
+<li>Return a value from <code>#[airbender::main]</code> (automatic commit)</li>
+<li>Call commit functions directly:</li>
+</ol>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use airbender::guest::{commit, exit_error};
+
+// Commit 8-word output and exit success.
+commit(123u32);
+
+// Exit with an error.
+exit_error();
+<span class="boring">}</span></code></pre></pre>
+<p>Built-in commit support includes <code>()</code>, <code>u32</code>, <code>u64</code>, <code>i64</code>, <code>bool</code>, and <code>[u32; 8]</code>.</p>
+<h2 id="custom-output-layouts"><a class="header" href="#custom-output-layouts">Custom Output Layouts</a></h2>
+<p>To map your own type into output registers, implement <code>Commit</code> from <code>airbender::guest</code> for 8-word output (<code>[u32; 8]</code>).</p>
+<p>This keeps guest-host output contracts explicit and stable.</p>
+<h2 id="how-inputoutput-maps-to-host"><a class="header" href="#how-inputoutput-maps-to-host">How Input/Output Maps to Host</a></h2>
+<ul>
+<li>Host <code>Inputs::push(...)</code> order == guest <code>read::&lt;T&gt;()</code> consumption order</li>
+<li>Guest output maps to host <code>Receipt</code> fields:
+<ul>
+<li><code>output</code> (<code>x10..x17</code>)</li>
+<li><code>output_extended</code> (<code>x10..x25</code>, includes recursion-specific words)</li>
+</ul>
+</li>
+</ul>
+<h2 id="complete-guest-examples"><a class="header" href="#complete-guest-examples">Complete Guest Examples</a></h2>
+<p>See end-to-end guest code in:</p>
+<ul>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/guest"><code>examples/fibonacci/guest</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/guest"><code>examples/u256-add/guest</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/guest"><code>examples/std-btreemap/guest</code></a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="using-crypto-on-guest-and-host"><a class="header" href="#using-crypto-on-guest-and-host">Using Crypto on Guest and Host</a></h1>
+<p>Airbender provides a shared crypto crate, <code>airbender-crypto</code>, designed for both host and guest use.</p>
+<h2 id="add-dependency-2"><a class="header" href="#add-dependency-2">Add Dependency</a></h2>
+<p>Base dependency (works on host and guest):</p>
+<pre><code class="language-toml">[dependencies]
+airbender-crypto = { path = "../../crates/airbender-crypto" }
+</code></pre>
+<p>For guest builds where you want delegated backends enabled, use:</p>
+<pre><code class="language-toml">[dependencies]
+airbender-crypto = { path = "../../crates/airbender-crypto", features = ["proving"] }
+</code></pre>
+<p>The <code>proving</code> feature turns on delegation-related features (<code>bigint_ops</code>, <code>keccak_special5</code>, <code>single_round_with_control</code>).</p>
+<p>If you’re already using <code>airbender-sdk</code>, you can also access this crate via SDK re-export:</p>
+<pre><code class="language-toml">[dependencies]
+airbender = { package = "airbender-sdk", path = "../../crates/airbender-sdk", features = ["crypto"] }
+</code></pre>
+<p>Then import from <code>airbender::crypto</code>. The SDK <code>crypto</code> feature always enables <code>airbender-crypto/proving</code>.</p>
+<h2 id="what-the-crate-exposes"><a class="header" href="#what-the-crate-exposes">What the Crate Exposes</a></h2>
+<p>Common entry points include:</p>
+<ul>
+<li>Hashing: <code>sha256</code>, <code>sha3</code>, <code>ripemd160</code>, <code>blake2s</code></li>
+<li>Curve/tooling re-exports: <code>k256</code>, <code>p256</code></li>
+<li>Airbender-specific secp helpers: <code>secp256k1</code>, <code>secp256r1</code></li>
+<li>Pairing/field modules: <code>bn254</code>, <code>bls12_381</code></li>
+</ul>
+<h2 id="example-shared-hashing-code-delegation-aware"><a class="header" href="#example-shared-hashing-code-delegation-aware">Example: Shared Hashing Code (Delegation-Aware)</a></h2>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use airbender_crypto::sha3::Keccak256;
+use airbender_crypto::MiniDigest;
+
+pub fn hash32(data: &amp;[u8]) -&gt; [u8; 32] {
+    Keccak256::digest(data)
+}
+<span class="boring">}</span></code></pre></pre>
+<p><code>sha3::Keccak256</code> can use a delegated guest backend when the right guest features are enabled. (Unlike <code>sha256</code>, which currently has no delegated path.)</p>
+<h2 id="why-delegation-matters-on-risc-v-guests"><a class="header" href="#why-delegation-matters-on-risc-v-guests">Why Delegation Matters on RISC-V Guests</a></h2>
+<p>On Airbender guest targets (<code>riscv32</code>), delegated crypto paths are important because they move expensive low-level arithmetic/permutation work to VM-specific delegation backends.</p>
+<p>In practice this means:</p>
+<ul>
+<li>Lower guest execution cost for heavy crypto operations.</li>
+<li>Better proving efficiency for crypto-intensive guest logic.</li>
+<li>Stable API surface: your host and guest Rust code can stay the same while backend selection changes by target/features.</li>
+</ul>
+<h2 id="modules-with-delegation-implemented"><a class="header" href="#modules-with-delegation-implemented">Modules With Delegation Implemented</a></h2>
+<p>On <code>riscv32</code> guests (typically with <code>features = ["proving"]</code>), delegated implementations exist for:</p>
+<ul>
+<li><code>sha3</code> (<code>Keccak256</code>) via <code>keccak_special5</code>.</li>
+<li><code>blake2s</code> (<code>Blake2s256</code>) via <code>single_round_with_control</code>.</li>
+<li><code>secp256k1</code> field/scalar arithmetic via <code>bigint_ops</code>.</li>
+<li><code>secp256r1</code> field/scalar arithmetic via <code>bigint_ops</code>.</li>
+<li><code>bn254</code> base-field/extension-field and dependent curve arithmetic (with delegated <code>Fq</code>; <code>Fr</code> remains the arkworks implementation).</li>
+<li><code>bls12_381</code> field and dependent curve arithmetic (<code>Fq</code>, <code>Fr</code>, and extension fields).</li>
+</ul>
+<h2 id="modules-without-delegation-today"><a class="header" href="#modules-without-delegation-today">Modules Without Delegation Today</a></h2>
+<ul>
+<li><code>sha256</code></li>
+<li><code>ripemd160</code></li>
+<li><code>k256</code></li>
+<li><code>p256</code></li>
+</ul>
+<h2 id="practical-guidance"><a class="header" href="#practical-guidance">Practical Guidance</a></h2>
+<ul>
+<li>Start with shared, deterministic crypto utilities that run on both host and guest.</li>
+<li>Validate behavior with host tests first, then run guest execution/proof flows.</li>
+<li>For complete secp-focused usage, see crate tests:
+<ul>
+<li><a href="https://github.com/matter-labs/airbender-platform/blob/main/crates/airbender-crypto/tests/secp256k1.rs"><code>crates/airbender-crypto/tests/secp256k1.rs</code></a></li>
+<li><a href="https://github.com/matter-labs/airbender-platform/blob/main/crates/airbender-crypto/tests/secp256r1.rs"><code>crates/airbender-crypto/tests/secp256r1.rs</code></a></li>
+</ul>
+</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="cli-reference"><a class="header" href="#cli-reference">CLI Reference</a></h1>
+<p><code>cargo airbender</code> is the main user CLI for project scaffolding, guest builds, execution, proving, and verification.</p>
+<h2 id="top-level-commands"><a class="header" href="#top-level-commands">Top-Level Commands</a></h2>
+<pre><code class="language-text">build
+new
+run
+flamegraph
+run-transpiler
+prove
+generate-vk
+verify-proof
+</code></pre>
+<h2 id="cargo-airbender-build"><a class="header" href="#cargo-airbender-build"><code>cargo airbender build</code></a></h2>
+<p>Builds guest artifacts into a dist app directory.</p>
+<pre><code class="language-sh">cargo airbender build --app-name app
+</code></pre>
+<p>Key options:</p>
+<ul>
+<li><code>--app-name &lt;name&gt;</code>: output namespace under dist root (default: <code>app</code>)</li>
+<li><code>--bin &lt;name&gt;</code>: explicit Cargo binary target</li>
+<li><code>--target &lt;triple&gt;</code>: explicit target triple override (otherwise Cargo config defaults are used)</li>
+<li><code>--dist &lt;path&gt;</code>: dist root directory (app folder is created under this root; relative paths are resolved from command invocation cwd)</li>
+<li><code>--project &lt;path&gt;</code>: guest project directory</li>
+<li><code>--profile &lt;debug|release&gt;</code>, <code>--debug</code>, <code>--release</code></li>
+</ul>
+<p>Forward extra Cargo flags after <code>--</code>:</p>
+<pre><code class="language-sh">cargo airbender build --app-name with_extra_feature -- --features my_extra_feature
+</code></pre>
+<p>Default artifact layout:</p>
+<pre><code class="language-text">dist/&lt;app-name&gt;/app.bin
+dist/&lt;app-name&gt;/app.elf
+dist/&lt;app-name&gt;/app.text
+dist/&lt;app-name&gt;/manifest.toml
+</code></pre>
+<h2 id="cargo-airbender-new"><a class="header" href="#cargo-airbender-new"><code>cargo airbender new</code></a></h2>
+<p>Creates a new host+guest project template.</p>
+<pre><code class="language-sh">cargo airbender new [path]
+</code></pre>
+<p>By default, this command runs in interactive mode and asks:</p>
+<ul>
+<li>project name</li>
+<li>whether to enable <code>std</code></li>
+<li>allocator mode (<code>talc</code>, <code>bump</code>, <code>custom</code>)</li>
+<li>prover backend (<code>dev</code>, <code>gpu</code>)</li>
+</ul>
+<p>If <code>[path]</code> is omitted, the project is initialized in the current directory.
+The destination directory must be empty.</p>
+<p>Use <code>--yes</code> to skip prompts and run non-interactively.</p>
+<p>Options:</p>
+<ul>
+<li><code>--name &lt;name&gt;</code>: default project name for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--enable-std</code>: default <code>std</code> answer for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--allocator &lt;talc|bump|custom&gt;</code>: default allocator answer for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--prover-backend &lt;dev|gpu&gt;</code>: default prover backend answer for interactive mode (or value used with <code>--yes</code>)</li>
+<li><code>--yes</code>: skip prompts and accept values from flags/defaults</li>
+<li><code>--sdk-path &lt;path&gt;</code>: use local SDK path (workspace root, <code>crates/</code>, or crate path)</li>
+<li><code>--sdk-version &lt;version&gt;</code>: use versioned SDK dependency</li>
+</ul>
+<p>Prover backend choices:</p>
+<ul>
+<li><code>dev</code>: transpiler-backed development flow that emits a mock proof envelope instead of running cryptographic proving</li>
+<li><code>gpu</code>: real proving backend; requires a CUDA-capable NVIDIA GPU at runtime. You can compile with <code>ZKSYNC_USE_CUDA_STUBS=true</code>, but invoking proving without CUDA setup panics.</li>
+</ul>
+<p>If <code>custom</code> allocator is chosen, the guest code will have <code>#[airbender::main(allocator_init = ...)]</code> and an explicit allocator
+module you can replace. The <code>allocator_init</code> hook is required for <code>allocator-custom</code>.</p>
+<p>Default behavior (when neither <code>--sdk-path</code> nor <code>--sdk-version</code> is provided):</p>
+<ul>
+<li>generated project depends on <code>airbender-sdk</code> from
+<code>https://github.com/matter-labs/airbender-platform</code> (branch <code>main</code>)</li>
+</ul>
+<p>Generated layout:</p>
+<pre><code class="language-text">&lt;project&gt;/
+  .gitignore
+  README.md
+  guest/
+    .cargo/config.toml
+    Cargo.toml
+    rust-toolchain.toml
+    src/main.rs
+  host/
+    Cargo.toml
+    rust-toolchain.toml
+    src/main.rs
+</code></pre>
+<h2 id="cargo-airbender-run"><a class="header" href="#cargo-airbender-run"><code>cargo airbender run</code></a></h2>
+<p>Runs <code>app.bin</code> in simulator mode.</p>
+<pre><code class="language-sh">cargo airbender run ./dist/app/app.bin --input ./input.hex
+</code></pre>
+<p>Options:</p>
+<ul>
+<li><code>--input &lt;file&gt;</code> (required)</li>
+<li><code>--cycles &lt;n&gt;</code> (optional cycle limit)</li>
+</ul>
+<h2 id="cargo-airbender-flamegraph"><a class="header" href="#cargo-airbender-flamegraph"><code>cargo airbender flamegraph</code></a></h2>
+<p>Runs transpiler execution with profiling and writes flamegraph output.</p>
+<pre><code class="language-sh">cargo airbender flamegraph ./dist/app/app.bin --input ./input.hex --output flamegraph.svg
+</code></pre>
+<p>Options include:</p>
+<ul>
+<li><code>--sampling-rate &lt;n&gt;</code></li>
+<li><code>--inverse</code></li>
+<li><code>--elf-path &lt;file&gt;</code> (optional custom symbol source)</li>
+</ul>
+<h2 id="cargo-airbender-run-transpiler"><a class="header" href="#cargo-airbender-run-transpiler"><code>cargo airbender run-transpiler</code></a></h2>
+<p>Runs <code>app.bin</code> via transpiler execution.</p>
+<pre><code class="language-sh">cargo airbender run-transpiler ./dist/app/app.bin --input ./input.hex
+</code></pre>
+<p>Options:</p>
+<ul>
+<li><code>--cycles &lt;n&gt;</code></li>
+<li><code>--text-path &lt;file&gt;</code></li>
+<li><code>--jit</code>: enable transpiler JIT on x86_64 (without this flag, transpiler runs in non-JIT mode)</li>
+</ul>
+<h2 id="cargo-airbender-prove"><a class="header" href="#cargo-airbender-prove"><code>cargo airbender prove</code></a></h2>
+<p>Generates a bincode-encoded proof.</p>
+<pre><code class="language-sh">cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
+</code></pre>
+<p>Key options:</p>
+<ul>
+<li><code>--backend &lt;dev|cpu|gpu&gt;</code> (default: <code>dev</code>)</li>
+<li><code>--threads &lt;n&gt;</code></li>
+<li><code>--cycles &lt;n&gt;</code></li>
+<li><code>--ram-bound &lt;bytes&gt;</code></li>
+<li><code>--level &lt;base|recursion-unrolled|recursion-unified&gt;</code> (default: <code>recursion-unified</code>)</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li><code>dev</code> backend runs transpiler execution and emits a dev proof envelope.</li>
+<li><code>cpu</code> backend can only generate proofs for the base layer, and is not meant to be used outside of the debugging of the airbender itself.</li>
+<li><code>gpu</code> backend requires GPU support in <code>cargo-airbender</code> (enabled by default).</li>
+<li><code>--cycles</code> and <code>--ram-bound</code> are ignored on <code>gpu</code>/<code>dev</code> backends.</li>
+<li><code>verify-proof</code> accepts only real proofs, so use <code>--backend cpu</code> or <code>--backend gpu</code> when preparing proofs for CLI verification.</li>
+</ul>
+<h2 id="cargo-airbender-generate-vk"><a class="header" href="#cargo-airbender-generate-vk"><code>cargo airbender generate-vk</code></a></h2>
+<p>Generates verification keys and writes them as bincode.</p>
+<pre><code class="language-sh">cargo airbender generate-vk ./dist/app/app.bin --output vk.bin
+</code></pre>
+<p>Options:</p>
+<ul>
+<li><code>--output &lt;file&gt;</code> (default: <code>vk.bin</code>)</li>
+<li><code>--level &lt;base|recursion-unrolled|recursion-unified&gt;</code></li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li><code>generate-vk</code> requires GPU support in <code>cargo-airbender</code> (enabled by default).</li>
+<li>If you installed with <code>--no-default-features</code>, the command fails before VK computation.</li>
+<li>Local install example with GPU support disabled: <code>cargo install --path crates/cargo-airbender --no-default-features --force</code>.</li>
+</ul>
+<h2 id="cargo-airbender-verify-proof"><a class="header" href="#cargo-airbender-verify-proof"><code>cargo airbender verify-proof</code></a></h2>
+<p>Verifies a real proof against a real verification key file.</p>
+<pre><code class="language-sh">cargo airbender verify-proof ./proof.bin --vk ./vk.bin
+</code></pre>
+<p>Options:</p>
+<ul>
+<li><code>--vk &lt;file&gt;</code> (required)</li>
+<li><code>--expected-output &lt;words&gt;</code> (optional): comma-separated public output words for <code>x10..x17</code> (decimal or <code>0x</code> hex)</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li>dev proofs are rejected by this command with a dedicated error message.</li>
+<li>if <code>--expected-output</code> is omitted, CLI prints a warning and verifies proof/VK validity only.</li>
+<li>when <code>--expected-output</code> has fewer than 8 words, remaining words are zero-padded.</li>
+</ul>
+<p>Examples:</p>
+<pre><code class="language-sh">cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42
+cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42,0,0,0
+cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 0x2a
+</code></pre>
+<h2 id="input-file-format---input"><a class="header" href="#input-file-format---input">Input File Format (<code>--input</code>)</a></h2>
+<p>Runtime/prover commands that accept <code>--input</code> expect hex-encoded <code>u32</code> words:</p>
+<ul>
+<li>optional <code>0x</code> prefix is allowed</li>
+<li>whitespace is ignored</li>
+<li>total hex length must be a multiple of 8</li>
+<li>each 8-hex chunk is parsed as one <code>u32</code></li>
+<li>words must match guest input expectations (for <code>read::&lt;T&gt;()</code>, this means Airbender input wire-framed payload words)</li>
+</ul>
+<p>Recommended: construct inputs with <code>airbender_host::Inputs</code> (<code>push</code>, <code>push_bytes</code>) and write files with <code>write_hex_file(...)</code>. See <a href="./02-host-program-api.html"><code>docs/02-host-program-api.md</code></a>.</p>
+<p>Example file:</p>
+<pre><code class="language-text">00000001
+29000000
+</code></pre>
+<h2 id="logging"><a class="header" href="#logging">Logging</a></h2>
+<p>Set <code>RUST_LOG</code> to control verbosity:</p>
+<pre><code class="language-sh">RUST_LOG=debug cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+        <script>
+            window.playground_line_numbers = true;
+        </script>
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+        <script src="ace.js"></script>
+        <script src="editor.js"></script>
+        <script src="mode-rust.js"></script>
+        <script src="theme-dawn.js"></script>
+        <script src="theme-tomorrow_night.js"></script>
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="js/version-box.js"></script>
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+    </div>
+    </body>
+</html>
