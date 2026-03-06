@@ -3,8 +3,6 @@ name: Release
 permissions: {}
 
 on:
-  schedule:
-    - cron: "0 6 * * *"
   workflow_dispatch:
   # Workflow call trigger for stable releases generation
   workflow_call:
@@ -17,7 +15,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  IS_NIGHTLY: ${{ github.event_name == 'schedule' || inputs.tag == '' }}
 
 jobs:
   prepare:
@@ -43,37 +40,13 @@ jobs:
       - name: Compute release name and tag
         id: release_info
         run: |
-          echo "nightly: $IS_NIGHTLY"
-          if [ $IS_NIGHTLY == "true" ]; then 
-            if [ "${{inputs.tag}}" ]; then
-              TAG="${{ inputs.tag }}"
-              VERSION="${TAG#cargo-airbender-}"
-            else
-              TAG="${{ format('nightly-{0}', github.sha) }}"
-              VERSION=nightly
-            fi
-            
-            echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
-            echo "version_name=${VERSION}" >> $GITHUB_OUTPUT
-            echo "release_name=cargo-airbender Nightly ($(date '+%Y-%m-%d'))" >> $GITHUB_OUTPUT
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-          else
-            if [ "${{inputs.tag}}" ]; then
-              TAG="${{ inputs.tag }}"
-              VERSION="${TAG#cargo-airbender-}"
-            else
-              # This branch should normally be unreachable but specified here
-              # in case setting IS_NIGHTLY constaint is ever broken.
+          TAG="${{ inputs.tag }}"
+          VERSION="${TAG#cargo-airbender-}"
 
-              TAG="${{ format('stable-{0}', github.sha) }}"
-              VERSION=stable
-            fi
-
-            echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
-            echo "version_name=${VERSION}" >> $GITHUB_OUTPUT
-            echo "release_name=cargo-airbender ${VERSION}" >> $GITHUB_OUTPUT
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          fi
+          echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+          echo "version_name=${VERSION}" >> $GITHUB_OUTPUT
+          echo "release_name=cargo-airbender ${VERSION}" >> $GITHUB_OUTPUT
+          echo "prerelease=false" >> $GITHUB_OUTPUT
 
       - name: Print release info
         run: |
@@ -81,32 +54,6 @@ jobs:
           echo version_name: "${{ steps.release_info.outputs.version_name }}"
           echo release_name: "${{ steps.release_info.outputs.release_name }}"
           echo prerelease: "${{ steps.release_info.outputs.prerelease }}"
-
-      # Creates a `nightly-SHA` tag for this specific nightly
-      # This tag is used for this specific nightly version's release
-      # which allows users to roll back. It is also used to build
-      # the changelog.
-      # TODO uncomment
-      - name: Create build-specific tag (nightly)
-        if: ${{ env.IS_NIGHTLY == 'true' }}
-        uses: actions/github-script@v8
-        env:
-          TAG_NAME: ${{ steps.release_info.outputs.tag_name }}
-        with:
-          script: |
-            const createTag = require('./.github/scripts/create-tag.js')
-            await createTag({ github, context }, process.env.TAG_NAME)
-
-      - name: Build changelog (nightly)
-        if: ${{ env.IS_NIGHTLY == 'true' }}
-        id: build_changelog
-        uses: mikepenz/release-changelog-builder-action@439f79b5b5428107c7688c1d2b0e8bacc9b8792c # v6
-        with:
-          configuration: "./.github/changelog.json"
-          fromTag: "nightly"
-          toTag: ${{ steps.release_info.outputs.tag_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-man:
     runs-on: ubuntu-22.04
@@ -218,7 +165,7 @@ jobs:
 
       - name: Build binaries
         env:
-          TAG_NAME: ${{ (env.IS_NIGHTLY == 'true' && 'nightly') || needs.prepare.outputs.tag_name }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
           SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
         shell: bash
         run: |
@@ -290,22 +237,8 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.release_name }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
-          prerelease: ${{ env.IS_NIGHTLY == 'true' }}
-          body: ${{ needs.prepare.outputs.changelog }}
-          files: |
-            ${{ steps.artifacts.outputs.file_name }}
-            ${{ steps.artifacts.outputs.cargo_airbender_attestation }}
-            ${{ needs.build-man.outputs.man_file }}
-
-      # If this is a nightly release, it also updates the release tagged `nightly`
-      - name: Update nightly release
-        if: ${{ env.IS_NIGHTLY == 'true' }}
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
-        with:
-          name: "Nightly cargo-airbender"
-          tag_name: "nightly"
-          prerelease: true
-          body: ${{ needs.prepare.outputs.changelog }}
+          prerelease: false
+          generate_release_notes: true
           files: |
             ${{ steps.artifacts.outputs.file_name }}
             ${{ steps.artifacts.outputs.cargo_airbender_attestation }}
@@ -323,35 +256,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run retry.yml -F run_id=${{ github.run_id }}
 
-  cleanup:
-    name: Release cleanup
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    needs: [release, build-man]
-    if: always()
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      # Moves the `nightly` tag to `HEAD`
-      - name: Move nightly tag
-        if: ${{ env.IS_NIGHTLY == 'true' }}
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const moveTag = require('./.github/scripts/move-tag.js')
-            await moveTag({ github, context }, 'nightly')
-
-      - name: Delete old nightlies
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const prunePrereleases = require('./.github/scripts/prune-prereleases.js')
-            await prunePrereleases({github, context})
-
   # If any of the jobs fail, this will create a high-priority issue to signal so.
   issue:
     permissions:
@@ -359,7 +263,7 @@ jobs:
     if: failure() && fromJSON(github.run_attempt) >= 3
     name: Open an issue
     runs-on: ubuntu-latest
-    needs: [prepare, build-man, release, cleanup]
+    needs: [prepare, build-man, release]
     steps:
       - uses: actions/checkout@v6
         with:
