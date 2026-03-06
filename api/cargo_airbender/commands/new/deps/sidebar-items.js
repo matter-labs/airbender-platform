@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_SDK_GIT_BRANCH","DEFAULT_SDK_GIT_REPOSITORY"],"fn":["relative_path","resolve_crate_dependency","resolve_dependency_crate_path"]};

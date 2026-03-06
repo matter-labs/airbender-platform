@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["verify_kzg_proof"],"mod":["consts","curves","eip2537","fields"],"type":["Fq","Fr"]};

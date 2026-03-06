@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["G2_BY_TAU_POINT","PREPARED_G2_GENERATOR"]};

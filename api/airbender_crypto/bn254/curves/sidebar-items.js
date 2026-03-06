@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["g1","g2"],"struct":["Bn254","Config"],"type":["G1Affine","G1Projective","G2Affine","G2Projective"]};

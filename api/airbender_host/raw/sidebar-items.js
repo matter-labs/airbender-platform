@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["FullMachineDecoderConfig","FullUnsignedMachineDecoderConfig","ReducedMachineDecoderConfig","UnrolledProgramProof"],"trait":["DecodingOptions"]};

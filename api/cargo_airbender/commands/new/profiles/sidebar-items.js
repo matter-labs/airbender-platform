@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["HOST_MAIN_DEV_TEMPLATE","HOST_MAIN_GPU_TEMPLATE","README_BACKEND_DEV_DOC","README_BACKEND_GPU_DOC"],"fn":["prover_backend_profile"],"struct":["ProverBackendProfile"]};

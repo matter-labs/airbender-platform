@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["AIRBENDER_CODEC_V0"],"enum":["CodecError"],"struct":["AirbenderCodecV0"],"trait":["AirbenderCodec"]};
