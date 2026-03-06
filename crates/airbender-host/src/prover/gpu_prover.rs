@@ -33,6 +33,13 @@ impl GpuProverBuilder {
         self
     }
 
+    pub fn maybe_worker_threads(self, worker_threads: Option<usize>) -> Self {
+        match worker_threads {
+            Some(v) => self.with_worker_threads(v),
+            None => self,
+        }
+    }
+
     pub fn with_level(mut self, level: ProverLevel) -> Self {
         self.level = level;
         self
