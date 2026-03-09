@@ -4,7 +4,7 @@ This chapter gets you from a fresh machine to your first Airbender guest build, 
 
 ## Prerequisites
 
-- Rust nightly toolchain from [`rust-toolchain.toml`](../rust-toolchain.toml)
+- Rust nightly toolchain from [`rust-toolchain.toml`](https://github.com/matter-labs/airbender-platform/blob/main/rust-toolchain.toml)
 - `clang` available in `PATH`
 - `cargo-binutils` for `cargo objcopy`
 
@@ -171,6 +171,6 @@ dependency, re-enable `gpu-prover` to call GPU APIs.
 
 For complete guest + host applications, start with:
 
-- [`examples/fibonacci`](../examples/fibonacci/)
-- [`examples/u256-add`](../examples/u256-add/)
-- [`examples/std-btreemap`](../examples/std-btreemap/)
+- [`examples/fibonacci`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci)
+- [`examples/u256-add`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add)
+- [`examples/std-btreemap`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap)

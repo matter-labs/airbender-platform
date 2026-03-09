@@ -35,14 +35,35 @@ impl CpuProverBuilder {
         self
     }
 
+    pub fn maybe_worker_threads(self, worker_threads: Option<usize>) -> Self {
+        match worker_threads {
+            Some(v) => self.with_worker_threads(v),
+            None => self,
+        }
+    }
+
     pub fn with_cycles(mut self, cycles: usize) -> Self {
         self.cycles = Some(cycles);
         self
     }
 
+    pub fn maybe_cycles(self, cycles: Option<usize>) -> Self {
+        match cycles {
+            Some(v) => self.with_cycles(v),
+            None => self,
+        }
+    }
+
     pub fn with_ram_bound(mut self, ram_bound: usize) -> Self {
         self.ram_bound = Some(ram_bound);
         self
+    }
+
+    pub fn maybe_ram_bound(self, ram_bound: Option<usize>) -> Self {
+        match ram_bound {
+            Some(v) => self.with_ram_bound(v),
+            None => self,
+        }
     }
 
     pub fn build(self) -> Result<CpuProver> {

@@ -41,9 +41,23 @@ impl TranspilerRunnerBuilder {
         self
     }
 
+    pub fn maybe_cycles(self, cycles: Option<usize>) -> Self {
+        match cycles {
+            Some(v) => self.with_cycles(v),
+            None => self,
+        }
+    }
+
     pub fn with_text_path(mut self, text_path: impl AsRef<Path>) -> Self {
         self.text_path = Some(text_path.as_ref().to_path_buf());
         self
+    }
+
+    pub fn maybe_text_path(self, text_path: Option<impl AsRef<Path>>) -> Self {
+        match text_path {
+            Some(v) => self.with_text_path(v),
+            None => self,
+        }
     }
 
     pub fn with_flamegraph(mut self, flamegraph: FlamegraphConfig) -> Self {
