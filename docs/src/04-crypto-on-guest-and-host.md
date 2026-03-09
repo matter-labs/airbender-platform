@@ -84,5 +84,5 @@ On `riscv32` guests (typically with `features = ["proving"]`), delegated impleme
 - Start with shared, deterministic crypto utilities that run on both host and guest.
 - Validate behavior with host tests first, then run guest execution/proof flows.
 - For complete secp-focused usage, see crate tests:
-  - [`crates/airbender-crypto/tests/secp256k1.rs`](../crates/airbender-crypto/tests/secp256k1.rs)
-  - [`crates/airbender-crypto/tests/secp256r1.rs`](../crates/airbender-crypto/tests/secp256r1.rs)
+  - [`crates/airbender-crypto/tests/secp256k1.rs`](https://github.com/matter-labs/airbender-platform/blob/main/crates/airbender-crypto/tests/secp256k1.rs)
+  - [`crates/airbender-crypto/tests/secp256r1.rs`](https://github.com/matter-labs/airbender-platform/blob/main/crates/airbender-crypto/tests/secp256r1.rs)
