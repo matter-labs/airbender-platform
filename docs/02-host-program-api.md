@@ -131,3 +131,4 @@ See full host-side usage in:
 - [`examples/fibonacci/host`](../examples/fibonacci/host/)
 - [`examples/u256-add/host`](../examples/u256-add/host/)
 - [`examples/std-btreemap/host`](../examples/std-btreemap/host/)
+- [`examples/revm-witness-replay/host`](../examples/revm-witness-replay/host/)

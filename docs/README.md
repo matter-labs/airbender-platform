@@ -23,3 +23,4 @@ The best complete examples live in [`examples/`](../examples/):
 - [`examples/fibonacci`](../examples/fibonacci/)
 - [`examples/u256-add`](../examples/u256-add/)
 - [`examples/std-btreemap`](../examples/std-btreemap/)
+- [`examples/revm-witness-replay`](../examples/revm-witness-replay/)

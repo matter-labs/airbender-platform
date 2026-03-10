@@ -110,3 +110,4 @@ See end-to-end guest code in:
 - [`examples/fibonacci/guest`](../examples/fibonacci/guest/)
 - [`examples/u256-add/guest`](../examples/u256-add/guest/)
 - [`examples/std-btreemap/guest`](../examples/std-btreemap/guest/)
+- [`examples/revm-witness-replay/guest`](../examples/revm-witness-replay/guest/)
