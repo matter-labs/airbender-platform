@@ -14,6 +14,27 @@ Install `cargo-binutils`:
 cargo install cargo-binutils --locked
 ```
 
+### Proving Hardware (optional)
+
+The hardware requirements for  `airbender` depend on the proving backend. No specialized hardware
+is required for any other `airbender` commands except `airbender prove`.
+
+The following proving backends are supported via `airbender prove --backend [BACKEND]`:
+
+#### `dev`
+This backend is used for development purposes to test programs. Useful in scenarios where no cryptographic 
+proving is required, e.g. local program testing. Requires no specialized hardware.
+
+#### `cpu`
+This backend is mostly used for debugging circuits, as it can only prove the base layer and is usually slow. 
+Useful in special scenarios, e.g. identifying constraint failures without running the full end-to-end proving cycle. 
+Requires hardware with a powerful CPU and significant RAM (at least 64GB).
+
+### `gpu`
+This backend is used for full end-to-end GPU proving. Requires hardware with at least **32GB of VRAM** (e.g. 
+NVIDIA RTX 5090 or better) and atleast **64GB of RAM** per GPU with a high-end CPU to avoid bottlenecks.
+
+
 ## Install `cargo airbender`
 
 From a local clone:
@@ -121,8 +142,15 @@ For non-trivial input files, generate words from host-side values via `Inputs` m
 
 Generate and verify a proof:
 
+via the `dev` prover:
 ```sh
-cargo airbender prove ./dist/app/app.bin --input ./input.hex --output ./proof.bin --backend cpu --level base
+cargo airbender prove ./dist/app/app.bin --input ./input.hex --output ./proof.bin --backend dev
+```
+
+Or via the `gpu` prover, if you have the [required](#proving-hardware-optional) hardware:
+
+```sh
+cargo airbender prove ./dist/app/app.bin --input ./input.hex --output ./proof.bin --backend gpu --level base
 cargo airbender generate-vk ./dist/app/app.bin --output ./vk.bin --level base
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin
 ```
