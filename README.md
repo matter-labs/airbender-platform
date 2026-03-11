@@ -22,16 +22,14 @@ This project provides:
 
 ## Documentation
 
-The user manual lives in [`docs/`](./docs/).
+Read the **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/)** for the full user guide.
 
-Start here:
+The book source lives in [`docs/`](./docs/). To build locally:
 
-- [`docs/README.md`](./docs/README.md) (table of contents)
-- [`docs/01-installation-and-hello-world.md`](./docs/01-installation-and-hello-world.md)
-- [`docs/02-host-program-api.md`](./docs/02-host-program-api.md)
-- [`docs/03-guest-program-api.md`](./docs/03-guest-program-api.md)
-- [`docs/04-crypto-on-guest-and-host.md`](./docs/04-crypto-on-guest-and-host.md)
-- [`docs/05-cli-reference.md`](./docs/05-cli-reference.md)
+```sh
+cargo install mdbook
+mdbook serve docs
+```
 
 ## Examples
 

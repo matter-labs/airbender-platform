@@ -107,7 +107,7 @@ This keeps guest-host output contracts explicit and stable.
 
 See end-to-end guest code in:
 
-- [`examples/fibonacci/guest`](../examples/fibonacci/guest/)
-- [`examples/u256-add/guest`](../examples/u256-add/guest/)
-- [`examples/std-btreemap/guest`](../examples/std-btreemap/guest/)
-- [`examples/revm-witness-replay/guest`](../examples/revm-witness-replay/guest/)
+- [`examples/fibonacci/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/guest)
+- [`examples/u256-add/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/guest)
+- [`examples/std-btreemap/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/guest)
+- [`examples/revm-witness-replay/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/revm-witness-replay/guest)
