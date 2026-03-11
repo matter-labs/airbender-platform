@@ -250,23 +250,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run retry.yml -F run_id=${{ github.run_id }}
 
-  # If any of the jobs fail, this will create a high-priority issue to signal so.
-  issue:
-    permissions:
-      issues: write
+  # Send a Slack notification on workflow failure .
+  notify-failure:
     if: failure() && fromJSON(github.run_attempt) >= 3
-    name: Open an issue
+    name: Notify failure via Slack
     runs-on: ubuntu-latest
     needs: [prepare, build-man, release]
     steps:
-      - uses: actions/checkout@v6
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v2
         with:
-          persist-credentials: false
-      - uses: JasonEtco/create-an-issue@1b14a70e4d8dc185e5cc76d3bec9eab20257b2c5 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WORKFLOW_URL: |
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        with:
-          update_existing: true
-          filename: .github/RELEASE_FAILURE_ISSUE_TEMPLATE.md
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":x: Release workflow failed after 3 attempts.\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
