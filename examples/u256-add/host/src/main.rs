@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     inputs.push(&b)?;
     inputs.push(&c)?;
 
-    let simulator = program.simulator_runner().build()?;
+    let simulator = program.transpiler_runner().build()?;
     let execution = simulator.run(inputs.words())?;
     let exec_valid = execution.receipt.output[0] == 1;
     println!(

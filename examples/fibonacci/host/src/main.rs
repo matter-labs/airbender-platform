@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     let mut inputs = Inputs::new();
     inputs.push(&n)?;
 
-    let simulator = program.simulator_runner().build()?;
+    let simulator = program.transpiler_runner().build()?;
     let execution = simulator.run(inputs.words())?;
     let exec_output = execution.receipt.output[0];
     println!(

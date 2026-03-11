@@ -6,13 +6,13 @@ use airbender_host::Runner;
 
 pub fn run(args: RunArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
-    let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
+    let runner = airbender_host::TranspilerRunnerBuilder::new(&args.app_bin)
         .maybe_cycles(args.cycles)
         .build()
         .map_err(|err| {
             CliError::with_source(
                 format!(
-                    "failed to initialize simulator runner for `{}`",
+                    "failed to initialize transpiler runner for `{}`",
                     args.app_bin.display()
                 ),
                 err,
@@ -22,14 +22,14 @@ pub fn run(args: RunArgs) -> Result<()> {
     let outcome = runner.run(&input_words).map_err(|err| {
         CliError::with_source(
             format!(
-                "simulator execution failed for `{}`",
+                "transpiler execution failed for `{}`",
                 args.app_bin.display()
             ),
             err,
         )
     })?;
 
-    report_execution_outcome("simulator", &outcome);
+    report_execution_outcome("transpiler", &outcome);
 
     Ok(())
 }
