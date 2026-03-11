@@ -43,7 +43,7 @@ jobs:
 
           echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
           echo "version_name=${TAG}" >> $GITHUB_OUTPUT
-          echo "release_name=cargo-airbender ${TAG}" >> $GITHUB_OUTPUT
+          echo "release_name=airbender-platform ${TAG}" >> $GITHUB_OUTPUT
           echo "prerelease=false" >> $GITHUB_OUTPUT
 
       - name: Print release info
@@ -58,7 +58,7 @@ jobs:
     timeout-minutes: 30
     needs: prepare
     outputs:
-      man_file: ${{ steps.man.outputs.cargo_airbender_man }}
+      man_file: ${{ steps.man.outputs.man_file }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -80,12 +80,12 @@ jobs:
           sudo apt-get -y install help2man
           help2man -N ./target/debug/cargo-airbender > cargo-airbender.1
           gzip cargo-airbender.1
-          tar -czvf "cargo_airbender_man_${VERSION_NAME}.tar.gz" cargo-airbender.1.gz
-          echo "cargo_airbender_man=cargo_airbender_man_${VERSION_NAME}.tar.gz" >> $GITHUB_OUTPUT
+          tar -czvf "airbender_platform_man_${VERSION_NAME}.tar.gz" cargo-airbender.1.gz
+          echo "man_file=airbender_platform_man_${VERSION_NAME}.tar.gz" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v6
         with:
-          name: ${{ steps.man.outputs.cargo_airbender_man }}
-          path: ${{ steps.man.outputs.cargo_airbender_man }}
+          name: ${{ steps.man.outputs.man_file }}
+          path: ${{ steps.man.outputs.man_file }}
           retention-days: 1
 
   release:
@@ -168,14 +168,11 @@ jobs:
 
           cargo build --release --target $target --bin cargo-airbender
 
-          bins=(cargo-airbender)
-          for name in "${bins[@]}"; do
-              bin=./target/$target/release/$name
-              file "$bin" || true
-              ldd "$bin" || true
-              $bin --version || true
-              echo "${name}_bin_path=${bin}" >> $GITHUB_ENV
-          done
+          bin=./target/$target/release/cargo-airbender
+          file "$bin" || true
+          ldd "$bin" || true
+          $bin --version || true
+          echo "bin_path=${bin}" >> $GITHUB_ENV
 
       - name: Archive binaries
         id: artifacts
@@ -187,15 +184,15 @@ jobs:
         shell: bash
         run: |
           if [ "$PLATFORM_NAME" == "linux" ]; then
-              tar -czvf "cargo_airbender_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release cargo-airbender
-              echo "file_name=cargo_airbender_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
+              tar -czvf "airbender_platform_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release cargo-airbender
+              echo "file_name=airbender_platform_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
               # We need to use gtar here otherwise the archive is corrupt.
               # See: https://github.com/actions/virtual-environments/issues/2619
-              gtar -czvf "cargo_airbender_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release cargo-airbender
-              echo "file_name=cargo_airbender_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
+              gtar -czvf "airbender_platform_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release cargo-airbender
+              echo "file_name=airbender_platform_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           fi
-          printf "cargo_airbender_attestation=%s\n" "cargo_airbender_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.attestation.txt" >> "$GITHUB_OUTPUT"
+          printf "attestation_file=%s\n" "airbender_platform_${VERSION_NAME}_${PLATFORM_NAME}_${ARCH}.attestation.txt" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
@@ -209,16 +206,16 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: |
-            ${{ env.cargo_airbender_bin_path }}
+            ${{ env.bin_path }}
 
       - name: Record attestation URL
         env:
           ATTESTATION_URL: ${{ steps.attestation.outputs.attestation-url }}
-          CARGO_AIRBENDER_ATTESTATION: ${{ steps.artifacts.outputs.cargo_airbender_attestation }}
+          ATTESTATION_FILE: ${{ steps.artifacts.outputs.attestation_file }}
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "$ATTESTATION_URL" > "$CARGO_AIRBENDER_ATTESTATION"
+          printf '%s\n' "$ATTESTATION_URL" > "$ATTESTATION_FILE"
 
       - name: Download man
         uses: actions/download-artifact@v6
@@ -235,7 +232,7 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ steps.artifacts.outputs.file_name }}
-            ${{ steps.artifacts.outputs.cargo_airbender_attestation }}
+            ${{ steps.artifacts.outputs.attestation_file }}
             ${{ needs.build-man.outputs.man_file }}
 
   retry-on-failure:
