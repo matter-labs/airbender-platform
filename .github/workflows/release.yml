@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "Tag to use for the release (<component>-v<version>)."
+        description: "Tag to use for the release (v<version>)."
         type: string
         required: true
         default: ""
@@ -40,11 +40,10 @@ jobs:
         id: release_info
         run: |
           TAG="${{ inputs.tag }}"
-          VERSION="${TAG#cargo-airbender-}"
 
           echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
-          echo "version_name=${VERSION}" >> $GITHUB_OUTPUT
-          echo "release_name=cargo-airbender ${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_name=${TAG}" >> $GITHUB_OUTPUT
+          echo "release_name=cargo-airbender ${TAG}" >> $GITHUB_OUTPUT
           echo "prerelease=false" >> $GITHUB_OUTPUT
 
       - name: Print release info
