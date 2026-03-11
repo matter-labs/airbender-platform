@@ -128,6 +128,6 @@ If no explicit cycle limit is set through your flow, a default high value will b
 
 See full host-side usage in:
 
-- [`examples/fibonacci/host`](../examples/fibonacci/host/)
-- [`examples/u256-add/host`](../examples/u256-add/host/)
-- [`examples/std-btreemap/host`](../examples/std-btreemap/host/)
+- [`examples/fibonacci/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/host)
+- [`examples/u256-add/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/host)
+- [`examples/std-btreemap/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/host)
