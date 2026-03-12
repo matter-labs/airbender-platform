@@ -5,9 +5,9 @@ use super::{
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
 use crate::runner::{Runner, TranspilerRunnerBuilder};
+use crate::source::InputSource;
 use execution_utils::setups;
 use execution_utils::unrolled;
-use crate::nd_source::VecSource;
 use risc_v_simulator::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
 use std::path::{Path, PathBuf};
@@ -154,7 +154,7 @@ impl Prover for CpuProver {
             ));
         }
 
-        let oracle = VecSource::new(input_words.to_vec());
+        let oracle = InputSource::new(input_words.to_vec());
         let inner_proof = unrolled::prove_unrolled_for_machine_configuration_into_program_proof::<
             IMStandardIsaConfigWithUnsignedMulDiv,
         >(

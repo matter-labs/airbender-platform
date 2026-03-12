@@ -2,12 +2,12 @@
 
 mod error;
 mod inputs;
-mod nd_source;
 mod program;
 mod proof;
 mod prover;
 mod receipt;
 mod runner;
+mod source;
 mod verifier;
 mod vk;
 

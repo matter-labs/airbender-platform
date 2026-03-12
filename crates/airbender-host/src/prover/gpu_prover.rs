@@ -3,9 +3,9 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
+use crate::source::InputSource;
 use execution_utils::unrolled_gpu::UnrolledProver;
 use gpu_prover::execution::prover::ExecutionProverConfiguration;
-use crate::nd_source::VecSource;
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -227,7 +227,7 @@ fn gpu_worker_loop(
                 input_words,
                 response_tx,
             } => {
-                let oracle = VecSource::new(input_words);
+                let oracle = InputSource::new(input_words);
                 // TODO: we use `batch 0` for all the jobs, which can cause issues when generating multiple proofs in parallel.
                 let (inner_proof, cycles) = prover.prove(0, oracle);
                 let receipt = receipt_from_real_proof(&inner_proof);
