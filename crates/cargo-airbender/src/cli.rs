@@ -31,12 +31,10 @@ pub enum Commands {
     Build(BuildArgs),
     /// Create a new host + guest project from templates.
     New(NewArgs),
-    /// Run app.bin with the simulator.
+    /// Run app.bin via the transpiler.
     Run(RunArgs),
     /// Run app.bin with transpiler profiling and emit flamegraph SVG.
     Flamegraph(FlamegraphArgs),
-    /// Run app.bin via the transpiler.
-    RunTranspiler(RunTranspilerArgs),
     /// Generate a proof and write it as bincode.
     Prove(ProveArgs),
     /// Generate verification keys and write them as bincode.
@@ -114,15 +112,6 @@ pub enum NewProverBackendArg {
 }
 
 #[derive(Args, Debug)]
-pub struct RunArgs {
-    pub app_bin: PathBuf,
-    #[arg(short, long)]
-    pub input: PathBuf,
-    #[arg(short, long)]
-    pub cycles: Option<usize>,
-}
-
-#[derive(Args, Debug)]
 pub struct FlamegraphArgs {
     pub app_bin: PathBuf,
     #[arg(short, long)]
@@ -140,7 +129,7 @@ pub struct FlamegraphArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct RunTranspilerArgs {
+pub struct RunArgs {
     pub app_bin: PathBuf,
     #[arg(short, long)]
     pub input: PathBuf,
@@ -220,29 +209,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_run_command() {
-        let cli = Cli::parse_from(["cargo-airbender", "run", "app.bin", "--input", "input.hex"]);
-        match cli.command {
-            Commands::Run(args) => {
-                assert_eq!(args.app_bin, PathBuf::from("app.bin"));
-                assert_eq!(args.input, PathBuf::from("input.hex"));
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_run_transpiler_jit_flag() {
+    fn parse_run_jit_flag() {
         let cli = Cli::parse_from([
             "cargo-airbender",
-            "run-transpiler",
+            "run",
             "app.bin",
             "--input",
             "input.hex",
             "--jit",
         ]);
         match cli.command {
-            Commands::RunTranspiler(args) => {
+            Commands::Run(args) => {
                 assert_eq!(args.app_bin, PathBuf::from("app.bin"));
                 assert_eq!(args.input, PathBuf::from("input.hex"));
                 assert!(args.jit);

@@ -1,38 +1,8 @@
-use crate::cli::{FlamegraphArgs, RunArgs, RunTranspilerArgs};
+use crate::cli::{FlamegraphArgs, RunArgs};
 use crate::error::{CliError, Result};
 use crate::input;
 use crate::ui;
 use airbender_host::Runner;
-
-pub fn run(args: RunArgs) -> Result<()> {
-    let input_words = input::parse_input_words(&args.input)?;
-    let runner = airbender_host::SimulatorRunnerBuilder::new(&args.app_bin)
-        .maybe_cycles(args.cycles)
-        .build()
-        .map_err(|err| {
-            CliError::with_source(
-                format!(
-                    "failed to initialize simulator runner for `{}`",
-                    args.app_bin.display()
-                ),
-                err,
-            )
-        })?;
-
-    let outcome = runner.run(&input_words).map_err(|err| {
-        CliError::with_source(
-            format!(
-                "simulator execution failed for `{}`",
-                args.app_bin.display()
-            ),
-            err,
-        )
-    })?;
-
-    report_execution_outcome("simulator", &outcome);
-
-    Ok(())
-}
 
 pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
@@ -73,7 +43,7 @@ pub fn flamegraph(args: FlamegraphArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn run_transpiler(args: RunTranspilerArgs) -> Result<()> {
+pub fn run(args: RunArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
     let mut builder = airbender_host::TranspilerRunnerBuilder::new(&args.app_bin)
         .maybe_cycles(args.cycles)

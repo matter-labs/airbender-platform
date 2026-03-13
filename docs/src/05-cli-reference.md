@@ -9,7 +9,6 @@ build
 new
 run
 flamegraph
-run-transpiler
 prove
 generate-vk
 verify-proof
@@ -109,7 +108,7 @@ Generated layout:
 
 ## `cargo airbender run`
 
-Runs `app.bin` in simulator mode.
+Runs `app.bin` via transpiler execution.
 
 ```sh
 cargo airbender run ./dist/app/app.bin --input ./input.hex
@@ -119,6 +118,8 @@ Options:
 
 - `--input <file>` (required)
 - `--cycles <n>` (optional cycle limit)
+- `--text-path <file>` (optional path to `.text` file; defaults to sibling of `app.bin`)
+- `--jit`: enable transpiler JIT on x86_64 (without this flag, transpiler runs in non-JIT mode)
 
 ## `cargo airbender flamegraph`
 
@@ -133,20 +134,6 @@ Options include:
 - `--sampling-rate <n>`
 - `--inverse`
 - `--elf-path <file>` (optional custom symbol source)
-
-## `cargo airbender run-transpiler`
-
-Runs `app.bin` via transpiler execution.
-
-```sh
-cargo airbender run-transpiler ./dist/app/app.bin --input ./input.hex
-```
-
-Options:
-
-- `--cycles <n>`
-- `--text-path <file>`
-- `--jit`: enable transpiler JIT on x86_64 (without this flag, transpiler runs in non-JIT mode)
 
 ## `cargo airbender prove`
 

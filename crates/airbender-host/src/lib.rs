@@ -22,8 +22,8 @@ pub use prover::{
 pub use prover::{GpuProver, GpuProverBuilder};
 pub use receipt::Receipt;
 pub use runner::{
-    resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, SimulatorRunner,
-    SimulatorRunnerBuilder, TranspilerRunner, TranspilerRunnerBuilder, DEFAULT_CYCLES,
+    resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, TranspilerRunner,
+    TranspilerRunnerBuilder, DEFAULT_CYCLES,
 };
 pub use verifier::{
     verify_real_proof_with_vk, DevVerificationKey, DevVerifier, DevVerifierBuilder,
