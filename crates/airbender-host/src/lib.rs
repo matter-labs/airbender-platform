@@ -7,7 +7,6 @@ mod proof;
 mod prover;
 mod receipt;
 mod runner;
-mod source;
 mod verifier;
 mod vk;
 

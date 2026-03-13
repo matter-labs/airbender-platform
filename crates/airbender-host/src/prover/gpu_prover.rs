@@ -3,7 +3,7 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
-use crate::source::InputSource;
+use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
 use execution_utils::unrolled_gpu::UnrolledProver;
 use gpu_prover::execution::prover::ExecutionProverConfiguration;
 use std::any::Any;
@@ -227,7 +227,7 @@ fn gpu_worker_loop(
                 input_words,
                 response_tx,
             } => {
-                let oracle = InputSource::new(input_words);
+                let oracle = QuasiUARTSource::new_with_reads(input_words);
                 // TODO: we use `batch 0` for all the jobs, which can cause issues when generating multiple proofs in parallel.
                 let (inner_proof, cycles) = prover.prove(0, oracle);
                 let receipt = receipt_from_real_proof(&inner_proof);

@@ -1,7 +1,7 @@
 use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
-use crate::source::InputSource;
+use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::{
     rom::ROM_SECOND_WORD_BITS, INITIAL_TIMESTAMP, TIMESTAMP_STEP,
 };
@@ -123,7 +123,7 @@ impl TranspilerRunner {
     fn run_with_jit(&self, input_words: &[u32]) -> Result<ExecutionResult> {
         let bin_words = read_u32_words(&self.app_bin_path)?;
         let text_words = read_u32_words(&self.app_text_path)?;
-        let mut non_determinism_source = InputSource::new(input_words.to_vec());
+        let mut non_determinism_source = QuasiUARTSource::new_with_reads(input_words.to_vec());
 
         let cycles_bound = match u32::try_from(self.cycles) {
             Ok(value) => Some(value),
@@ -194,7 +194,7 @@ impl TranspilerRunner {
         let mut ram =
             RamWithRomRegion::<{ ROM_SECOND_WORD_BITS }>::from_rom_content(&bin_words, RAM_SIZE);
         let mut state = State::initial_with_counters(DelegationsCounters::default());
-        let mut non_determinism_source = InputSource::new(input_words.to_vec());
+        let mut non_determinism_source = QuasiUARTSource::new_with_reads(input_words.to_vec());
 
         let reached_end = match profiler {
             Some(profiler) => {
