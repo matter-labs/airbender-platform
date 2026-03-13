@@ -5,9 +5,9 @@ use super::{
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
 use crate::runner::{Runner, TranspilerRunnerBuilder};
-use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
 use execution_utils::setups;
 use execution_utils::unrolled;
+use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
 use risc_v_simulator::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
 use std::path::{Path, PathBuf};

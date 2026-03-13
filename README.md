@@ -7,7 +7,7 @@ This project provides:
 - `cargo airbender`: an utility to manage airbender projects and interact with the built RISC-V programs:
     - Create host+guest projects with `cargo airbender new`
     - Build projects with `cargo airbender build`
-    - Run RISC-V programs with `cargo airbender run` and `cargo airbender run-transpiler`
+    - Run RISC-V programs with `cargo airbender run`
     - Benchmark programs with `cargo airbender flamegraph`
     - Prove and verify proofs from CLI via `cargo airbender prove` & `cargo airbender verify-proof`.
 - Guest SDK: a set of utilities to make building guest programs convenient:

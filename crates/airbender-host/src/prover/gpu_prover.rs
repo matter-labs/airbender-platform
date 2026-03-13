@@ -3,9 +3,9 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
-use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
 use execution_utils::unrolled_gpu::UnrolledProver;
 use gpu_prover::execution::prover::ExecutionProverConfiguration;
+use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
