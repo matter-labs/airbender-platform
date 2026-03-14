@@ -174,3 +174,4 @@ For complete guest + host applications, start with:
 - [`examples/fibonacci`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci)
 - [`examples/u256-add`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add)
 - [`examples/std-btreemap`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap)
+- [`examples/revm-witness-replay`](https://github.com/matter-labs/airbender-platform/tree/main/examples/revm-witness-replay)
