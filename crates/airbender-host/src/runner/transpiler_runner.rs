@@ -1,7 +1,7 @@
 use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
-use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
+use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::{
     rom::ROM_SECOND_WORD_BITS, INITIAL_TIMESTAMP, TIMESTAMP_STEP,
 };

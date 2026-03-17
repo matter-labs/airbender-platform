@@ -22,7 +22,7 @@ pub trait Runner {
     fn run(&self, input_words: &[u32]) -> Result<ExecutionResult>;
 }
 
-/// Execution outcome for simulator/transpiler based runners.
+/// Execution outcome for transpiler based runners.
 #[derive(Clone, Debug)]
 pub struct ExecutionResult {
     pub receipt: Receipt,

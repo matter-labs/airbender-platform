@@ -7,9 +7,9 @@ use crate::proof::{Proof, RealProof};
 use crate::runner::{Runner, TranspilerRunnerBuilder};
 use execution_utils::setups;
 use execution_utils::unrolled;
-use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
-use risc_v_simulator::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
+use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
+use riscv_transpiler::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
 use std::path::{Path, PathBuf};
 
 /// Builder for creating a configured cached CPU prover.

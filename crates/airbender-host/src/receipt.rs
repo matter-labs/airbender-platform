@@ -1,4 +1,4 @@
-/// Execution output captured from simulator or prover results.
+/// Execution output captured from transpiler or prover results.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Receipt {
     pub registers: [u32; 32],

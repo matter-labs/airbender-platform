@@ -130,7 +130,7 @@ Create an input file (`u32` words encoded as hex, 8 hex chars per word):
 printf '00000001\n29000000\n' > input.hex
 ```
 
-Run in the simulator:
+Run the program:
 
 ```sh
 cargo airbender run ./dist/app/app.bin --input ./input.hex
