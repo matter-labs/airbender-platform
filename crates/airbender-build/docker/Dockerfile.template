@@ -1,0 +1,39 @@
+# Reproducible build environment for airbender guest programs.
+#
+# DO NOT hardcode a toolchain date here.
+# {{TOOLCHAIN_DATE}} is substituted at runtime from DEFAULT_GUEST_TOOLCHAIN in constants.rs.
+# To update the toolchain, change DEFAULT_GUEST_TOOLCHAIN in constants.rs only.
+#
+# Base image is pinned by digest for reproducibility. Sourced from:
+#   zksync-airbender/tools/reproduce/Dockerfile
+# The Debian version does not affect compiler output because the toolchain is
+# installed entirely via rustup — only system build tools (gcc, linker) come from apt.
+#
+# To rotate the base image digest (e.g. for a Debian security patch):
+#   docker pull debian:bullseye-slim
+#   docker inspect --format='{{index .RepoDigests 0}}' debian:bullseye-slim
+# Update the FROM line below and commit. The PR diff makes the change explicit and reviewable.
+FROM debian:bullseye-slim@sha256:f527627d07c18abf87313c341ee8ef1b36f106baa8b6b6dc33f4c872d988b651
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        build-essential \
+        git \
+        libssl-dev \
+        pkg-config \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --no-modify-path --default-toolchain {{TOOLCHAIN_DATE}}
+
+RUN rustup component add llvm-tools-preview rust-src && \
+    rustup target add riscv32im-risc0-zkvm-elf && \
+    cargo install cargo-binutils --locked
+
+WORKDIR /build

@@ -2,6 +2,7 @@
 
 mod config;
 mod constants;
+mod docker;
 mod errors;
 mod utils;
 

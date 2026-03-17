@@ -28,6 +28,9 @@ pub struct BuildConfig {
     pub dist_dir: Option<PathBuf>,
     /// Additional arguments forwarded to `cargo build` and `cargo objcopy`.
     pub cargo_args: Vec<String>,
+    /// When true, compilation runs inside a pinned Docker container for
+    /// bit-for-bit reproducible output across host environments.
+    pub reproducible: bool,
 }
 
 impl BuildConfig {
@@ -41,6 +44,7 @@ impl BuildConfig {
             profile: Profile::Release,
             dist_dir: None,
             cargo_args: Vec::new(),
+            reproducible: false,
         }
     }
 
@@ -55,33 +59,43 @@ impl BuildConfig {
         let dist_dir = self.resolve_dist_dir(&app_name, &project_dir, &invocation_cwd);
         fs::create_dir_all(&dist_dir)?;
 
-        self.run_cargo_build(&project_dir, &manifest_names.bin_name, target.as_deref())?;
-
         let app_bin = dist_dir.join("app.bin");
         let app_elf = dist_dir.join("app.elf");
         let app_text = dist_dir.join("app.text");
 
-        self.run_cargo_objcopy(
-            &project_dir,
-            &manifest_names.bin_name,
-            target.as_deref(),
-            &["-O", "binary"],
-            &app_bin,
-        )?;
-        self.run_cargo_objcopy(
-            &project_dir,
-            &manifest_names.bin_name,
-            target.as_deref(),
-            &["-R", ".text"],
-            &app_elf,
-        )?;
-        self.run_cargo_objcopy(
-            &project_dir,
-            &manifest_names.bin_name,
-            target.as_deref(),
-            &["-O", "binary", "--only-section=.text"],
-            &app_text,
-        )?;
+        if self.reproducible {
+            crate::docker::run_reproducible_build(
+                &project_dir,
+                &manifest_names.bin_name,
+                target.as_deref(),
+                self.profile,
+                &dist_dir,
+                &self.cargo_args,
+            )?;
+        } else {
+            self.run_cargo_build(&project_dir, &manifest_names.bin_name, target.as_deref())?;
+            self.run_cargo_objcopy(
+                &project_dir,
+                &manifest_names.bin_name,
+                target.as_deref(),
+                &["-O", "binary"],
+                &app_bin,
+            )?;
+            self.run_cargo_objcopy(
+                &project_dir,
+                &manifest_names.bin_name,
+                target.as_deref(),
+                &["-R", ".text"],
+                &app_elf,
+            )?;
+            self.run_cargo_objcopy(
+                &project_dir,
+                &manifest_names.bin_name,
+                target.as_deref(),
+                &["-O", "binary", "--only-section=.text"],
+                &app_text,
+            )?;
+        }
 
         let bin_sha256 = sha256_file_hex(&app_bin)?;
         let elf_sha256 = sha256_file_hex(&app_elf)?;
@@ -113,6 +127,7 @@ impl BuildConfig {
                 git_branch: git_metadata.branch,
                 git_commit: git_metadata.commit,
                 is_dirty: git_metadata.is_dirty,
+                reproducible: self.reproducible,
             },
         };
         manifest.write_to_file(&manifest_path)?;
@@ -275,6 +290,12 @@ pub fn build_dist(config: &BuildConfig) -> Result<DistArtifacts> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reproducible_flag_defaults_to_false() {
+        let config = BuildConfig::new(PathBuf::from("."));
+        assert!(!config.reproducible);
+    }
 
     #[test]
     fn defaults_to_no_target_override() {

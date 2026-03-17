@@ -30,11 +30,29 @@ Key options:
 - `--dist <path>`: dist root directory (app folder is created under this root; relative paths are resolved from command invocation cwd)
 - `--project <path>`: guest project directory
 - `--profile <debug|release>`, `--debug`, `--release`
+- `--reproducible`: build inside a pinned Docker container for bit-for-bit identical output across machines and toolchain versions; automatically passes `--locked` to cargo
 
 Forward extra Cargo flags after `--`:
 
 ```sh
 cargo airbender build --app-name with_extra_feature -- --features my_extra_feature
+```
+
+Reproducible build:
+
+```sh
+cargo airbender build --reproducible
+```
+
+This compiles the guest inside a pinned Docker image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`). Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker. The project must have a committed `Cargo.lock`.
+
+When `--reproducible` is used, `manifest.toml` records:
+
+```toml
+[build]
+profile = "release"
+reproducible = true
+...
 ```
 
 Default artifact layout:

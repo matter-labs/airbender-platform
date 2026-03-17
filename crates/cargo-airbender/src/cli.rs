@@ -64,6 +64,10 @@ pub struct BuildArgs {
     pub release: bool,
     #[arg(last = true, value_name = "CARGO_ARGS")]
     pub cargo_args: Vec<String>,
+    /// Build inside a pinned Docker container for bit-for-bit reproducible output.
+    /// Automatically passes `--locked` to cargo; the project must have a committed `Cargo.lock`.
+    #[arg(long)]
+    pub reproducible: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -257,6 +261,18 @@ mod tests {
         match cli.command {
             Commands::Build(args) => {
                 assert_eq!(args.app_name, "gpu-profile");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_reproducible_flag() {
+        let cli = Cli::parse_from(["cargo-airbender", "build", "--reproducible"]);
+        match cli.command {
+            Commands::Build(args) => {
+                assert!(args.reproducible);
+                assert_eq!(args.app_name, "app");
             }
             other => panic!("unexpected command: {other:?}"),
         }
