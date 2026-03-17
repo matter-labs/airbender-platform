@@ -33,8 +33,8 @@ fn run() -> Result<()> {
     let mut inputs = Inputs::new();
     inputs.push(&10u32)?;
 
-    let simulator = program.simulator_runner().build()?;
-    let execution = simulator.run(inputs.words())?;
+    let runner = program.transpiler_runner().build()?;
+    let execution = runner.run(inputs.words())?;
     println!("output x10={}", execution.receipt.output[0]);
 
     let prover = program.dev_prover().build()?;
@@ -66,7 +66,6 @@ Guest-side `read::<T>()` calls consume values in the same order they were pushed
 
 High-level:
 
-- `Program::simulator_runner()`
 - `Program::transpiler_runner()`
 - `Program::dev_prover()`
 - `Program::gpu_prover()`
@@ -81,7 +80,6 @@ High-level:
 
 Lower-level:
 
-- `SimulatorRunnerBuilder::new(app_bin).with_...().build()`
 - `TranspilerRunnerBuilder::new(app_bin).with_...().with_jit().build()` (`with_jit()` is optional and x86_64-only)
 - `DevProverBuilder::new(app_bin).with_...().build()`
 - `GpuProverBuilder::new(app_bin).with_...().build()`
@@ -113,12 +111,11 @@ Verification APIs can enforce expected public outputs (`x10..x17`) in addition t
 
 ## Runner Construction
 
-- `SimulatorRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, then `build()`.
 - `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, then `build()`.
 
 ## Cycle Budget
 
-For simulator execution, you can:
+For transpiler execution, you can:
 
 - pass an explicit cycle limit
 

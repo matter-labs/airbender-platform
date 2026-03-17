@@ -18,8 +18,8 @@ fn main() -> Result<()> {
     inputs.push(&b)?;
     inputs.push(&c)?;
 
-    let simulator = program.transpiler_runner().build()?;
-    let execution = simulator.run(inputs.words())?;
+    let runner = program.transpiler_runner().build()?;
+    let execution = runner.run(inputs.words())?;
     let exec_valid = execution.receipt.output[0] == 1;
     println!(
         "Execution finished: cycles={}, reached_end={}, valid={}",
