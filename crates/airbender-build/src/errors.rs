@@ -33,6 +33,16 @@ pub enum BuildError {
     /// `docker build` failed while building the reproducible build image.
     #[error("failed to build Docker image for reproducible build")]
     DockerBuildFailed,
+
+    /// Guest project is missing a Cargo.lock or it was not generated with the container toolchain.
+    #[error(
+        "Cargo.lock not found in `{project}` or not generated with the container toolchain ({toolchain})\n\
+         fix: cargo +{toolchain} generate-lockfile --manifest-path {project}/Cargo.toml"
+    )]
+    LockfileNotReady {
+        project: String,
+        toolchain: &'static str,
+    },
 }
 
 impl From<ManifestError> for BuildError {

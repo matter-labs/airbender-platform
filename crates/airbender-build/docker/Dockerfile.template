@@ -19,6 +19,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
         build-essential \
+        clang \
         git \
         libssl-dev \
         pkg-config \
@@ -33,7 +34,6 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --no-modify-path --default-toolchain {{TOOLCHAIN_DATE}}
 
 RUN rustup component add llvm-tools-preview rust-src && \
-    rustup target add riscv32im-risc0-zkvm-elf && \
     cargo install cargo-binutils --locked
 
 WORKDIR /build

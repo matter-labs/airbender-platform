@@ -10,7 +10,7 @@ use crate::utils::run_command;
 use airbender_core::host::manifest::Profile;
 use sha2::{Digest, Sha256};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Dockerfile template embedded at compile time.
@@ -59,8 +59,8 @@ fn ensure_image_built() -> Result<()> {
     }
 
     // Write the substituted Dockerfile to a stable temp path.
-    let dockerfile_path = std::env::temp_dir()
-        .join(format!("airbender-{}.dockerfile", DEFAULT_GUEST_TOOLCHAIN));
+    let dockerfile_path =
+        std::env::temp_dir().join(format!("airbender-{}.dockerfile", DEFAULT_GUEST_TOOLCHAIN));
     std::fs::write(&dockerfile_path, dockerfile_contents())?;
 
     // Use an empty directory as the build context — the Dockerfile has no COPY directives.
@@ -81,16 +81,37 @@ fn ensure_image_built() -> Result<()> {
     run_command(cmd, "docker build")
 }
 
+/// Walks up from `start` to find the nearest directory containing a `Cargo.toml`
+/// with a `[workspace]` section. Falls back to `start` if none is found.
+fn find_workspace_root(start: &Path) -> PathBuf {
+    let mut dir = start.to_path_buf();
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        if manifest.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&manifest) {
+                if contents.contains("[workspace]") {
+                    return dir;
+                }
+            }
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return start.to_path_buf(),
+        }
+    }
+}
+
 /// Runs a single `cargo <subcmd>` invocation inside the pinned container.
 ///
 /// Volume mounts:
-/// - `/src`  — project source directory, read-only
-/// - `/out`  — dist output directory, read-write (objcopy writes artifacts here)
+/// - `/src`       — workspace root, read-only (so path dependencies resolve correctly)
+/// - `/out`       — dist output directory, read-write (objcopy writes artifacts here)
 /// - `airbender-cargo-registry` — shared named volume for downloaded crate sources
 /// - `<target_volume>` — per-project named volume for incremental build cache
 fn docker_run_cargo(
     tag: &str,
-    project_dir: &Path,
+    workspace_root: &Path,
+    workdir: &str,
     dist_dir: &Path,
     target_volume: &str,
     subcmd: &str,
@@ -99,11 +120,20 @@ fn docker_run_cargo(
     objcopy_args: &[&str],
 ) -> Result<()> {
     let mut cmd = Command::new("docker");
-    cmd.args(["run", "--rm", "--platform", "linux/amd64", "--workdir", "/src"]);
-    cmd.args(["-v", &format!("{}:/src:ro", project_dir.display())]);
+    cmd.args([
+        "run",
+        "--rm",
+        "--platform",
+        "linux/amd64",
+        "--workdir",
+        workdir,
+        "-e",
+        "CARGO_TARGET_DIR=/cargo-target",
+    ]);
+    cmd.args(["-v", &format!("{}:/src:ro", workspace_root.display())]);
     cmd.args(["-v", &format!("{}:/out:rw", dist_dir.display())]);
     cmd.args(["-v", "airbender-cargo-registry:/usr/local/cargo/registry"]);
-    cmd.args(["-v", &format!("{target_volume}:/src/target")]);
+    cmd.args(["-v", &format!("{target_volume}:/cargo-target")]);
     cmd.arg(tag);
     cmd.args(["cargo", subcmd]);
     cmd.args(fixed_args);
@@ -128,6 +158,17 @@ pub(crate) fn run_reproducible_build(
     dist_dir: &Path,
     cargo_args: &[String],
 ) -> Result<()> {
+    // Validate Cargo.lock exists before spinning up Docker. The lock file must be committed
+    // and generated with DEFAULT_GUEST_TOOLCHAIN; otherwise --locked will fail inside the
+    // container. We can't distinguish "missing" from "wrong toolchain" without running cargo,
+    // so both cases are covered by a single pre-flight error with the fix command.
+    if !project_dir.join("Cargo.lock").exists() {
+        return Err(BuildError::LockfileNotReady {
+            project: project_dir.display().to_string(),
+            toolchain: DEFAULT_GUEST_TOOLCHAIN,
+        });
+    }
+
     ensure_docker_available()?;
     ensure_image_built()?;
 
@@ -139,35 +180,91 @@ pub(crate) fn run_reproducible_build(
         ""
     };
 
+    // Mount the workspace root so path dependencies (e.g. ../../../crates/foo) resolve inside
+    // the container. The workdir is the guest project's path relative to the workspace root,
+    // prefixed with /src.
+    let canonical_project = project_dir
+        .canonicalize()
+        .unwrap_or_else(|_| project_dir.to_path_buf());
+    let workspace_root = find_workspace_root(&canonical_project);
+    let rel = canonical_project
+        .strip_prefix(&workspace_root)
+        .unwrap_or(Path::new(""));
+    let workdir = format!("/src/{}", rel.display());
+
     // Stable per-project volume name derived from the canonical project path.
     // Uses the first 8 bytes of SHA-256 to keep the name short and Docker-safe.
     let project_key = {
-        let canonical = project_dir
-            .canonicalize()
-            .unwrap_or_else(|_| project_dir.to_path_buf());
-        let hash = Sha256::digest(canonical.to_string_lossy().as_bytes());
-        hash[..8].iter().map(|b| format!("{b:02x}")).collect::<String>()
+        let hash = Sha256::digest(canonical_project.to_string_lossy().as_bytes());
+        hash[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
     };
     let target_volume = format!("airbender-cargo-target-{project_key}");
 
-    // Build args shared across all four invocations. --locked is always included.
+    // Build args shared across all four invocations.
+    // --target-dir is passed via CARGO_TARGET_DIR env var (cargo objcopy doesn't accept the flag).
     let fixed: &[&str] = if profile_flag.is_empty() {
         &["--bin", bin_name, "--target", target_str, "--locked"]
     } else {
-        &[profile_flag, "--bin", bin_name, "--target", target_str, "--locked"]
+        &[
+            profile_flag,
+            "--bin",
+            bin_name,
+            "--target",
+            target_str,
+            "--locked",
+        ]
     };
 
     // 1. Compile.
-    docker_run_cargo(&tag, project_dir, dist_dir, &target_volume,
-        "build", fixed, cargo_args, &[])?;
+    docker_run_cargo(
+        &tag,
+        &workspace_root,
+        &workdir,
+        dist_dir,
+        &target_volume,
+        "build",
+        fixed,
+        cargo_args,
+        &[],
+    )?;
 
     // 2–4. Extract binary artifacts.
-    docker_run_cargo(&tag, project_dir, dist_dir, &target_volume,
-        "objcopy", fixed, cargo_args, &["-O", "binary", "/out/app.bin"])?;
-    docker_run_cargo(&tag, project_dir, dist_dir, &target_volume,
-        "objcopy", fixed, cargo_args, &["-R", ".text", "/out/app.elf"])?;
-    docker_run_cargo(&tag, project_dir, dist_dir, &target_volume,
-        "objcopy", fixed, cargo_args, &["-O", "binary", "--only-section=.text", "/out/app.text"])?;
+    docker_run_cargo(
+        &tag,
+        &workspace_root,
+        &workdir,
+        dist_dir,
+        &target_volume,
+        "objcopy",
+        fixed,
+        cargo_args,
+        &["-O", "binary", "/out/app.bin"],
+    )?;
+    docker_run_cargo(
+        &tag,
+        &workspace_root,
+        &workdir,
+        dist_dir,
+        &target_volume,
+        "objcopy",
+        fixed,
+        cargo_args,
+        &["-R", ".text", "/out/app.elf"],
+    )?;
+    docker_run_cargo(
+        &tag,
+        &workspace_root,
+        &workdir,
+        dist_dir,
+        &target_volume,
+        "objcopy",
+        fixed,
+        cargo_args,
+        &["-O", "binary", "--only-section=.text", "/out/app.text"],
+    )?;
 
     Ok(())
 }

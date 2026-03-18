@@ -44,7 +44,15 @@ Reproducible build:
 cargo airbender build --reproducible
 ```
 
-This compiles the guest inside a pinned Docker image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`). Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker. The project must have a committed `Cargo.lock`.
+This compiles the guest inside a pinned Docker image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`). Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker.
+
+**Cargo.lock prerequisite:** the guest project must have a `Cargo.lock` committed and generated with the same nightly toolchain used inside the container. If your lock file was created with a different toolchain, regenerate it once before the first reproducible build:
+
+```sh
+rustup toolchain install nightly-2026-02-10
+cargo +nightly-2026-02-10 generate-lockfile --manifest-path <guest>/Cargo.toml
+git add <guest>/Cargo.lock && git commit -m "chore: regenerate Cargo.lock for reproducible builds"
+```
 
 When `--reproducible` is used, `manifest.toml` records:
 
