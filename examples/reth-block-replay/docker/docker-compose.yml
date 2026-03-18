@@ -1,6 +1,6 @@
 services:
   reth:
-    image: ghcr.io/paradigmxyz/reth:latest
+    image: ghcr.io/paradigmxyz/reth:v1.11.3
     command:
       - node
       - --dev
