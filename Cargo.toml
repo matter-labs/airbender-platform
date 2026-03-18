@@ -20,6 +20,8 @@ exclude = [
     "examples/std-btreemap/host",
     "examples/revm-witness-replay/guest",
     "examples/revm-witness-replay/host",
+    "examples/reth-block-replay/guest",
+    "examples/reth-block-replay/host",
 ]
 resolver = "2"
 
