@@ -1,9 +1,7 @@
 use crate::cli::{BuildArgs, BuildProfile};
 use crate::error::{CliError, Result};
 use crate::ui;
-use airbender_build::{
-    build_dist, BuildConfig, Profile, DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN,
-};
+use airbender_build::{build_dist, BuildConfig, Profile, DEFAULT_GUEST_TARGET};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -106,18 +104,26 @@ fn resolve_project_dir_from(project: Option<&Path>, invocation_cwd: &Path) -> Re
 
 fn is_guest_project_dir(project_dir: &Path) -> std::io::Result<bool> {
     let cargo_config = project_dir.join(".cargo/config.toml");
-    let rust_toolchain = project_dir.join("rust-toolchain.toml");
-    if !cargo_config.is_file() || !rust_toolchain.is_file() {
+    if !cargo_config.is_file() {
         return Ok(false);
     }
 
     let cargo_config = fs::read_to_string(cargo_config)?;
-    let rust_toolchain = fs::read_to_string(rust_toolchain)?;
+    Ok(cargo_config_targets_guest(&cargo_config))
+}
 
-    Ok(
-        cargo_config.contains(&format!("target = \"{DEFAULT_GUEST_TARGET}\""))
-            && rust_toolchain.contains(&format!("channel = \"{DEFAULT_GUEST_TOOLCHAIN}\"")),
-    )
+fn cargo_config_targets_guest(cargo_config: &str) -> bool {
+    cargo_config.lines().map(str::trim).any(|line| {
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        if key.trim() != "target" {
+            return false;
+        }
+
+        let value = value.split('#').next().unwrap_or(value).trim();
+        value.trim_matches(|ch| ch == '"' || ch == '\'') == DEFAULT_GUEST_TARGET
+    })
 }
 
 fn missing_manifest_error(project_dir: &Path) -> CliError {
@@ -131,46 +137,12 @@ fn missing_manifest_error(project_dir: &Path) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use airbender_build::DEFAULT_GUEST_TOOLCHAIN;
     use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new() -> Self {
-            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-
-            let unique_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "cargo-airbender-build-tests-{}-{timestamp}-{unique_id}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path).expect("create temporary test directory");
-
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 
     #[test]
     fn resolves_project_dir_from_parent_manifest_when_project_is_omitted() {
-        let temp_dir = TempDir::new();
+        let temp_dir = tempfile::tempdir().expect("create temp directory");
         let project_dir = temp_dir.path().join("guest");
         let nested_dir = project_dir.join("src").join("nested");
 
@@ -184,7 +156,7 @@ mod tests {
 
     #[test]
     fn resolves_relative_explicit_project_from_invocation_cwd() {
-        let temp_dir = TempDir::new();
+        let temp_dir = tempfile::tempdir().expect("create temp directory");
         let invocation_cwd = temp_dir.path().join("workspace");
         let project_dir = invocation_cwd.join("guest");
 
@@ -198,7 +170,7 @@ mod tests {
 
     #[test]
     fn returns_hint_when_only_non_guest_manifests_exist_in_ancestors() {
-        let temp_dir = TempDir::new();
+        let temp_dir = tempfile::tempdir().expect("create temp directory");
         let project_dir = temp_dir.path().join("helper");
         let nested_dir = project_dir.join("src");
 
@@ -223,7 +195,7 @@ mod tests {
 
     #[test]
     fn skips_workspace_manifests_when_project_is_omitted() {
-        let temp_dir = TempDir::new();
+        let temp_dir = tempfile::tempdir().expect("create temp directory");
         let project_dir = temp_dir.path().join("host");
         let nested_dir = project_dir.join("src");
 
@@ -248,7 +220,7 @@ mod tests {
 
     #[test]
     fn returns_hint_when_no_manifest_exists_in_ancestors() {
-        let temp_dir = TempDir::new();
+        let temp_dir = tempfile::tempdir().expect("create temp directory");
         let nested_dir = temp_dir.path().join("guest").join("src");
         fs::create_dir_all(&nested_dir).expect("create nested guest directory");
 
@@ -262,6 +234,24 @@ mod tests {
             )
         );
         assert_eq!(err.hint(), Some("use --project <path-to-guest-crate>"));
+    }
+
+    #[test]
+    fn resolves_project_dir_when_guest_toolchain_is_customized() {
+        let temp_dir = tempfile::tempdir().expect("create temp directory");
+        let project_dir = temp_dir.path().join("guest");
+        let nested_dir = project_dir.join("src").join("nested");
+
+        write_guest_project(&project_dir);
+        write_file(
+            &project_dir.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly\"\n",
+        );
+        fs::create_dir_all(&nested_dir).expect("create nested guest directory");
+
+        let resolved = resolve_project_dir_from(None, &nested_dir).expect("resolve project dir");
+
+        assert_eq!(resolved, project_dir);
     }
 
     fn write_package_manifest(project_dir: &Path, name: &str, suffix: &str) {
