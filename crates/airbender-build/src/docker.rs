@@ -331,3 +331,95 @@ pub(crate) fn run_reproducible_build(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::BuildError;
+
+    #[test]
+    fn dockerfile_contents_substitutes_toolchain_date() {
+        let contents = dockerfile_contents();
+        assert!(!contents.contains("{{TOOLCHAIN_DATE}}"));
+        assert!(contents.contains(DEFAULT_GUEST_TOOLCHAIN));
+    }
+
+    #[test]
+    fn dockerfile_template_has_no_hardcoded_date() {
+        assert!(DOCKERFILE_TEMPLATE.contains("{{TOOLCHAIN_DATE}}"));
+        assert!(!DOCKERFILE_TEMPLATE.contains(DEFAULT_GUEST_TOOLCHAIN));
+    }
+
+    #[test]
+    fn docker_image_tag_contains_toolchain() {
+        let tag = docker_image_tag();
+        assert!(tag.starts_with("airbender-build:"));
+        assert!(tag.ends_with(DEFAULT_GUEST_TOOLCHAIN));
+    }
+
+    #[test]
+    fn find_workspace_root_finds_ancestor_with_workspace_section() {
+        let tmp = std::env::temp_dir().join("airbender_test_workspace_root");
+        let nested = tmp.join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(tmp.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(nested.join("Cargo.toml"), "[package]\nname = \"pkg\"\n").unwrap();
+
+        let result = find_workspace_root(&nested);
+        assert_eq!(result, tmp);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn find_workspace_root_falls_back_to_start_when_no_workspace_found() {
+        let tmp = std::env::temp_dir().join("airbender_test_no_workspace");
+        let nested = tmp.join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let result = find_workspace_root(&nested);
+        assert_eq!(result, nested);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn find_workspace_root_stops_at_nearest_workspace() {
+        let tmp = std::env::temp_dir().join("airbender_test_nested_workspace");
+        let inner = tmp.join("inner");
+        let pkg = inner.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(tmp.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(inner.join("Cargo.toml"), "[workspace]\n").unwrap();
+
+        let result = find_workspace_root(&pkg);
+        assert_eq!(result, inner);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn reproducible_build_errors_when_lockfile_missing() {
+        let tmp = std::env::temp_dir().join("airbender_test_lockfile_missing");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"guest\"\n").unwrap();
+
+        let result = run_reproducible_build(
+            &tmp,
+            "guest",
+            None,
+            airbender_core::host::manifest::Profile::Release,
+            &tmp,
+            &[],
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, BuildError::LockfileNotReady { .. }),
+            "expected LockfileNotReady, got: {err:?}"
+        );
+        assert!(err.to_string().contains(DEFAULT_GUEST_TOOLCHAIN));
+    }
+}
