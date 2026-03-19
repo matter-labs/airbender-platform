@@ -1,7 +1,10 @@
 use crate::cli::{BuildArgs, BuildProfile};
 use crate::error::{CliError, Result};
 use crate::ui;
-use airbender_build::{build_dist, is_guest_project_dir, BuildConfig, Profile};
+use airbender_build::{
+    build_dist, BuildConfig, Profile, DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN,
+};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn run(args: BuildArgs) -> Result<()> {
@@ -69,28 +72,20 @@ fn resolve_project_dir(project: Option<&Path>) -> Result<PathBuf> {
 }
 
 fn resolve_project_dir_from(project: Option<&Path>, invocation_cwd: &Path) -> Result<PathBuf> {
-    match project {
-        Some(project_dir) => {
-            let project_dir = resolve_project_path(project_dir, invocation_cwd);
-            ensure_manifest_exists(&project_dir)?;
+    if let Some(project_dir) = project {
+        let project_dir = if project_dir.is_absolute() {
+            project_dir.to_path_buf()
+        } else {
+            invocation_cwd.join(project_dir)
+        };
+        return if project_dir.join("Cargo.toml").is_file() {
             Ok(project_dir)
-        }
-        None => {
-            find_project_dir(invocation_cwd)?.ok_or_else(|| missing_manifest_error(invocation_cwd))
-        }
+        } else {
+            Err(missing_manifest_error(&project_dir))
+        };
     }
-}
 
-fn resolve_project_path(project_dir: &Path, invocation_cwd: &Path) -> PathBuf {
-    if project_dir.is_absolute() {
-        project_dir.to_path_buf()
-    } else {
-        invocation_cwd.join(project_dir)
-    }
-}
-
-fn find_project_dir(start_dir: &Path) -> Result<Option<PathBuf>> {
-    for candidate in start_dir.ancestors() {
+    for candidate in invocation_cwd.ancestors() {
         if !candidate.join("Cargo.toml").is_file() {
             continue;
         }
@@ -102,19 +97,27 @@ fn find_project_dir(start_dir: &Path) -> Result<Option<PathBuf>> {
             )
         })?;
         if is_guest {
-            return Ok(Some(candidate.to_path_buf()));
+            return Ok(candidate.to_path_buf());
         }
     }
 
-    Ok(None)
+    Err(missing_manifest_error(invocation_cwd))
 }
 
-fn ensure_manifest_exists(project_dir: &Path) -> Result<()> {
-    if project_dir.join("Cargo.toml").is_file() {
-        Ok(())
-    } else {
-        Err(missing_manifest_error(project_dir))
+fn is_guest_project_dir(project_dir: &Path) -> std::io::Result<bool> {
+    let cargo_config = project_dir.join(".cargo/config.toml");
+    let rust_toolchain = project_dir.join("rust-toolchain.toml");
+    if !cargo_config.is_file() || !rust_toolchain.is_file() {
+        return Ok(false);
     }
+
+    let cargo_config = fs::read_to_string(cargo_config)?;
+    let rust_toolchain = fs::read_to_string(rust_toolchain)?;
+
+    Ok(
+        cargo_config.contains(&format!("target = \"{DEFAULT_GUEST_TARGET}\""))
+            && rust_toolchain.contains(&format!("channel = \"{DEFAULT_GUEST_TOOLCHAIN}\"")),
+    )
 }
 
 fn missing_manifest_error(project_dir: &Path) -> CliError {
@@ -168,12 +171,10 @@ mod tests {
     #[test]
     fn resolves_project_dir_from_parent_manifest_when_project_is_omitted() {
         let temp_dir = TempDir::new();
-        let sdk_dir = temp_dir.path().join("sdk");
         let project_dir = temp_dir.path().join("guest");
         let nested_dir = project_dir.join("src").join("nested");
 
-        write_sdk_package(&sdk_dir);
-        write_guest_package(&project_dir, &sdk_dir);
+        write_guest_project(&project_dir);
         fs::create_dir_all(&nested_dir).expect("create nested guest directory");
 
         let resolved = resolve_project_dir_from(None, &nested_dir).expect("resolve project dir");
@@ -187,7 +188,7 @@ mod tests {
         let invocation_cwd = temp_dir.path().join("workspace");
         let project_dir = invocation_cwd.join("guest");
 
-        write_package_manifest(&project_dir, "guest");
+        write_package_manifest(&project_dir, "guest", "");
 
         let resolved = resolve_project_dir_from(Some(Path::new("guest")), &invocation_cwd)
             .expect("resolve explicit project");
@@ -198,10 +199,14 @@ mod tests {
     #[test]
     fn returns_hint_when_only_non_guest_manifests_exist_in_ancestors() {
         let temp_dir = TempDir::new();
-        let project_dir = temp_dir.path().join("host");
+        let project_dir = temp_dir.path().join("helper");
         let nested_dir = project_dir.join("src");
 
-        write_package_manifest(&project_dir, "host");
+        write_package_manifest(
+            &project_dir,
+            "helper",
+            "\n[dependencies]\nairbender-sdk = \"0.1\"\n",
+        );
         fs::create_dir_all(&nested_dir).expect("create nested host directory");
 
         let err = resolve_project_dir_from(None, &nested_dir).expect_err("missing guest manifest");
@@ -226,7 +231,7 @@ mod tests {
             &temp_dir.path().join("Cargo.toml"),
             "[workspace]\nmembers = [\"host\"]\n",
         );
-        write_package_manifest(&project_dir, "host");
+        write_package_manifest(&project_dir, "host", "");
         fs::create_dir_all(&nested_dir).expect("create nested host directory");
 
         let err = resolve_project_dir_from(None, &nested_dir).expect_err("missing guest manifest");
@@ -259,35 +264,26 @@ mod tests {
         assert_eq!(err.hint(), Some("use --project <path-to-guest-crate>"));
     }
 
-    fn write_package_manifest(project_dir: &Path, name: &str) {
-        write_file(
-            &project_dir.join("Cargo.toml"),
-            &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
-        );
-        write_file(&project_dir.join("src/main.rs"), "fn main() {}\n");
-    }
-
-    fn write_sdk_package(project_dir: &Path) {
-        write_file(
-            &project_dir.join("Cargo.toml"),
-            "[package]\nname = \"airbender-sdk\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        );
-        write_file(&project_dir.join("src/lib.rs"), "");
-    }
-
-    fn write_guest_package(project_dir: &Path, sdk_dir: &Path) {
-        let sdk_dir = sdk_dir
-            .canonicalize()
-            .expect("sdk directory should be canonicalizable");
-        let sdk_path = sdk_dir.to_string_lossy().replace('\\', "/");
-
+    fn write_package_manifest(project_dir: &Path, name: &str, suffix: &str) {
         write_file(
             &project_dir.join("Cargo.toml"),
             &format!(
-                "[package]\nname = \"guest\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nairbender = {{ package = \"airbender-sdk\", path = \"{sdk_path}\" }}\n"
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n{suffix}"
             ),
         );
         write_file(&project_dir.join("src/main.rs"), "fn main() {}\n");
+    }
+
+    fn write_guest_project(project_dir: &Path) {
+        write_package_manifest(project_dir, "guest", "");
+        write_file(
+            &project_dir.join(".cargo/config.toml"),
+            &format!("[build]\ntarget = \"{DEFAULT_GUEST_TARGET}\"\n"),
+        );
+        write_file(
+            &project_dir.join("rust-toolchain.toml"),
+            &format!("[toolchain]\nchannel = \"{DEFAULT_GUEST_TOOLCHAIN}\"\n"),
+        );
     }
 
     fn write_file(path: &Path, contents: &str) {

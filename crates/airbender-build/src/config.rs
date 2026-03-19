@@ -272,36 +272,6 @@ pub fn build_dist(config: &BuildConfig) -> Result<DistArtifacts> {
     config.build_dist()
 }
 
-/// Detects guest crates so callers can avoid auto-selecting host manifests.
-pub fn is_guest_project_dir(project_dir: &Path) -> Result<bool> {
-    let manifest_path = project_dir.join("Cargo.toml");
-    if !manifest_path.is_file() {
-        return Ok(false);
-    }
-
-    let metadata = load_metadata(&manifest_path)?;
-    let manifest_path = manifest_path.canonicalize()?;
-    let manifest_path =
-        cargo_metadata::camino::Utf8PathBuf::from_path_buf(manifest_path).map_err(|path| {
-            crate::BuildError::InvalidConfig(format!(
-                "manifest path is not valid UTF-8: {}",
-                path.display()
-            ))
-        })?;
-    let Some(package) = metadata
-        .packages
-        .iter()
-        .find(|package| package.manifest_path == manifest_path)
-    else {
-        return Ok(false);
-    };
-
-    Ok(package.dependencies.iter().any(|dependency| {
-        dependency.kind == cargo_metadata::DependencyKind::Normal
-            && dependency.name == "airbender-sdk"
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
