@@ -6,7 +6,7 @@ This project provides:
 
 - `cargo airbender`: an utility to manage airbender projects and interact with the built RISC-V programs:
     - Create host+guest projects with `cargo airbender new`
-    - Build projects with `cargo airbender build`
+    - Build projects with `cargo airbender build` (add `--reproducible` for bit-for-bit identical output across machines via a pinned Docker container)
     - Run RISC-V programs with `cargo airbender run`
     - Benchmark programs with `cargo airbender flamegraph`
     - Prove and verify proofs from CLI via `cargo airbender prove` & `cargo airbender verify-proof`.

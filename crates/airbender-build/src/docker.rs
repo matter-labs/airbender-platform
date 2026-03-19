@@ -9,7 +9,7 @@ use crate::errors::{BuildError, Result};
 use crate::utils::run_command;
 use airbender_core::host::manifest::Profile;
 use sha2::{Digest, Sha256};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -145,11 +145,74 @@ fn docker_run_cargo(
     run_command(cmd, &format!("docker run cargo {subcmd}"))
 }
 
+/// Like `docker_run_cargo` but captures stderr so that a `--locked` failure from cargo
+/// (caused by a Cargo.lock generated with a different toolchain) is remapped to
+/// `BuildError::LockfileNotReady` with an actionable fix command.
+///
+/// Captured stderr is always forwarded to the process's stderr so build output is not lost.
+fn docker_run_cargo_build(
+    tag: &str,
+    workspace_root: &Path,
+    workdir: &str,
+    dist_dir: &Path,
+    target_volume: &str,
+    fixed_args: &[&str],
+    user_args: &[String],
+    project_display: &str,
+) -> Result<()> {
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "run",
+        "--rm",
+        "--platform",
+        "linux/amd64",
+        "--workdir",
+        workdir,
+        "-e",
+        "CARGO_TARGET_DIR=/cargo-target",
+    ]);
+    cmd.args(["-v", &format!("{}:/src:ro", workspace_root.display())]);
+    cmd.args(["-v", &format!("{}:/out:rw", dist_dir.display())]);
+    cmd.args(["-v", "airbender-cargo-registry:/usr/local/cargo/registry"]);
+    cmd.args(["-v", &format!("{target_volume}:/cargo-target")]);
+    cmd.arg(tag);
+    cmd.args(["cargo", "build"]);
+    cmd.args(fixed_args);
+    cmd.args(user_args);
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+    let mut stderr_buf = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        stderr.read_to_string(&mut stderr_buf)?;
+    }
+    let status = child.wait()?;
+
+    // Always forward captured stderr so build diagnostics are visible.
+    eprint!("{stderr_buf}");
+
+    if !status.success() {
+        if stderr_buf.contains("cannot update the lock file") {
+            return Err(BuildError::LockfileNotReady {
+                project: project_display.to_string(),
+                toolchain: DEFAULT_GUEST_TOOLCHAIN,
+            });
+        }
+        return Err(BuildError::ProcessFailed {
+            cmd: "docker run cargo build".to_string(),
+            status,
+        });
+    }
+    Ok(())
+}
+
 /// Compiles a guest program and produces `app.bin`, `app.elf`, and `app.text` inside `dist_dir`,
 /// using a pinned Docker container for bit-for-bit reproducible output.
 ///
-/// `--locked` is always passed so that `Cargo.lock` pins dependency versions exactly.
-/// The project must have a committed `Cargo.lock`; cargo will error clearly if it is absent.
+/// `--locked` is passed to pin dependency versions exactly. The project must have a committed
+/// `Cargo.lock` generated with `DEFAULT_GUEST_TOOLCHAIN`; a pre-flight check surfaces a
+/// `LockfileNotReady` error with the fix command if the file is absent or incompatible.
 pub(crate) fn run_reproducible_build(
     project_dir: &Path,
     bin_name: &str,
@@ -218,17 +281,17 @@ pub(crate) fn run_reproducible_build(
         ]
     };
 
-    // 1. Compile.
-    docker_run_cargo(
+    // 1. Compile — uses the lockfile-detecting variant so a wrong-toolchain Cargo.lock
+    //    surfaces as LockfileNotReady rather than a generic process failure.
+    docker_run_cargo_build(
         &tag,
         &workspace_root,
         &workdir,
         dist_dir,
         &target_volume,
-        "build",
         fixed,
         cargo_args,
-        &[],
+        &project_dir.display().to_string(),
     )?;
 
     // 2–4. Extract binary artifacts.
