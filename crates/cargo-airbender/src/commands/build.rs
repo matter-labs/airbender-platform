@@ -1,7 +1,7 @@
 use crate::cli::{BuildArgs, BuildProfile};
 use crate::error::{CliError, Result};
 use crate::ui;
-use airbender_build::{build_dist, BuildConfig, Profile};
+use airbender_build::{build_dist, is_guest_project_dir, BuildConfig, Profile};
 use std::path::{Path, PathBuf};
 
 pub fn run(args: BuildArgs) -> Result<()> {
@@ -76,7 +76,7 @@ fn resolve_project_dir_from(project: Option<&Path>, invocation_cwd: &Path) -> Re
             Ok(project_dir)
         }
         None => {
-            find_project_dir(invocation_cwd).ok_or_else(|| missing_manifest_error(invocation_cwd))
+            find_project_dir(invocation_cwd)?.ok_or_else(|| missing_manifest_error(invocation_cwd))
         }
     }
 }
@@ -89,11 +89,24 @@ fn resolve_project_path(project_dir: &Path, invocation_cwd: &Path) -> PathBuf {
     }
 }
 
-fn find_project_dir(start_dir: &Path) -> Option<PathBuf> {
-    start_dir
-        .ancestors()
-        .find(|candidate| candidate.join("Cargo.toml").is_file())
-        .map(Path::to_path_buf)
+fn find_project_dir(start_dir: &Path) -> Result<Option<PathBuf>> {
+    for candidate in start_dir.ancestors() {
+        if !candidate.join("Cargo.toml").is_file() {
+            continue;
+        }
+
+        let is_guest = is_guest_project_dir(candidate).map_err(|err| {
+            CliError::with_source(
+                format!("failed to inspect guest project `{}`", candidate.display()),
+                err,
+            )
+        })?;
+        if is_guest {
+            return Ok(Some(candidate.to_path_buf()));
+        }
+    }
+
+    Ok(None)
 }
 
 fn ensure_manifest_exists(project_dir: &Path) -> Result<()> {
@@ -155,15 +168,13 @@ mod tests {
     #[test]
     fn resolves_project_dir_from_parent_manifest_when_project_is_omitted() {
         let temp_dir = TempDir::new();
+        let sdk_dir = temp_dir.path().join("sdk");
         let project_dir = temp_dir.path().join("guest");
         let nested_dir = project_dir.join("src").join("nested");
 
+        write_sdk_package(&sdk_dir);
+        write_guest_package(&project_dir, &sdk_dir);
         fs::create_dir_all(&nested_dir).expect("create nested guest directory");
-        fs::write(
-            project_dir.join("Cargo.toml"),
-            "[package]\nname = \"guest\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .expect("write guest manifest");
 
         let resolved = resolve_project_dir_from(None, &nested_dir).expect("resolve project dir");
 
@@ -176,17 +187,58 @@ mod tests {
         let invocation_cwd = temp_dir.path().join("workspace");
         let project_dir = invocation_cwd.join("guest");
 
-        fs::create_dir_all(&project_dir).expect("create guest project directory");
-        fs::write(
-            project_dir.join("Cargo.toml"),
-            "[package]\nname = \"guest\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .expect("write guest manifest");
+        write_package_manifest(&project_dir, "guest");
 
         let resolved = resolve_project_dir_from(Some(Path::new("guest")), &invocation_cwd)
             .expect("resolve explicit project");
 
         assert_eq!(resolved, project_dir);
+    }
+
+    #[test]
+    fn returns_hint_when_only_non_guest_manifests_exist_in_ancestors() {
+        let temp_dir = TempDir::new();
+        let project_dir = temp_dir.path().join("host");
+        let nested_dir = project_dir.join("src");
+
+        write_package_manifest(&project_dir, "host");
+        fs::create_dir_all(&nested_dir).expect("create nested host directory");
+
+        let err = resolve_project_dir_from(None, &nested_dir).expect_err("missing guest manifest");
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "guest project `{}` does not contain a Cargo.toml",
+                nested_dir.display()
+            )
+        );
+        assert_eq!(err.hint(), Some("use --project <path-to-guest-crate>"));
+    }
+
+    #[test]
+    fn skips_workspace_manifests_when_project_is_omitted() {
+        let temp_dir = TempDir::new();
+        let project_dir = temp_dir.path().join("host");
+        let nested_dir = project_dir.join("src");
+
+        write_file(
+            &temp_dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"host\"]\n",
+        );
+        write_package_manifest(&project_dir, "host");
+        fs::create_dir_all(&nested_dir).expect("create nested host directory");
+
+        let err = resolve_project_dir_from(None, &nested_dir).expect_err("missing guest manifest");
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "guest project `{}` does not contain a Cargo.toml",
+                nested_dir.display()
+            )
+        );
+        assert_eq!(err.hint(), Some("use --project <path-to-guest-crate>"));
     }
 
     #[test]
@@ -205,5 +257,44 @@ mod tests {
             )
         );
         assert_eq!(err.hint(), Some("use --project <path-to-guest-crate>"));
+    }
+
+    fn write_package_manifest(project_dir: &Path, name: &str) {
+        write_file(
+            &project_dir.join("Cargo.toml"),
+            &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        );
+        write_file(&project_dir.join("src/main.rs"), "fn main() {}\n");
+    }
+
+    fn write_sdk_package(project_dir: &Path) {
+        write_file(
+            &project_dir.join("Cargo.toml"),
+            "[package]\nname = \"airbender-sdk\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write_file(&project_dir.join("src/lib.rs"), "");
+    }
+
+    fn write_guest_package(project_dir: &Path, sdk_dir: &Path) {
+        let sdk_dir = sdk_dir
+            .canonicalize()
+            .expect("sdk directory should be canonicalizable");
+        let sdk_path = sdk_dir.to_string_lossy().replace('\\', "/");
+
+        write_file(
+            &project_dir.join("Cargo.toml"),
+            &format!(
+                "[package]\nname = \"guest\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nairbender = {{ package = \"airbender-sdk\", path = \"{sdk_path}\" }}\n"
+            ),
+        );
+        write_file(&project_dir.join("src/main.rs"), "fn main() {}\n");
+    }
+
+    fn write_file(path: &Path, contents: &str) {
+        let parent = path
+            .parent()
+            .expect("test file should have a parent directory");
+        fs::create_dir_all(parent).expect("create test directory");
+        fs::write(path, contents).expect("write test file");
     }
 }
