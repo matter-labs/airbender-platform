@@ -22,7 +22,7 @@ This project provides:
 
 ## Documentation
 
-Read the **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/)** for the full user guide.
+Read the **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/latest)** for the full user guide.
 
 The book source lives in [`docs/`](./docs/). To build locally:
 
