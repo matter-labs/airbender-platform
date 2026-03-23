@@ -22,6 +22,8 @@ Builds guest artifacts into a dist app directory.
 cargo airbender build --app-name app
 ```
 
+When `--project` is omitted, the command searches the current directory and its parents for the nearest guest `Cargo.toml`.
+
 Key options:
 
 - `--app-name <name>`: output namespace under dist root (default: `app`)

@@ -76,6 +76,7 @@ dependencies = [
  "airbender-core",
  "cargo_metadata",
  "sha2",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -731,7 +732,9 @@ dependencies = [
  "clap",
  "dialoguer",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
