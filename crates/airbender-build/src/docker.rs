@@ -101,6 +101,39 @@ fn find_workspace_root(start: &Path) -> PathBuf {
     }
 }
 
+/// Shared parameters for `docker run cargo …` invocations.
+struct DockerRunArgs<'a> {
+    tag: &'a str,
+    workspace_root: &'a Path,
+    workdir: &'a str,
+    dist_dir: &'a Path,
+    target_volume: &'a str,
+    fixed_args: &'a [&'a str],
+    user_args: &'a [String],
+}
+
+impl DockerRunArgs<'_> {
+    fn base_command(&self) -> Command {
+        let mut cmd = Command::new("docker");
+        cmd.args([
+            "run",
+            "--rm",
+            "--platform",
+            "linux/amd64",
+            "--workdir",
+            self.workdir,
+            "-e",
+            "CARGO_TARGET_DIR=/cargo-target",
+        ]);
+        cmd.args(["-v", &format!("{}:/src:ro", self.workspace_root.display())]);
+        cmd.args(["-v", &format!("{}:/out:rw", self.dist_dir.display())]);
+        cmd.args(["-v", "airbender-cargo-registry:/usr/local/cargo/registry"]);
+        cmd.args(["-v", &format!("{}:/cargo-target", self.target_volume)]);
+        cmd.arg(self.tag);
+        cmd
+    }
+}
+
 /// Runs a single `cargo <subcmd>` invocation inside the pinned container.
 ///
 /// Volume mounts:
@@ -108,36 +141,11 @@ fn find_workspace_root(start: &Path) -> PathBuf {
 /// - `/out`       — dist output directory, read-write (objcopy writes artifacts here)
 /// - `airbender-cargo-registry` — shared named volume for downloaded crate sources
 /// - `<target_volume>` — per-project named volume for incremental build cache
-fn docker_run_cargo(
-    tag: &str,
-    workspace_root: &Path,
-    workdir: &str,
-    dist_dir: &Path,
-    target_volume: &str,
-    subcmd: &str,
-    fixed_args: &[&str],
-    user_args: &[String],
-    objcopy_args: &[&str],
-) -> Result<()> {
-    let mut cmd = Command::new("docker");
-    cmd.args([
-        "run",
-        "--rm",
-        "--platform",
-        "linux/amd64",
-        "--workdir",
-        workdir,
-        "-e",
-        "CARGO_TARGET_DIR=/cargo-target",
-    ]);
-    cmd.args(["-v", &format!("{}:/src:ro", workspace_root.display())]);
-    cmd.args(["-v", &format!("{}:/out:rw", dist_dir.display())]);
-    cmd.args(["-v", "airbender-cargo-registry:/usr/local/cargo/registry"]);
-    cmd.args(["-v", &format!("{target_volume}:/cargo-target")]);
-    cmd.arg(tag);
+fn docker_run_cargo(args: &DockerRunArgs<'_>, subcmd: &str, objcopy_args: &[&str]) -> Result<()> {
+    let mut cmd = args.base_command();
     cmd.args(["cargo", subcmd]);
-    cmd.args(fixed_args);
-    cmd.args(user_args);
+    cmd.args(args.fixed_args);
+    cmd.args(args.user_args);
     if !objcopy_args.is_empty() {
         cmd.arg("--");
         cmd.args(objcopy_args);
@@ -150,35 +158,11 @@ fn docker_run_cargo(
 /// `BuildError::LockfileNotReady` with an actionable fix command.
 ///
 /// Captured stderr is always forwarded to the process's stderr so build output is not lost.
-fn docker_run_cargo_build(
-    tag: &str,
-    workspace_root: &Path,
-    workdir: &str,
-    dist_dir: &Path,
-    target_volume: &str,
-    fixed_args: &[&str],
-    user_args: &[String],
-    project_display: &str,
-) -> Result<()> {
-    let mut cmd = Command::new("docker");
-    cmd.args([
-        "run",
-        "--rm",
-        "--platform",
-        "linux/amd64",
-        "--workdir",
-        workdir,
-        "-e",
-        "CARGO_TARGET_DIR=/cargo-target",
-    ]);
-    cmd.args(["-v", &format!("{}:/src:ro", workspace_root.display())]);
-    cmd.args(["-v", &format!("{}:/out:rw", dist_dir.display())]);
-    cmd.args(["-v", "airbender-cargo-registry:/usr/local/cargo/registry"]);
-    cmd.args(["-v", &format!("{target_volume}:/cargo-target")]);
-    cmd.arg(tag);
+fn docker_run_cargo_build(args: &DockerRunArgs<'_>, project_display: &str) -> Result<()> {
+    let mut cmd = args.base_command();
     cmd.args(["cargo", "build"]);
-    cmd.args(fixed_args);
-    cmd.args(user_args);
+    cmd.args(args.fixed_args);
+    cmd.args(args.user_args);
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::piped());
 
@@ -281,51 +265,26 @@ pub(crate) fn run_reproducible_build(
         ]
     };
 
+    let run_args = DockerRunArgs {
+        tag: &tag,
+        workspace_root: &workspace_root,
+        workdir: &workdir,
+        dist_dir,
+        target_volume: &target_volume,
+        fixed_args: fixed,
+        user_args: cargo_args,
+    };
+
     // 1. Compile — uses the lockfile-detecting variant so a wrong-toolchain Cargo.lock
     //    surfaces as LockfileNotReady rather than a generic process failure.
-    docker_run_cargo_build(
-        &tag,
-        &workspace_root,
-        &workdir,
-        dist_dir,
-        &target_volume,
-        fixed,
-        cargo_args,
-        &project_dir.display().to_string(),
-    )?;
+    docker_run_cargo_build(&run_args, &project_dir.display().to_string())?;
 
     // 2–4. Extract binary artifacts.
+    docker_run_cargo(&run_args, "objcopy", &["-O", "binary", "/out/app.bin"])?;
+    docker_run_cargo(&run_args, "objcopy", &["-R", ".text", "/out/app.elf"])?;
     docker_run_cargo(
-        &tag,
-        &workspace_root,
-        &workdir,
-        dist_dir,
-        &target_volume,
+        &run_args,
         "objcopy",
-        fixed,
-        cargo_args,
-        &["-O", "binary", "/out/app.bin"],
-    )?;
-    docker_run_cargo(
-        &tag,
-        &workspace_root,
-        &workdir,
-        dist_dir,
-        &target_volume,
-        "objcopy",
-        fixed,
-        cargo_args,
-        &["-R", ".text", "/out/app.elf"],
-    )?;
-    docker_run_cargo(
-        &tag,
-        &workspace_root,
-        &workdir,
-        dist_dir,
-        &target_volume,
-        "objcopy",
-        fixed,
-        cargo_args,
         &["-O", "binary", "--only-section=.text", "/out/app.text"],
     )?;
 
