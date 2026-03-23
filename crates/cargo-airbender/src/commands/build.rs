@@ -1,7 +1,9 @@
 use crate::cli::{BuildArgs, BuildProfile};
 use crate::error::{CliError, Result};
 use crate::ui;
-use airbender_build::{build_dist, BuildConfig, Profile, DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN};
+use airbender_build::{
+    build_dist, BuildConfig, Profile, DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
