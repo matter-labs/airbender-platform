@@ -237,7 +237,7 @@ impl TranspilerRunner {
             receipt: Receipt::from_registers(registers),
             cycles_executed,
             reached_end,
-            cycle_markers: Some(cycle_markers),
+            cycle_markers: Some(cycle_markers.into()),
         })
     }
 }

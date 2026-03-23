@@ -234,8 +234,9 @@ mod tests {
         assert!(host_cargo.contains("name = \"hello-airbender-host\""));
         assert!(host_cargo.contains("airbender-host"));
         assert!(host_cargo.contains("default-features = false"));
-        assert!(!host_cargo.contains("[profile.dev.package.keccak_special5]"));
-        assert!(!host_cargo.contains("[profile.release.package.setups]"));
+        assert!(host_cargo.contains("[profile.dev.package.keccak_special5]"));
+        assert!(host_cargo.contains("[profile.release.package.setups]"));
+        assert!(host_cargo.contains("avoid having to specify `RUST_MIN_STACK`"));
         assert!(host_main.contains("Program::load"));
         assert!(host_main.contains("program.dev_prover()"));
         assert!(host_main.contains("program.dev_verifier()"));
@@ -360,6 +361,7 @@ mod tests {
         assert!(root_readme.contains("CUDA-capable NVIDIA GPU"));
         assert!(root_readme.contains("ZKSYNC_USE_CUDA_STUBS=true"));
         assert!(!host_cargo.contains("default-features = false"));
+        assert!(host_cargo.contains("[profile.dev.package.keccak_special5]"));
         assert!(host_main.contains(".gpu_prover()"));
         assert!(host_main.contains("program.real_verifier(ProverLevel::RecursionUnified)"));
         assert!(host_main.contains("VerificationRequest::real(&expected_output)"));

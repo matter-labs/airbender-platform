@@ -74,16 +74,16 @@ For custom transports (e.g. tests), use `read_with(&mut transport)`.
 ## Cycle Markers
 
 Use `airbender::guest::cycle_marker()` to emit a profiling boundary that the
-transpiler runner can observe:
+transpiler runner can observe. For the common "measure this block" case, use
+`airbender::guest::record_cycles(...)`; call `cycle_marker()` directly when you
+need manual boundaries:
 
 ```rust
-use airbender::guest::cycle_marker;
+use airbender::guest::record_cycles;
 
 #[airbender::main]
-fn main() {
-    cycle_marker();
-    // work to profile
-    cycle_marker();
+fn main() -> u32 {
+    record_cycles(|| 40 + 2)
 }
 ```
 
