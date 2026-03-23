@@ -18,7 +18,20 @@ pub fn run(args: BuildArgs) -> Result<()> {
         cargo_args,
     } = args;
 
-    let project_dir = resolve_project_dir(project.as_deref())?;
+    let project_dir = match project {
+        Some(path) => path,
+        None => {
+            let invocation_cwd = std::env::current_dir().map_err(|err| {
+                CliError::with_source("failed to resolve current working directory", err)
+            })?;
+            discover_project_dir_from(&invocation_cwd)?
+        }
+    };
+
+    let manifest_path = project_dir.join("Cargo.toml");
+    if !manifest_path.is_file() {
+        return Err(missing_manifest_error(&project_dir));
+    }
 
     let mut config = BuildConfig::new(project_dir);
     config.app_name = app_name;
@@ -63,26 +76,7 @@ fn resolve_profile(profile: Option<BuildProfile>, debug: bool, release: bool) ->
     }
 }
 
-fn resolve_project_dir(project: Option<&Path>) -> Result<PathBuf> {
-    let invocation_cwd = std::env::current_dir()
-        .map_err(|err| CliError::with_source("failed to resolve current working directory", err))?;
-    resolve_project_dir_from(project, &invocation_cwd)
-}
-
-fn resolve_project_dir_from(project: Option<&Path>, invocation_cwd: &Path) -> Result<PathBuf> {
-    if let Some(project_dir) = project {
-        let project_dir = if project_dir.is_absolute() {
-            project_dir.to_path_buf()
-        } else {
-            invocation_cwd.join(project_dir)
-        };
-        return if project_dir.join("Cargo.toml").is_file() {
-            Ok(project_dir)
-        } else {
-            Err(missing_manifest_error(&project_dir))
-        };
-    }
-
+fn discover_project_dir_from(invocation_cwd: &Path) -> Result<PathBuf> {
     for candidate in invocation_cwd.ancestors() {
         if !candidate.join("Cargo.toml").is_file() {
             continue;
@@ -109,21 +103,23 @@ fn is_guest_project_dir(project_dir: &Path) -> std::io::Result<bool> {
     }
 
     let cargo_config = fs::read_to_string(cargo_config)?;
-    Ok(cargo_config_targets_guest(&cargo_config))
+    cargo_config_targets_guest(&cargo_config)
 }
 
-fn cargo_config_targets_guest(cargo_config: &str) -> bool {
-    cargo_config.lines().map(str::trim).any(|line| {
-        let Some((key, value)) = line.split_once('=') else {
-            return false;
-        };
-        if key.trim() != "target" {
-            return false;
-        }
+fn cargo_config_targets_guest(cargo_config: &str) -> std::io::Result<bool> {
+    let cargo_config = cargo_config.parse::<toml::Table>().map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to parse .cargo/config.toml: {err}"),
+        )
+    })?;
 
-        let value = value.split('#').next().unwrap_or(value).trim();
-        value.trim_matches(|ch| ch == '"' || ch == '\'') == DEFAULT_GUEST_TARGET
-    })
+    Ok(cargo_config
+        .get("build")
+        .and_then(toml::Value::as_table)
+        .and_then(|build| build.get("target"))
+        .and_then(toml::Value::as_str)
+        == Some(DEFAULT_GUEST_TARGET))
 }
 
 fn missing_manifest_error(project_dir: &Path) -> CliError {
@@ -137,11 +133,10 @@ fn missing_manifest_error(project_dir: &Path) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use airbender_build::DEFAULT_GUEST_TOOLCHAIN;
     use std::fs;
 
     #[test]
-    fn resolves_project_dir_from_parent_manifest_when_project_is_omitted() {
+    fn discovers_project_dir_from_parent_manifest_when_project_is_omitted() {
         let temp_dir = tempfile::tempdir().expect("create temp directory");
         let project_dir = temp_dir.path().join("guest");
         let nested_dir = project_dir.join("src").join("nested");
@@ -149,21 +144,7 @@ mod tests {
         write_guest_project(&project_dir);
         fs::create_dir_all(&nested_dir).expect("create nested guest directory");
 
-        let resolved = resolve_project_dir_from(None, &nested_dir).expect("resolve project dir");
-
-        assert_eq!(resolved, project_dir);
-    }
-
-    #[test]
-    fn resolves_relative_explicit_project_from_invocation_cwd() {
-        let temp_dir = tempfile::tempdir().expect("create temp directory");
-        let invocation_cwd = temp_dir.path().join("workspace");
-        let project_dir = invocation_cwd.join("guest");
-
-        write_package_manifest(&project_dir, "guest", "");
-
-        let resolved = resolve_project_dir_from(Some(Path::new("guest")), &invocation_cwd)
-            .expect("resolve explicit project");
+        let resolved = discover_project_dir_from(&nested_dir).expect("resolve project dir");
 
         assert_eq!(resolved, project_dir);
     }
@@ -181,7 +162,7 @@ mod tests {
         );
         fs::create_dir_all(&nested_dir).expect("create nested host directory");
 
-        let err = resolve_project_dir_from(None, &nested_dir).expect_err("missing guest manifest");
+        let err = discover_project_dir_from(&nested_dir).expect_err("missing guest manifest");
 
         assert_eq!(
             err.to_string(),
@@ -206,7 +187,7 @@ mod tests {
         write_package_manifest(&project_dir, "host", "");
         fs::create_dir_all(&nested_dir).expect("create nested host directory");
 
-        let err = resolve_project_dir_from(None, &nested_dir).expect_err("missing guest manifest");
+        let err = discover_project_dir_from(&nested_dir).expect_err("missing guest manifest");
 
         assert_eq!(
             err.to_string(),
@@ -224,7 +205,7 @@ mod tests {
         let nested_dir = temp_dir.path().join("guest").join("src");
         fs::create_dir_all(&nested_dir).expect("create nested guest directory");
 
-        let err = resolve_project_dir_from(None, &nested_dir).expect_err("missing manifest");
+        let err = discover_project_dir_from(&nested_dir).expect_err("missing manifest");
 
         assert_eq!(
             err.to_string(),
@@ -237,21 +218,15 @@ mod tests {
     }
 
     #[test]
-    fn resolves_project_dir_when_guest_toolchain_is_customized() {
-        let temp_dir = tempfile::tempdir().expect("create temp directory");
-        let project_dir = temp_dir.path().join("guest");
-        let nested_dir = project_dir.join("src").join("nested");
-
-        write_guest_project(&project_dir);
-        write_file(
-            &project_dir.join("rust-toolchain.toml"),
-            "[toolchain]\nchannel = \"nightly\"\n",
+    fn detects_guest_target_from_cargo_config_toml() {
+        let cargo_config = format!(
+            "[build]\nrustflags = [\"-C\", \"link-arg=-Tmemory.x\"]\ntarget = \"{DEFAULT_GUEST_TARGET}\"\n"
         );
-        fs::create_dir_all(&nested_dir).expect("create nested guest directory");
 
-        let resolved = resolve_project_dir_from(None, &nested_dir).expect("resolve project dir");
+        let targets_guest =
+            cargo_config_targets_guest(&cargo_config).expect("parse guest cargo config");
 
-        assert_eq!(resolved, project_dir);
+        assert!(targets_guest);
     }
 
     fn write_package_manifest(project_dir: &Path, name: &str, suffix: &str) {
@@ -269,10 +244,6 @@ mod tests {
         write_file(
             &project_dir.join(".cargo/config.toml"),
             &format!("[build]\ntarget = \"{DEFAULT_GUEST_TARGET}\"\n"),
-        );
-        write_file(
-            &project_dir.join("rust-toolchain.toml"),
-            &format!("[toolchain]\nchannel = \"{DEFAULT_GUEST_TOOLCHAIN}\"\n"),
         );
     }
 
