@@ -24,7 +24,7 @@ pub trait Runner {
 }
 
 /// Execution outcome for transpiler based runners.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ExecutionResult {
     pub receipt: Receipt,
     pub cycles_executed: usize,

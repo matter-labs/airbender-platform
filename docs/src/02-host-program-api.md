@@ -101,8 +101,8 @@ Verification APIs can enforce expected public outputs (`x10..x17`) in addition t
 
 `#[airbender::main]` return values and `guest::commit(...)` map to `receipt.output`.
 
-When cycle-marker collection is enabled on the transpiler runner,
-`ExecutionResult::cycle_markers` contains the captured marker snapshots.
+For non-JIT transpiler runs, `ExecutionResult::cycle_markers` contains the
+captured marker snapshots. JIT runs return `None`.
 
 ## Prover Construction
 
@@ -115,8 +115,8 @@ When cycle-marker collection is enabled on the transpiler runner,
 
 ## Runner Construction
 
-- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, `with_cycle_markers(...)`, then `build()`.
-- `with_cycle_markers()` is for transpiler profiling only and is not compatible with `with_jit()`.
+- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, `with_jit()`, then `build()`.
+- Cycle markers are collected automatically for non-JIT transpiler runs.
 
 ## Cycle Budget
 

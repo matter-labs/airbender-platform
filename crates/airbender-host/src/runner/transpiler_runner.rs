@@ -1,5 +1,4 @@
 use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
-use crate::cycle_marker::CycleMarker;
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
@@ -24,7 +23,6 @@ pub struct TranspilerRunnerBuilder {
     cycles: Option<usize>,
     text_path: Option<PathBuf>,
     flamegraph: Option<FlamegraphConfig>,
-    collect_cycle_markers: bool,
     use_jit: bool,
 }
 
@@ -35,7 +33,6 @@ impl TranspilerRunnerBuilder {
             cycles: None,
             text_path: None,
             flamegraph: None,
-            collect_cycle_markers: false,
             use_jit: false,
         }
     }
@@ -69,23 +66,12 @@ impl TranspilerRunnerBuilder {
         self
     }
 
-    pub fn with_cycle_markers(mut self) -> Self {
-        self.collect_cycle_markers = true;
-        self
-    }
-
     pub fn with_jit(mut self) -> Self {
         self.use_jit = true;
         self
     }
 
     pub fn build(self) -> Result<TranspilerRunner> {
-        if self.use_jit && self.collect_cycle_markers {
-            return Err(HostError::Runner(
-                "cycle markers are not supported with JIT execution".to_string(),
-            ));
-        }
-
         if self.use_jit && cfg!(not(target_arch = "x86_64")) {
             return Err(HostError::Transpiler(
                 "JIT execution is only available on x86_64 targets".to_string(),
@@ -105,7 +91,6 @@ impl TranspilerRunnerBuilder {
             app_text_path,
             cycles,
             flamegraph: self.flamegraph,
-            collect_cycle_markers: self.collect_cycle_markers,
             use_jit: self.use_jit,
         })
     }
@@ -117,7 +102,6 @@ pub struct TranspilerRunner {
     app_text_path: PathBuf,
     cycles: usize,
     flamegraph: Option<FlamegraphConfig>,
-    collect_cycle_markers: bool,
     use_jit: bool,
 }
 
@@ -214,59 +198,27 @@ impl TranspilerRunner {
         let mut state = State::initial_with_counters(DelegationsCounters::default());
         let mut non_determinism_source = QuasiUARTSource::new_with_reads(input_words.to_vec());
 
-        let (reached_end, cycle_markers) = match (profiler, self.collect_cycle_markers) {
-            (Some(profiler), true) => {
-                let (result, marker_state) = CycleMarkerHooks::with(|| {
-                    VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled_with_flamegraph::<
-                        _,
-                        _,
-                        _,
-                    >(
-                        &mut state,
-                        &mut ram,
-                        &mut (),
-                        &instruction_tape,
-                        self.cycles,
-                        &mut non_determinism_source,
-                        profiler,
-                    )
-                });
-                let reached_end = result.map_err(|err| {
+        let (reached_end, cycle_markers) = CycleMarkerHooks::with(|| match profiler {
+            Some(profiler) => {
+                VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled_with_flamegraph::<
+                    _,
+                    _,
+                    _,
+                >(
+                    &mut state,
+                    &mut ram,
+                    &mut (),
+                    &instruction_tape,
+                    self.cycles,
+                    &mut non_determinism_source,
+                    profiler,
+                )
+                .map_err(|err| {
                     HostError::Transpiler(format!("failed to generate flamegraph: {err}"))
-                })?;
-                (reached_end, Some(CycleMarker::from(marker_state)))
+                })
             }
-            (Some(profiler), false) => {
-                let reached_end =
-                    VM::<DelegationsCounters>::run_basic_unrolled_with_flamegraph::<_, _, _>(
-                        &mut state,
-                        &mut ram,
-                        &mut (),
-                        &instruction_tape,
-                        self.cycles,
-                        &mut non_determinism_source,
-                        profiler,
-                    )
-                    .map_err(|err| {
-                        HostError::Transpiler(format!("failed to generate flamegraph: {err}"))
-                    })?;
-                (reached_end, None)
-            }
-            (None, true) => {
-                let (reached_end, marker_state) = CycleMarkerHooks::with(|| {
-                    VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled::<_, _, _>(
-                        &mut state,
-                        &mut ram,
-                        &mut (),
-                        &instruction_tape,
-                        self.cycles,
-                        &mut non_determinism_source,
-                    )
-                });
-                (reached_end, Some(CycleMarker::from(marker_state)))
-            }
-            (None, false) => (
-                VM::<DelegationsCounters>::run_basic_unrolled::<_, _, _>(
+            None => Ok(
+                VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled::<_, _, _>(
                     &mut state,
                     &mut ram,
                     &mut (),
@@ -274,9 +226,9 @@ impl TranspilerRunner {
                     self.cycles,
                     &mut non_determinism_source,
                 ),
-                None,
             ),
-        };
+        });
+        let reached_end = reached_end?;
 
         let cycles_executed = ((state.timestamp - INITIAL_TIMESTAMP) / TIMESTAMP_STEP) as usize;
         let registers = state.registers.map(|register| register.value);
@@ -285,7 +237,7 @@ impl TranspilerRunner {
             receipt: Receipt::from_registers(registers),
             cycles_executed,
             reached_end,
-            cycle_markers,
+            cycle_markers: Some(cycle_markers),
         })
     }
 }
@@ -367,6 +319,7 @@ mod tests {
     const ADDI_OPCODE: u32 = 0x00100093; // addi x1, x0, 1
     const LOOP_OPCODE: u32 = 0x0000006f; // jal x0, 0
 
+    // TODO: Evaluate how low-level do we want tests to be
     #[test]
     fn collects_cycle_markers_for_interpreter_runs() {
         let dir = unique_temp_dir("cycle-markers");
@@ -380,7 +333,6 @@ mod tests {
         let runner = TranspilerRunnerBuilder::new(&bin_path)
             .with_text_path(&text_path)
             .with_cycles(program.len())
-            .with_cycle_markers()
             .build()
             .expect("build runner");
         let execution = runner.run(&[]).expect("run program");
@@ -399,20 +351,27 @@ mod tests {
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn rejects_cycle_markers_with_jit() {
-        let err = match TranspilerRunnerBuilder::new("ignored.bin")
-            .with_cycle_markers()
+    fn jit_runs_do_not_collect_cycle_markers() {
+        let dir = unique_temp_dir("jit-cycle-markers");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let bin_path = dir.join("app.bin");
+        let text_path = dir.join("app.text");
+        let program = [ADDI_OPCODE, LOOP_OPCODE];
+        write_program(&bin_path, &program);
+        write_program(&text_path, &program);
+
+        let runner = TranspilerRunnerBuilder::new(&bin_path)
+            .with_text_path(&text_path)
+            .with_cycles(program.len())
             .with_jit()
             .build()
-        {
-            Ok(_) => panic!("jit marker collection must fail"),
-            Err(err) => err,
-        };
+            .expect("build runner");
+        let execution = runner.run(&[]).expect("run program");
 
-        assert_eq!(
-            err.to_string(),
-            "runner error: cycle markers are not supported with JIT execution"
-        );
+        assert_eq!(execution.receipt.registers[1], 1);
+        assert!(execution.cycle_markers.is_none());
+
+        std::fs::remove_dir_all(&dir).expect("remove temp dir");
     }
 
     fn write_program(path: &Path, program: &[u32]) {
