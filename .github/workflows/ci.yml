@@ -73,3 +73,7 @@ jobs:
 
           # Intentionally only verify command success and proof artifact presence for now.
           test -f "$tmp_dir/proof.bin"
+      - name: Build and run cycle markers example
+        run: |
+          cargo airbender build --project examples/cycle-markers/guest
+          cargo run --manifest-path examples/cycle-markers/host/Cargo.toml --locked

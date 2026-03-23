@@ -27,6 +27,7 @@ cargo run -- --prove
 
 ## Examples
 
+- `cycle-markers` (transpiler cycle profiling + delegation snapshots)
 - `fibonacci`
 - `u256-add` (no_std + `ruint`)
 - `std-btreemap` (std + `BTreeMap`)

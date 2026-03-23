@@ -77,6 +77,7 @@ High-level:
 - `Verifier::generate_vk()`
 - `Verifier::verify(&proof, &vk, request)`
 - `VerificationRequest::dev(...)` / `VerificationRequest::real(...)`
+- `Mark::diff(...)` to derive the work between two collected cycle markers
 
 Lower-level:
 
@@ -100,6 +101,9 @@ Verification APIs can enforce expected public outputs (`x10..x17`) in addition t
 
 `#[airbender::main]` return values and `guest::commit(...)` map to `receipt.output`.
 
+When cycle-marker collection is enabled on the transpiler runner,
+`ExecutionResult::cycle_markers` contains the captured marker snapshots.
+
 ## Prover Construction
 
 - `DevProverBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, then `build()`.
@@ -111,7 +115,8 @@ Verification APIs can enforce expected public outputs (`x10..x17`) in addition t
 
 ## Runner Construction
 
-- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, then `build()`.
+- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, `with_cycle_markers(...)`, then `build()`.
+- `with_cycle_markers()` is for transpiler profiling only and is not compatible with `with_jit()`.
 
 ## Cycle Budget
 
@@ -125,6 +130,7 @@ If no explicit cycle limit is set through your flow, a default high value will b
 
 See full host-side usage in:
 
+- [`examples/cycle-markers/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers/host)
 - [`examples/fibonacci/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/host)
 - [`examples/u256-add/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/host)
 - [`examples/std-btreemap/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/host)

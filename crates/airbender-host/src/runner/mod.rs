@@ -1,3 +1,4 @@
+use crate::cycle_marker::CycleMarker;
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ pub struct ExecutionResult {
     pub receipt: Receipt,
     pub cycles_executed: usize,
     pub reached_end: bool,
+    pub cycle_markers: Option<CycleMarker>,
 }
 
 /// Resolve the cycle budget from an explicit override or default.

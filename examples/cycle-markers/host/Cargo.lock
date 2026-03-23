@@ -77,6 +77,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "airbender-cycle-markers-host"
+version = "0.1.0"
+dependencies = [
+ "airbender-host",
+]
+
+[[package]]
 name = "airbender-host"
 version = "0.1.0"
 dependencies = [
@@ -90,14 +97,6 @@ dependencies = [
  "sha3",
  "thiserror",
  "tracing",
-]
-
-[[package]]
-name = "airbender-u256-add-host"
-version = "0.1.0"
-dependencies = [
- "airbender-host",
- "ruint",
 ]
 
 [[package]]
