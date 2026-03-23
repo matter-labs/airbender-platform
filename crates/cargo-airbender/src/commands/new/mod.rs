@@ -234,13 +234,15 @@ mod tests {
         assert!(host_cargo.contains("name = \"hello-airbender-host\""));
         assert!(host_cargo.contains("airbender-host"));
         assert!(host_cargo.contains("default-features = false"));
-        assert!(host_cargo.contains("[profile.dev.package.keccak_special5]"));
-        assert!(host_cargo.contains("[profile.release.package.setups]"));
+        assert!(!host_cargo.contains("[profile.dev.package.keccak_special5]"));
+        assert!(!host_cargo.contains("[profile.release.package.setups]"));
         assert!(host_main.contains("Program::load"));
         assert!(host_main.contains("program.dev_prover()"));
         assert!(host_main.contains("program.dev_verifier()"));
         assert!(host_toolchain.contains(&format!("channel = \"{}\"", DEFAULT_GUEST_TOOLCHAIN)));
         assert!(!host_toolchain.contains("components"));
+        assert!(root_readme.contains("cargo run --release"));
+        assert!(root_readme.contains("cargo run --release -- --prove"));
 
         fs::remove_dir_all(&root).expect("remove test directories");
     }

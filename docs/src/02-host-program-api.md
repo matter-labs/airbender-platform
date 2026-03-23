@@ -16,6 +16,8 @@ GPU support is enabled by default. To keep a dev-only host binary, disable defau
 airbender-host = { path = "../../crates/airbender-host", default-features = false }
 ```
 
+Prefer `cargo build --release` / `cargo run --release` for host binaries.
+
 ## Core Workflow with `Program`
 
 `Program` is the highest-level API.

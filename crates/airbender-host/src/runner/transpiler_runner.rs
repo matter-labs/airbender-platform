@@ -313,7 +313,7 @@ fn read_u32_words(path: &Path) -> Result<Vec<u32>> {
 mod tests {
     use super::TranspilerRunnerBuilder;
     use crate::runner::Runner;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     const MARKER_OPCODE: u32 = 0x7ff01073; // csrrw x0, 2047, x0
     const ADDI_OPCODE: u32 = 0x00100093; // addi x1, x0, 1
@@ -322,10 +322,9 @@ mod tests {
     // TODO: Evaluate how low-level do we want tests to be
     #[test]
     fn collects_cycle_markers_for_interpreter_runs() {
-        let dir = unique_temp_dir("cycle-markers");
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let bin_path = dir.join("app.bin");
-        let text_path = dir.join("app.text");
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let bin_path = dir.path().join("app.bin");
+        let text_path = dir.path().join("app.text");
         let program = [MARKER_OPCODE, ADDI_OPCODE, MARKER_OPCODE, LOOP_OPCODE];
         write_program(&bin_path, &program);
         write_program(&text_path, &program);
@@ -345,17 +344,14 @@ mod tests {
         let diff = markers.markers[1].diff(&markers.markers[0]);
         assert_eq!(diff.cycles, 1);
         assert!(diff.delegations.is_empty());
-
-        std::fs::remove_dir_all(&dir).expect("remove temp dir");
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn jit_runs_do_not_collect_cycle_markers() {
-        let dir = unique_temp_dir("jit-cycle-markers");
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let bin_path = dir.join("app.bin");
-        let text_path = dir.join("app.text");
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let bin_path = dir.path().join("app.bin");
+        let text_path = dir.path().join("app.text");
         let program = [ADDI_OPCODE, LOOP_OPCODE];
         write_program(&bin_path, &program);
         write_program(&text_path, &program);
@@ -370,23 +366,10 @@ mod tests {
 
         assert_eq!(execution.receipt.registers[1], 1);
         assert!(execution.cycle_markers.is_none());
-
-        std::fs::remove_dir_all(&dir).expect("remove temp dir");
     }
 
     fn write_program(path: &Path, program: &[u32]) {
         let bytes: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();
         std::fs::write(path, bytes).expect("write test program");
-    }
-
-    fn unique_temp_dir(label: &str) -> PathBuf {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time must be after unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "airbender-host-runner-{label}-{}-{now}",
-            std::process::id()
-        ))
     }
 }

@@ -153,6 +153,7 @@ dependencies = [
  "serde",
  "sha2",
  "sha3",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]

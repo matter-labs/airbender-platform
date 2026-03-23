@@ -76,4 +76,4 @@ jobs:
       - name: Build and run cycle markers example
         run: |
           cargo airbender build --project examples/cycle-markers/guest
-          cargo run --manifest-path examples/cycle-markers/host/Cargo.toml --locked
+          cargo run --release --manifest-path examples/cycle-markers/host/Cargo.toml --locked

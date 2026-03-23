@@ -22,5 +22,5 @@ cargo airbender build
 
 ```sh
 cd examples/cycle-markers/host
-cargo run
+cargo run --release
 ```
