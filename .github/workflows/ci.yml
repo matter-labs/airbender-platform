@@ -56,7 +56,7 @@ jobs:
       - name: Install cargo-binutils
         run: cargo install cargo-binutils --locked
       - name: Install cargo-airbender
-        run: cargo install --path crates/cargo-airbender --locked --force --debug
+        run: cargo install --path crates/cargo-airbender --locked --force
       - name: Run cargo-airbender integration flow
         run: |
           # TODO: this is a mess, but it's better than nothing -- to be properly refactored.
@@ -73,10 +73,6 @@ jobs:
 
           # Intentionally only verify command success and proof artifact presence for now.
           test -f "$tmp_dir/proof.bin"
-      - name: Build and run cycle markers example
-        run: |
-          cargo airbender build --project examples/cycle-markers/guest -- --locked
-          cargo run --release --manifest-path examples/cycle-markers/host/Cargo.toml --locked
 
   examples:
     runs-on: ubuntu-latest
@@ -91,7 +87,11 @@ jobs:
       - name: Install cargo-binutils
         run: cargo install cargo-binutils --locked
       - name: Install cargo-airbender
-        run: cargo install --path crates/cargo-airbender --locked --force --debug
+        run: cargo install --path crates/cargo-airbender --locked --force
+      - name: Build and run cycle markers example
+        run: |
+          cargo airbender build --project examples/cycle-markers/guest -- --locked
+          cargo run --release --manifest-path examples/cycle-markers/host/Cargo.toml --locked
       - name: Build and prove fibonacci example with dev prover
         run: |
           cargo airbender build --project examples/fibonacci/guest -- --locked
