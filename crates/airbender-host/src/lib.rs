@@ -36,3 +36,12 @@ pub use vk::{
     compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
     UnrolledVk,
 };
+
+/// Raw Airbender re-exports without stability guarantees.
+///
+/// These items are not recommended for normal use. They are exposed for rare
+/// cases, for example when a project depends on both `airbender-host` and
+/// direct Airbender crates at the same time.
+pub mod raw {
+    pub use execution_utils::unrolled::UnrolledProgramProof;
+}
