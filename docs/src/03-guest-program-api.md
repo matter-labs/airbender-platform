@@ -71,6 +71,26 @@ fn main() -> u32 {
 
 For custom transports (e.g. tests), use `read_with(&mut transport)`.
 
+## Cycle Markers
+
+Use `airbender::guest::cycle_marker()` to emit a profiling boundary that the
+transpiler runner can observe. For the common "measure this block" case, use
+`airbender::guest::record_cycles(...)`; call `cycle_marker()` directly when you
+need manual boundaries:
+
+```rust
+use airbender::guest::record_cycles;
+
+#[airbender::main]
+fn main() -> u32 {
+    record_cycles(|| 40 + 2)
+}
+```
+
+Cycle markers are intended for transpiler profiling only. Real CPU/GPU proving
+rejects binaries that contain marker CSRs, so treat them as development-only
+artifacts.
+
 ## Committing Output
 
 You have two common patterns:
@@ -107,6 +127,7 @@ This keeps guest-host output contracts explicit and stable.
 
 See end-to-end guest code in:
 
+- [`examples/cycle-markers/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers/guest)
 - [`examples/fibonacci/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/guest)
 - [`examples/u256-add/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/guest)
 - [`examples/std-btreemap/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/guest)

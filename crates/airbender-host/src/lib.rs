@@ -1,5 +1,6 @@
 //! Host-side APIs for executing, proving, and verifying Airbender programs.
 
+mod cycle_marker;
 mod error;
 mod inputs;
 mod program;
@@ -11,6 +12,7 @@ mod verifier;
 mod vk;
 
 pub use airbender_core::guest::Commit;
+pub use cycle_marker::{CycleMarker, Mark};
 pub use error::{HostError, Result};
 pub use inputs::Inputs;
 pub use program::Program;
@@ -34,3 +36,12 @@ pub use vk::{
     compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
     UnrolledVk,
 };
+
+/// Raw Airbender re-exports without stability guarantees.
+///
+/// These items are not recommended for normal use. They are exposed for rare
+/// cases, for example when a project depends on both `airbender-host` and
+/// direct Airbender crates at the same time.
+pub mod raw {
+    pub use execution_utils::unrolled::UnrolledProgramProof;
+}

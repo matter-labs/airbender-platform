@@ -160,13 +160,14 @@ You can also run the generated host flow:
 
 ```sh
 cd ../host
-cargo run
-cargo run -- --prove
+cargo run --release
+cargo run --release -- --prove
 ```
 
 By default, proving uses the dev backend and does not require CUDA.
 `airbender-host` exposes GPU proving by default; if you disabled default features in your host
 dependency, re-enable `gpu-prover` to call GPU APIs.
+Prefer `--release` when building or running host binaries.
 
 ## Prefer Full End-to-End Examples
 

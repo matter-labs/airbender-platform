@@ -14,10 +14,12 @@ This project provides:
     - Project scaffolding: entrypoint, `std` bindings, allocator.
     - Reading input from host.
     - Committing values.
+    - Emitting cycle markers for transpiler profiling.
     - Passing debug logs.
     - Accessing prover-accelerated crypto primitives.
 - Host SDK: a set of utilities to interact with your program:
     - Load and run RISC-V projects from Rust.
+    - Collect cycle-marker snapshots from transpiler runs.
     - Generate verification keys, prove execution, verify proofs.
 
 ## Documentation
