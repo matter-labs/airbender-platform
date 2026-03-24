@@ -3,27 +3,87 @@
 //! Runs `cargo build` and `cargo objcopy` inside a pinned container so the
 //! same source always produces bit-for-bit identical artifacts regardless of
 //! the host toolchain or OS environment.
+//!
+//! # Build strategy
+//!
+//! ```text
+//! docker run -v workspace:/src:ro  →  docker cp <artifacts out>  →  docker rm
+//! ```
+//!
+//! Source is bind-mounted read-only (no host writes). Artifacts are copied out
+//! with `docker cp`, which writes files as the host user — no root-owned files
+//! ever land on the host filesystem. The container is removed by a `TempContainer`
+//! RAII guard on success, failure, or panic.
+//!
+//! # Volume strategy
+//!
+//! | Volume | Scope | Lifetime |
+//! |---|---|---|
+//! | `airbender-cargo-registry` | shared across all projects | persistent (crate download cache) |
+//!
+//! The `/cargo-target` and `/dist` directories live in the container's writable
+//! layer and are discarded when the container is removed at end of build.
+//!
+//! # Image tag
+//!
+//! The image tag is `airbender-build:<toolchain>` where `<toolchain>` is
+//! `DEFAULT_GUEST_TOOLCHAIN`. To update the toolchain or rotate the base image
+//! digest, change `DEFAULT_GUEST_TOOLCHAIN` in `constants.rs`; the new tag
+//! forces a fresh `docker build`.
+//!
+//! # Cleanup
+//!
+//! Use [`clean_reproducible_volumes`] (exposed as `cargo airbender clean`) to remove
+//! the shared registry cache and any stopped `airbender-build` containers left by
+//! interrupted builds.
 
 use crate::constants::{DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN};
 use crate::errors::{BuildError, Result};
 use crate::utils::run_command;
 use airbender_core::host::manifest::Profile;
-use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Dockerfile template embedded at compile time.
-/// `{{TOOLCHAIN_DATE}}` is replaced at runtime with `DEFAULT_GUEST_TOOLCHAIN`.
-const DOCKERFILE_TEMPLATE: &str = include_str!("../docker/Dockerfile.template");
+// ---------------------------------------------------------------------------
+// Image helpers (stateless)
+// ---------------------------------------------------------------------------
 
-/// Returns the Dockerfile contents with the toolchain date substituted in.
+/// Returns the Dockerfile for the reproducible build image.
+///
+/// Base image digest sourced from `zksync-airbender/tools/reproduce/Dockerfile`.
+/// To rotate the base image digest, update the sha256 hash below and bump
+/// `DEFAULT_GUEST_TOOLCHAIN` in `constants.rs` to force a fresh `docker build`.
 fn dockerfile_contents() -> String {
-    DOCKERFILE_TEMPLATE.replace("{{TOOLCHAIN_DATE}}", DEFAULT_GUEST_TOOLCHAIN)
+    format!(
+        r#"FROM debian:bullseye-slim@sha256:f527627d07c18abf87313c341ee8ef1b36f106baa8b6b6dc33f4c872d988b651
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        build-essential \
+        clang \
+        git \
+        libssl-dev \
+        pkg-config \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --no-modify-path --default-toolchain {DEFAULT_GUEST_TOOLCHAIN}
+
+RUN rustup component add llvm-tools-preview rust-src && \
+    cargo install cargo-binutils --locked
+
+WORKDIR /build
+"#
+    )
 }
 
-/// Returns the Docker image tag for the current toolchain, e.g. `airbender-build:nightly-2026-02-10`.
-/// Changing `DEFAULT_GUEST_TOOLCHAIN` automatically produces a new tag and triggers a fresh build.
 fn docker_image_tag() -> String {
     format!("airbender-build:{}", DEFAULT_GUEST_TOOLCHAIN)
 }
@@ -44,7 +104,6 @@ fn ensure_docker_available() -> Result<()> {
 }
 
 /// Builds the Docker image if it does not already exist for the current toolchain tag.
-/// On subsequent calls the image is found by tag and the build is skipped entirely.
 fn ensure_image_built() -> Result<()> {
     let tag = docker_image_tag();
 
@@ -58,28 +117,31 @@ fn ensure_image_built() -> Result<()> {
         return Ok(());
     }
 
-    // Write the substituted Dockerfile to a stable temp path.
-    let dockerfile_path =
-        std::env::temp_dir().join(format!("airbender-{}.dockerfile", DEFAULT_GUEST_TOOLCHAIN));
-    std::fs::write(&dockerfile_path, dockerfile_contents())?;
+    // Pass `-` as the build context so Docker reads the Dockerfile from stdin —
+    // no temp files or directories needed.
+    let mut child = Command::new("docker")
+        .args(["build", "--platform", "linux/amd64", "-t", &tag, "-"])
+        .stdin(Stdio::piped())
+        .spawn()?;
 
-    // Use an empty directory as the build context — the Dockerfile has no COPY directives.
-    let ctx_dir = std::env::temp_dir().join("airbender-docker-ctx");
-    std::fs::create_dir_all(&ctx_dir)?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(dockerfile_contents().as_bytes())?;
+    }
 
-    let mut cmd = Command::new("docker");
-    cmd.args([
-        "build",
-        "--platform",
-        "linux/amd64",
-        "-t",
-        &tag,
-        "-f",
-        dockerfile_path.to_str().unwrap(),
-        ctx_dir.to_str().unwrap(),
-    ]);
-    run_command(cmd, "docker build")
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(BuildError::ProcessFailed {
+            cmd: "docker build".to_string(),
+            status,
+        });
+    }
+    Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Build helpers (used by ReproducibleBuild)
+// ---------------------------------------------------------------------------
 
 /// Walks up from `start` to find the nearest directory containing a `Cargo.toml`
 /// with a `[workspace]` section. Falls back to `start` if none is found.
@@ -101,195 +163,234 @@ fn find_workspace_root(start: &Path) -> PathBuf {
     }
 }
 
-/// Shared parameters for `docker run cargo …` invocations.
-struct DockerRunArgs<'a> {
-    tag: &'a str,
-    workspace_root: &'a Path,
-    workdir: &'a str,
-    dist_dir: &'a Path,
-    target_volume: &'a str,
-    fixed_args: &'a [&'a str],
-    user_args: &'a [String],
-}
+/// RAII guard that force-removes a named Docker container when dropped.
+struct TempContainer(String);
 
-impl DockerRunArgs<'_> {
-    fn base_command(&self) -> Command {
-        let mut cmd = Command::new("docker");
-        cmd.args([
-            "run",
-            "--rm",
-            "--platform",
-            "linux/amd64",
-            "--workdir",
-            self.workdir,
-            "-e",
-            "CARGO_TARGET_DIR=/cargo-target",
-        ]);
-        cmd.args(["-v", &format!("{}:/src:ro", self.workspace_root.display())]);
-        cmd.args(["-v", &format!("{}:/out:rw", self.dist_dir.display())]);
-        cmd.args(["-v", "airbender-cargo-registry:/usr/local/cargo/registry"]);
-        cmd.args(["-v", &format!("{}:/cargo-target", self.target_volume)]);
-        cmd.arg(self.tag);
-        cmd
+impl Drop for TempContainer {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &self.0])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
-/// Runs a single `cargo <subcmd>` invocation inside the pinned container.
+fn container_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let id = (nanos ^ (std::process::id() as u128)) as u64;
+    format!("airbender-build-{id:016x}")
+}
+
+/// Builds the `sh -c` command string: `cargo build` then three `cargo objcopy` invocations.
+fn container_sh_command(
+    bin_name: &str,
+    target_str: &str,
+    profile_flag: &str,
+    cargo_args: &[String],
+) -> String {
+    let mut fixed: Vec<&str> = Vec::new();
+    if !profile_flag.is_empty() {
+        fixed.push(profile_flag);
+    }
+    fixed.extend(["--bin", bin_name, "--target", target_str, "--locked"]);
+    let extra = cargo_args.join(" ");
+    let fixed = if extra.is_empty() {
+        fixed.join(" ")
+    } else {
+        format!("{} {extra}", fixed.join(" "))
+    };
+
+    let build = format!("cargo build {fixed}");
+    let obj1 = format!("cargo objcopy {fixed} -- -O binary /dist/app.bin");
+    let obj2 = format!("cargo objcopy {fixed} -- -R .text /dist/app.elf");
+    let obj3 = format!("cargo objcopy {fixed} -- -O binary --only-section=.text /dist/app.text");
+
+    format!("mkdir -p /dist && {build} && {obj1} && {obj2} && {obj3}")
+}
+
+// ---------------------------------------------------------------------------
+// ReproducibleBuild
+// ---------------------------------------------------------------------------
+
+/// A resolved, ready-to-run reproducible build.
 ///
-/// Volume mounts:
-/// - `/src`       — workspace root, read-only (so path dependencies resolve correctly)
-/// - `/out`       — dist output directory, read-write (objcopy writes artifacts here)
-/// - `airbender-cargo-registry` — shared named volume for downloaded crate sources
-/// - `<target_volume>` — per-project named volume for incremental build cache
-fn docker_run_cargo(args: &DockerRunArgs<'_>, subcmd: &str, objcopy_args: &[&str]) -> Result<()> {
-    let mut cmd = args.base_command();
-    cmd.args(["cargo", subcmd]);
-    cmd.args(args.fixed_args);
-    cmd.args(args.user_args);
-    if !objcopy_args.is_empty() {
-        cmd.arg("--");
-        cmd.args(objcopy_args);
-    }
-    run_command(cmd, &format!("docker run cargo {subcmd}"))
+/// `new` performs all pre-flight checks (Cargo.lock, Docker availability, image)
+/// and resolves workspace layout. `run` executes the container and extracts artifacts.
+#[derive(Debug)]
+pub(crate) struct ReproducibleBuild {
+    tag: String,
+    workspace_root: PathBuf,
+    workdir: String,
+    sh_cmd: String,
+    project_display: String,
 }
 
-/// Like `docker_run_cargo` but captures stderr so that a `--locked` failure from cargo
-/// (caused by a Cargo.lock generated with a different toolchain) is remapped to
-/// `BuildError::LockfileNotReady` with an actionable fix command.
-///
-/// Captured stderr is always forwarded to the process's stderr so build output is not lost.
-fn docker_run_cargo_build(args: &DockerRunArgs<'_>, project_display: &str) -> Result<()> {
-    let mut cmd = args.base_command();
-    cmd.args(["cargo", "build"]);
-    cmd.args(args.fixed_args);
-    cmd.args(args.user_args);
-    cmd.stdout(Stdio::inherit());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd.spawn()?;
-    let mut stderr_buf = String::new();
-    if let Some(mut stderr) = child.stderr.take() {
-        stderr.read_to_string(&mut stderr_buf)?;
-    }
-    let status = child.wait()?;
-
-    // Always forward captured stderr so build diagnostics are visible.
-    eprint!("{stderr_buf}");
-
-    if !status.success() {
-        if stderr_buf.contains("cannot update the lock file") {
+impl ReproducibleBuild {
+    /// Validates pre-conditions and resolves build parameters.
+    ///
+    /// Fails fast with [`BuildError::LockfileNotReady`] if `Cargo.lock` is absent,
+    /// or with Docker errors if the daemon is unreachable or the image cannot be built.
+    pub(crate) fn new(
+        project_dir: &Path,
+        bin_name: &str,
+        target: Option<&str>,
+        profile: Profile,
+        cargo_args: &[String],
+    ) -> Result<Self> {
+        if !project_dir.join("Cargo.lock").exists() {
             return Err(BuildError::LockfileNotReady {
-                project: project_display.to_string(),
+                project: project_dir.display().to_string(),
                 toolchain: DEFAULT_GUEST_TOOLCHAIN,
             });
         }
-        return Err(BuildError::ProcessFailed {
-            cmd: "docker run cargo build".to_string(),
-            status,
-        });
+
+        ensure_docker_available()?;
+        ensure_image_built()?;
+
+        let target_str = target.unwrap_or(DEFAULT_GUEST_TARGET);
+        let profile_flag = if profile == Profile::Release {
+            "--release"
+        } else {
+            ""
+        };
+
+        let canonical_project = project_dir
+            .canonicalize()
+            .unwrap_or_else(|_| project_dir.to_path_buf());
+        let workspace_root = find_workspace_root(&canonical_project);
+        let rel = canonical_project
+            .strip_prefix(&workspace_root)
+            .unwrap_or(Path::new(""));
+
+        Ok(Self {
+            tag: docker_image_tag(),
+            workdir: format!("/src/{}", rel.display()),
+            sh_cmd: container_sh_command(bin_name, target_str, profile_flag, cargo_args),
+            project_display: project_dir.display().to_string(),
+            workspace_root,
+        })
     }
-    Ok(())
+
+    /// Runs the build container and copies `app.bin`, `app.elf`, `app.text` into `dist_dir`.
+    pub(crate) fn run(&self, dist_dir: &Path) -> Result<()> {
+        // Guard registered before any Docker call — no orphan window.
+        let name = container_name();
+        let _guard = TempContainer(name.clone());
+        self.run_container(&name)?;
+        self.cp_artifacts(&name, dist_dir)
+    }
+
+    /// Starts the container and waits for it to exit, capturing stderr for error remapping.
+    fn run_container(&self, name: &str) -> Result<()> {
+        let mut cmd = Command::new("docker");
+        cmd.args([
+            "run",
+            "--name",
+            name,
+            "--platform",
+            "linux/amd64",
+            "--workdir",
+            &self.workdir,
+            "-e",
+            "CARGO_TARGET_DIR=/cargo-target",
+            "-v",
+            &format!("{}:/src:ro", self.workspace_root.display()),
+            "-v",
+            "airbender-cargo-registry:/usr/local/cargo/registry",
+            &self.tag,
+            "sh",
+            "-c",
+            &self.sh_cmd,
+        ]);
+        cmd.stdout(Stdio::inherit());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()?;
+        let mut stderr_buf = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            stderr.read_to_string(&mut stderr_buf)?;
+        }
+        let status = child.wait()?;
+
+        eprint!("{stderr_buf}");
+
+        if !status.success() {
+            if stderr_buf.contains("cannot update the lock file") {
+                return Err(BuildError::LockfileNotReady {
+                    project: self.project_display.clone(),
+                    toolchain: DEFAULT_GUEST_TOOLCHAIN,
+                });
+            }
+            return Err(BuildError::ProcessFailed {
+                cmd: "docker run".to_string(),
+                status,
+            });
+        }
+        Ok(())
+    }
+
+    /// Copies artifacts from `/dist` inside the container to `dist_dir` on the host.
+    fn cp_artifacts(&self, name: &str, dist_dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(dist_dir)?;
+        let src = format!("{name}:/dist/.");
+        let mut cmd = Command::new("docker");
+        cmd.args(["cp", &src, dist_dir.to_str().unwrap()]);
+        run_command(cmd, "docker cp (artifacts out)")
+    }
 }
 
-/// Compiles a guest program and produces `app.bin`, `app.elf`, and `app.text` inside `dist_dir`,
-/// using a pinned Docker container for bit-for-bit reproducible output.
+// ---------------------------------------------------------------------------
+// Cleanup
+// ---------------------------------------------------------------------------
+
+/// Removes the shared `airbender-cargo-registry` volume and any stopped
+/// `airbender-build` containers left by interrupted builds.
 ///
-/// `--locked` is passed to pin dependency versions exactly. The project must have a committed
-/// `Cargo.lock` generated with `DEFAULT_GUEST_TOOLCHAIN`; a pre-flight check surfaces a
-/// `LockfileNotReady` error with the fix command if the file is absent or incompatible.
-pub(crate) fn run_reproducible_build(
-    project_dir: &Path,
-    bin_name: &str,
-    target: Option<&str>,
-    profile: Profile,
-    dist_dir: &Path,
-    cargo_args: &[String],
-) -> Result<()> {
-    // Validate Cargo.lock exists before spinning up Docker. The lock file must be committed
-    // and generated with DEFAULT_GUEST_TOOLCHAIN; otherwise --locked will fail inside the
-    // container. We can't distinguish "missing" from "wrong toolchain" without running cargo,
-    // so both cases are covered by a single pre-flight error with the fix command.
-    if !project_dir.join("Cargo.lock").exists() {
-        return Err(BuildError::LockfileNotReady {
-            project: project_dir.display().to_string(),
-            toolchain: DEFAULT_GUEST_TOOLCHAIN,
-        });
+/// Returns the number of resources removed.
+pub fn clean_reproducible_volumes() -> Result<usize> {
+    let vol_output = Command::new("docker")
+        .args(["volume", "ls", "-q", "--filter", "name=airbender"])
+        .output()?;
+    let vol_stdout = String::from_utf8_lossy(&vol_output.stdout);
+    let volumes: Vec<&str> = vol_stdout.lines().filter(|l| !l.is_empty()).collect();
+    let vol_count = volumes.len();
+    if vol_count > 0 {
+        let mut cmd = Command::new("docker");
+        cmd.args(["volume", "rm"]);
+        cmd.args(&volumes);
+        run_command(cmd, "docker volume rm")?;
     }
 
-    ensure_docker_available()?;
-    ensure_image_built()?;
+    let ctr_output = Command::new("docker")
+        .args([
+            "container",
+            "ls",
+            "-a",
+            "-q",
+            "--filter",
+            "ancestor=airbender-build",
+        ])
+        .output()?;
+    let ctr_stdout = String::from_utf8_lossy(&ctr_output.stdout);
+    let containers: Vec<&str> = ctr_stdout.lines().filter(|l| !l.is_empty()).collect();
+    let ctr_count = containers.len();
+    if ctr_count > 0 {
+        let mut cmd = Command::new("docker");
+        cmd.args(["rm", "-f"]);
+        cmd.args(&containers);
+        run_command(cmd, "docker rm")?;
+    }
 
-    let tag = docker_image_tag();
-    let target_str = target.unwrap_or(DEFAULT_GUEST_TARGET);
-    let profile_flag = if profile == Profile::Release {
-        "--release"
-    } else {
-        ""
-    };
-
-    // Mount the workspace root so path dependencies (e.g. ../../../crates/foo) resolve inside
-    // the container. The workdir is the guest project's path relative to the workspace root,
-    // prefixed with /src.
-    let canonical_project = project_dir
-        .canonicalize()
-        .unwrap_or_else(|_| project_dir.to_path_buf());
-    let workspace_root = find_workspace_root(&canonical_project);
-    let rel = canonical_project
-        .strip_prefix(&workspace_root)
-        .unwrap_or(Path::new(""));
-    let workdir = format!("/src/{}", rel.display());
-
-    // Stable per-project volume name derived from the canonical project path.
-    // Uses the first 8 bytes of SHA-256 to keep the name short and Docker-safe.
-    let project_key = {
-        let hash = Sha256::digest(canonical_project.to_string_lossy().as_bytes());
-        hash[..8]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    };
-    let target_volume = format!("airbender-cargo-target-{project_key}");
-
-    // Build args shared across all four invocations.
-    // --target-dir is passed via CARGO_TARGET_DIR env var (cargo objcopy doesn't accept the flag).
-    let fixed: &[&str] = if profile_flag.is_empty() {
-        &["--bin", bin_name, "--target", target_str, "--locked"]
-    } else {
-        &[
-            profile_flag,
-            "--bin",
-            bin_name,
-            "--target",
-            target_str,
-            "--locked",
-        ]
-    };
-
-    let run_args = DockerRunArgs {
-        tag: &tag,
-        workspace_root: &workspace_root,
-        workdir: &workdir,
-        dist_dir,
-        target_volume: &target_volume,
-        fixed_args: fixed,
-        user_args: cargo_args,
-    };
-
-    // 1. Compile — uses the lockfile-detecting variant so a wrong-toolchain Cargo.lock
-    //    surfaces as LockfileNotReady rather than a generic process failure.
-    docker_run_cargo_build(&run_args, &project_dir.display().to_string())?;
-
-    // 2–4. Extract binary artifacts.
-    docker_run_cargo(&run_args, "objcopy", &["-O", "binary", "/out/app.bin"])?;
-    docker_run_cargo(&run_args, "objcopy", &["-R", ".text", "/out/app.elf"])?;
-    docker_run_cargo(
-        &run_args,
-        "objcopy",
-        &["-O", "binary", "--only-section=.text", "/out/app.text"],
-    )?;
-
-    Ok(())
+    Ok(vol_count + ctr_count)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -297,23 +398,21 @@ mod tests {
     use crate::errors::BuildError;
 
     #[test]
-    fn dockerfile_contents_substitutes_toolchain_date() {
+    fn dockerfile_contents_contains_toolchain_date() {
         let contents = dockerfile_contents();
-        assert!(!contents.contains("{{TOOLCHAIN_DATE}}"));
         assert!(contents.contains(DEFAULT_GUEST_TOOLCHAIN));
-    }
-
-    #[test]
-    fn dockerfile_template_has_no_hardcoded_date() {
-        assert!(DOCKERFILE_TEMPLATE.contains("{{TOOLCHAIN_DATE}}"));
-        assert!(!DOCKERFILE_TEMPLATE.contains(DEFAULT_GUEST_TOOLCHAIN));
     }
 
     #[test]
     fn docker_image_tag_contains_toolchain() {
         let tag = docker_image_tag();
         assert!(tag.starts_with("airbender-build:"));
-        assert!(tag.ends_with(DEFAULT_GUEST_TOOLCHAIN));
+        assert!(tag.contains(DEFAULT_GUEST_TOOLCHAIN));
+    }
+
+    #[test]
+    fn docker_image_tag_is_deterministic() {
+        assert_eq!(docker_image_tag(), docker_image_tag());
     }
 
     #[test]
@@ -363,12 +462,11 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"guest\"\n").unwrap();
 
-        let result = run_reproducible_build(
+        let result = ReproducibleBuild::new(
             &tmp,
             "guest",
             None,
             airbender_core::host::manifest::Profile::Release,
-            &tmp,
             &[],
         );
 

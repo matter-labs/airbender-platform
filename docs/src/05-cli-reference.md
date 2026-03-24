@@ -12,6 +12,7 @@ flamegraph
 prove
 generate-vk
 verify-proof
+clean
 ```
 
 ## `cargo airbender build`
@@ -46,7 +47,7 @@ Reproducible build:
 cargo airbender build --reproducible
 ```
 
-This compiles the guest inside a pinned Docker image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`). Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker.
+This copies the workspace source into a temporary Docker container, compiles the guest inside a pinned image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`), copies the artifacts back out, and removes the container. Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker.
 
 **Cargo.lock prerequisite:** the guest project must have a `Cargo.lock` committed and generated with the same nightly toolchain used inside the container. If your lock file was created with a different toolchain, regenerate it once before the first reproducible build:
 
@@ -232,6 +233,25 @@ cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42,0,0,0
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 0x2a
 ```
+
+## `cargo airbender clean`
+
+Removes Docker resources created by reproducible builds to reclaim disk space.
+
+```sh
+cargo airbender clean
+```
+
+Removes the shared `airbender-cargo-registry` volume and any stopped `airbender-build`
+containers left by interrupted builds.
+
+Notes:
+
+- Each build run uses an isolated temporary container that is removed automatically on
+  success or failure. `clean` is only needed to reclaim the crate download cache or remove
+  containers orphaned by a hard kill (`SIGKILL`/OOM).
+- After `cargo airbender clean`, the next `--reproducible` build re-downloads all crate
+  sources from crates.io before compiling.
 
 ## Input File Format (`--input`)
 

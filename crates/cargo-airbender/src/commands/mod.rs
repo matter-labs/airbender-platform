@@ -1,4 +1,5 @@
 mod build;
+mod clean;
 mod new;
 mod prove;
 mod run;
@@ -16,5 +17,6 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Prove(args) => prove::run(args),
         Commands::GenerateVk(args) => vk::generate(args),
         Commands::VerifyProof(args) => vk::verify(args),
+        Commands::Clean => clean::run(),
     }
 }

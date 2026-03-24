@@ -42,6 +42,8 @@ pub enum Commands {
     GenerateVk(GenerateVkArgs),
     /// Verify a proof against verification keys.
     VerifyProof(VerifyProofArgs),
+    /// Remove Docker resources created by reproducible builds.
+    Clean,
 }
 
 #[derive(Args, Debug)]

@@ -1,6 +1,7 @@
 //! Build configuration and artifact packaging flow.
 
 use crate::constants::DEFAULT_APP_NAME;
+use crate::docker::ReproducibleBuild;
 use crate::errors::Result;
 use crate::utils::{
     find_package, load_metadata, resolve_bin_name, resolve_git_metadata, run_command,
@@ -64,14 +65,14 @@ impl BuildConfig {
         let app_text = dist_dir.join("app.text");
 
         if self.reproducible {
-            crate::docker::run_reproducible_build(
+            ReproducibleBuild::new(
                 &project_dir,
                 &manifest_names.bin_name,
                 target.as_deref(),
                 self.profile,
-                &dist_dir,
                 &self.cargo_args,
-            )?;
+            )?
+            .run(&dist_dir)?;
         } else {
             self.run_cargo_build(&project_dir, &manifest_names.bin_name, target.as_deref())?;
             self.run_cargo_objcopy(
