@@ -42,7 +42,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
                 tracing::warn!("ignoring `--ram-bound` for gpu backend");
             }
 
-            #[cfg(feature = "gpu-prover")]
+            #[cfg(any(feature = "gpu-prover", feature = "docs-only"))]
             {
                 let level = as_host_level(args.level);
                 let prover = airbender_host::GpuProverBuilder::new(&args.app_bin)
@@ -62,7 +62,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
                 prover.prove(&input_words)
             }
 
-            #[cfg(not(feature = "gpu-prover"))]
+            #[cfg(not(any(feature = "gpu-prover", feature = "docs-only")))]
             {
                 return Err(CliError::new(
                     "GPU backend requires GPU support in `cargo-airbender`",

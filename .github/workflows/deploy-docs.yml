@@ -52,6 +52,7 @@ jobs:
       API_DOCS_DIR: '${{ runner.temp }}/api-docs'
       API_ROOT_DIR: 'api'
       ENABLE_TESTS: false
+      ZKSYNC_USE_CUDA_STUBS: 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -89,6 +90,7 @@ jobs:
           cache: false
 
       - name: Build Rust API docs
+        if: github.event_name == 'pull_request' || steps.resolve-version.outputs.deploy == 'latest'
         shell: 'bash -eu {0}'
         run: |
           bash .github/scripts/build-api-docs.sh "${API_DOCS_DIR}"
@@ -103,62 +105,16 @@ jobs:
           deploy: ${{ github.event_name != 'pull_request' }}
 
       - name: Publish Rust API docs
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.resolve-version.outputs.deploy == 'latest'
         shell: 'bash -euxo pipefail {0}'
-        env:
-          VERSION: ${{ steps.resolve-version.outputs.deploy }}
         run: |
+          rm -rf "${API_ROOT_DIR}"
           mkdir -p "${API_ROOT_DIR}"
-
-          if [[ ! -f "${API_ROOT_DIR}/versions.json" ]]; then
-            printf '{}\n' > "${API_ROOT_DIR}/versions.json"
-          fi
-
-          jq \
-            --arg version "${VERSION}" \
-            --arg url "/${API_ROOT_DIR}/${VERSION}" \
-            '. + {($version): $url}' \
-            "${API_ROOT_DIR}/versions.json" > "${API_ROOT_DIR}/versions.json.tmp"
-          mv "${API_ROOT_DIR}/versions.json.tmp" "${API_ROOT_DIR}/versions.json"
-
-          rm -rf "${API_ROOT_DIR:?}/${VERSION}"
-          mkdir -p "${API_ROOT_DIR}/${VERSION}"
-          cp -a "${API_DOCS_DIR}/." "${API_ROOT_DIR}/${VERSION}/"
-
-          has_release_version=false
-          if jq -e 'keys[] | select(. != "latest")' versions.json >/dev/null 2>&1; then
-            has_release_version=true
-          fi
-
-          if [[ "${VERSION}" != "latest" || "${has_release_version}" != "true" ]]; then
-            rm -rf release
-            cp -a "${VERSION}" release
-            rm -rf "${API_ROOT_DIR}/release"
-            cp -a "${API_ROOT_DIR}/${VERSION}" "${API_ROOT_DIR}/release"
-          fi
+          cp -a "${API_DOCS_DIR}/." "${API_ROOT_DIR}/"
 
           touch .nojekyll
 
-          api_target="release"
-          if [[ ! -d "${API_ROOT_DIR}/release" ]]; then
-            api_target="${VERSION}"
-          fi
-
-          cat > "${API_ROOT_DIR}/index.html" <<EOF
-          <!doctype html>
-          <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta http-equiv="refresh" content="0; url=/airbender-platform/${API_ROOT_DIR}/${api_target}/">
-              <title>Redirecting to Airbender Platform Rust API Docs</title>
-            </head>
-            <body>
-              <p><a href="/airbender-platform/${API_ROOT_DIR}/${api_target}/">Continue to the Rust API docs.</a></p>
-            </body>
-          </html>
-          EOF
-
-          git add .nojekyll release "${API_ROOT_DIR}"
+          git add .nojekyll "${API_ROOT_DIR}"
           if git diff --cached --quiet; then
             exit 0
           fi

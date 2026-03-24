@@ -15,8 +15,10 @@ include = [
 ]
 
 [features]
-default = ["gpu-prover"]
-gpu-prover = ["airbender-host/gpu-prover"]
+default = ["gpu-prover", "host-runtime"]
+docs-only = ["airbender-host/docs-only"]
+gpu-prover = ["host-runtime", "airbender-host/gpu-prover"]
+host-runtime = ["airbender-host/proof-system", "airbender-host/transpiler"]
 
 [dependencies]
 airbender-build = { version = "0.1.0", path = "../airbender-build" }

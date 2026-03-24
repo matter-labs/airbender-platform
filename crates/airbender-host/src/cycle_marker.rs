@@ -38,6 +38,7 @@ impl Mark {
     }
 }
 
+#[cfg(feature = "transpiler")]
 impl From<riscv_transpiler::cycle::Mark> for Mark {
     fn from(mark: riscv_transpiler::cycle::Mark) -> Self {
         Self {
@@ -54,6 +55,7 @@ pub struct CycleMarker {
     pub delegation_counter: HashMap<u32, u64>,
 }
 
+#[cfg(feature = "transpiler")]
 impl From<riscv_transpiler::cycle::CycleMarker> for CycleMarker {
     fn from(marker: riscv_transpiler::cycle::CycleMarker) -> Self {
         Self {

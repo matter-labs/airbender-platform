@@ -7,11 +7,21 @@ output_dir="${1:?usage: build-api-docs.sh <output-dir>}"
 workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${workspace_root}"
 
+export ZKSYNC_USE_CUDA_STUBS="${ZKSYNC_USE_CUDA_STUBS:-true}"
+
 rm -rf target/doc "${output_dir}"
 
 cargo doc --workspace --no-deps \
   --exclude airbender-host \
   --exclude cargo-airbender
+
+cargo doc -p airbender-host --no-deps \
+  --no-default-features \
+  --features docs-only
+
+cargo doc -p cargo-airbender --no-deps \
+  --no-default-features \
+  --features docs-only
 
 mkdir -p "${output_dir}"
 cp -a target/doc/. "${output_dir}/"
@@ -22,10 +32,9 @@ mapfile -t published_crates < <(
   cargo metadata --no-deps --format-version 1 \
     | jq -r '
         .packages[]
-        | select(.name != "airbender-host" and .name != "cargo-airbender")
         | . as $pkg
         | .targets[]
-        | select(.kind[0] == "lib" or .kind[0] == "proc-macro")
+        | select(.kind[0] == "lib" or .kind[0] == "proc-macro" or .kind[0] == "bin")
         | [$pkg.name, .name, .kind[0]]
         | @tsv
       ' \
@@ -96,8 +105,7 @@ mapfile -t published_crates < <(
     <main>
       <h1>Airbender Platform Rust API Docs</h1>
       <p>
-        Generated from the workspace crates that currently build successfully under
-        <code>cargo doc --workspace --no-deps</code> in CI.
+        Generated from the workspace crates with <code>cargo doc --workspace --no-deps</code>.
       </p>
       <section class="panel">
         <h2>Published Crates</h2>
@@ -106,30 +114,31 @@ EOF
 
   for crate in "${published_crates[@]}"; do
     IFS=$'\t' read -r package_name target_name target_kind <<<"${crate}"
+    target_doc_name="${target_name//-/_}"
     package_doc_name="${package_name//-/_}"
+    if [[ ! -f "${output_dir}/${target_doc_name}/index.html" ]]; then
+      continue
+    fi
     suffix=""
-    if [[ "${target_name}" != "${package_doc_name}" ]]; then
+    if [[ "${target_doc_name}" != "${package_doc_name}" ]]; then
       suffix=" (crate: <code>${target_name}</code>)"
     fi
     if [[ "${target_kind}" == "proc-macro" ]]; then
       suffix="${suffix} <span>proc-macro</span>"
+    elif [[ "${target_kind}" == "bin" ]]; then
+      suffix="${suffix} <span>binary</span>"
     fi
     printf '          <li><a href="./%s/">%s</a>%s</li>\n' \
-      "${target_name}" \
+      "${target_doc_name}" \
       "${package_name}" \
       "${suffix}"
   done
 
   cat <<'EOF'
         </ul>
-      </section>
-      <section class="panel">
-        <h2>Temporarily Excluded</h2>
         <p>
-          <code>airbender-host</code> and <code>cargo-airbender</code> are not part of the
-          published API site yet. Their rustdoc builds currently fail in CI because the pinned
-          nightly toolchain hits a rustdoc query cycle in <code>riscv_transpiler</code>, and the
-          default host feature set also requires CUDA through the GPU prover path.
+          Builds run with <code>ZKSYNC_USE_CUDA_STUBS=true</code> so the published API
+          reference stays available on standard GitHub Actions runners.
         </p>
       </section>
     </main>

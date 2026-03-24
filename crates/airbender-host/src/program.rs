@@ -1,5 +1,5 @@
 use crate::error::{HostError, Result};
-#[cfg(feature = "gpu-prover")]
+#[cfg(any(feature = "gpu-prover", feature = "docs-only"))]
 use crate::prover::GpuProverBuilder;
 use crate::prover::{CpuProverBuilder, DevProverBuilder, ProverLevel};
 use crate::runner::TranspilerRunnerBuilder;
@@ -83,7 +83,7 @@ impl Program {
         TranspilerRunnerBuilder::new(self.app_bin())
     }
 
-    #[cfg(feature = "gpu-prover")]
+    #[cfg(any(feature = "gpu-prover", feature = "docs-only"))]
     /// Create a GPU prover builder bound to this program.
     pub fn gpu_prover(&self) -> GpuProverBuilder {
         GpuProverBuilder::new(self.app_bin())

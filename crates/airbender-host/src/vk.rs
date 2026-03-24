@@ -1,12 +1,16 @@
 use crate::error::{HostError, Result};
 use crate::prover::ProverLevel;
 use airbender_core::guest::Commit;
+#[cfg(not(feature = "docs-only"))]
 use execution_utils::setups;
+#[cfg(not(feature = "docs-only"))]
 use execution_utils::unified_circuit::verify_proof_in_unified_layer;
+#[cfg(not(feature = "docs-only"))]
 use execution_utils::unrolled::{
     compute_setup_for_machine_configuration, get_unrolled_circuits_artifacts_for_machine_type,
     verify_unrolled_layer_proof, UnrolledProgramProof, UnrolledProgramSetup,
 };
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use riscv_transpiler::cycle::{
     IMStandardIsaConfigWithUnsignedMulDiv, IWithoutByteAccessIsaConfigWithDelegation,
 };
@@ -14,22 +18,47 @@ use sha3::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "docs-only")]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RustdocUnrolledProgramSetup {
+    _private: (),
+}
+
+#[cfg(feature = "docs-only")]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RustdocCompiledCircuitsSet {
+    _private: (),
+}
+
 /// Unified verification key bundle for recursion.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UnifiedVk {
     pub app_bin_hash: [u8; 32],
+    #[cfg(not(feature = "docs-only"))]
     pub unified_setup: UnrolledProgramSetup,
+    #[cfg(feature = "docs-only")]
+    pub unified_setup: RustdocUnrolledProgramSetup,
+    #[cfg(not(feature = "docs-only"))]
     pub unified_layouts: setups::CompiledCircuitsSet,
+    #[cfg(feature = "docs-only")]
+    pub unified_layouts: RustdocCompiledCircuitsSet,
 }
 
 /// Unrolled verification key bundle for base or recursion-unrolled layers.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UnrolledVk {
     pub app_bin_hash: [u8; 32],
+    #[cfg(not(feature = "docs-only"))]
     pub setup: UnrolledProgramSetup,
+    #[cfg(feature = "docs-only")]
+    pub setup: RustdocUnrolledProgramSetup,
+    #[cfg(not(feature = "docs-only"))]
     pub compiled_layouts: setups::CompiledCircuitsSet,
+    #[cfg(feature = "docs-only")]
+    pub compiled_layouts: RustdocCompiledCircuitsSet,
 }
 
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 pub fn compute_unified_vk(app_bin_path: &Path) -> Result<UnifiedVk> {
     #[cfg(not(feature = "gpu-prover"))]
     {
@@ -67,6 +96,14 @@ pub fn compute_unified_vk(app_bin_path: &Path) -> Result<UnifiedVk> {
     }
 }
 
+#[cfg(any(feature = "docs-only", not(feature = "transpiler")))]
+pub fn compute_unified_vk(_app_bin_path: &Path) -> Result<UnifiedVk> {
+    Err(HostError::Verification(
+        "verification key generation requires the `transpiler` feature".to_string(),
+    ))
+}
+
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 pub fn compute_unrolled_vk(app_bin_path: &Path, level: ProverLevel) -> Result<UnrolledVk> {
     if level == ProverLevel::RecursionUnified {
         return Err(HostError::Verification(
@@ -144,6 +181,14 @@ pub fn compute_unrolled_vk(app_bin_path: &Path, level: ProverLevel) -> Result<Un
     })
 }
 
+#[cfg(any(feature = "docs-only", not(feature = "transpiler")))]
+pub fn compute_unrolled_vk(_app_bin_path: &Path, _level: ProverLevel) -> Result<UnrolledVk> {
+    Err(HostError::Verification(
+        "verification key generation requires the `transpiler` feature".to_string(),
+    ))
+}
+
+#[cfg(not(feature = "docs-only"))]
 pub fn verify_proof(
     proof: &UnrolledProgramProof,
     vk: &UnifiedVk,
@@ -159,6 +204,19 @@ pub fn verify_proof(
     Ok(())
 }
 
+#[cfg(feature = "docs-only")]
+pub fn verify_proof(
+    _proof: &crate::raw::UnrolledProgramProof,
+    _vk: &UnifiedVk,
+    _expected_app_bin_hash: Option<[u8; 32]>,
+    _expected_output: Option<&dyn Commit>,
+) -> Result<()> {
+    Err(HostError::Verification(
+        "proof verification is unavailable when generating rustdoc".to_string(),
+    ))
+}
+
+#[cfg(not(feature = "docs-only"))]
 pub fn verify_unrolled_proof(
     proof: &UnrolledProgramProof,
     vk: &UnrolledVk,
@@ -184,6 +242,19 @@ pub fn verify_unrolled_proof(
             .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
     verify_expected_output(expected_output, verifier_output)?;
     Ok(())
+}
+
+#[cfg(feature = "docs-only")]
+pub fn verify_unrolled_proof(
+    _proof: &crate::raw::UnrolledProgramProof,
+    _vk: &UnrolledVk,
+    _level: ProverLevel,
+    _expected_app_bin_hash: Option<[u8; 32]>,
+    _expected_output: Option<&dyn Commit>,
+) -> Result<()> {
+    Err(HostError::Verification(
+        "proof verification is unavailable when generating rustdoc".to_string(),
+    ))
 }
 
 fn verify_expected_output(

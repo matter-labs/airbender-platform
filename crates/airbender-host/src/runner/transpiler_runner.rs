@@ -1,21 +1,29 @@
 use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
+#[cfg(feature = "transpiler")]
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
+#[cfg(feature = "transpiler")]
 use riscv_transpiler::common_constants::{
     rom::ROM_SECOND_WORD_BITS, INITIAL_TIMESTAMP, TIMESTAMP_STEP,
 };
+#[cfg(feature = "transpiler")]
 use riscv_transpiler::cycle::CycleMarkerHooks;
+#[cfg(feature = "transpiler")]
 use riscv_transpiler::ir::{preprocess_bytecode, FullUnsignedMachineDecoderConfig};
 #[cfg(target_arch = "x86_64")]
+#[cfg(feature = "transpiler")]
 use riscv_transpiler::jit::JittedCode;
+#[cfg(feature = "transpiler")]
 use riscv_transpiler::jit::RAM_SIZE;
+#[cfg(feature = "transpiler")]
 use riscv_transpiler::vm::{
     DelegationsCounters, FlamegraphConfig as VmFlamegraphConfig, RamWithRomRegion, SimpleTape,
     State, VmFlamegraphProfiler, VM,
 };
-use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "transpiler")]
+use std::io::Read;
 
 /// Builder for creating a configured transpiler runner.
 pub struct TranspilerRunnerBuilder {
@@ -106,6 +114,7 @@ pub struct TranspilerRunner {
 }
 
 impl Runner for TranspilerRunner {
+    #[cfg(feature = "transpiler")]
     fn run(&self, input_words: &[u32]) -> Result<ExecutionResult> {
         if self.flamegraph.is_some() {
             return self.run_without_jit_with_flamegraph(input_words);
@@ -117,10 +126,18 @@ impl Runner for TranspilerRunner {
 
         self.run_without_jit(input_words)
     }
+
+    #[cfg(not(feature = "transpiler"))]
+    fn run(&self, _input_words: &[u32]) -> Result<ExecutionResult> {
+        Err(HostError::Transpiler(
+            "transpiler support is unavailable without the `transpiler` feature".to_string(),
+        ))
+    }
 }
 
 impl TranspilerRunner {
     #[cfg(target_arch = "x86_64")]
+    #[cfg(feature = "transpiler")]
     fn run_with_jit(&self, input_words: &[u32]) -> Result<ExecutionResult> {
         let bin_words = read_u32_words(&self.app_bin_path)?;
         let text_words = read_u32_words(&self.app_text_path)?;
@@ -154,16 +171,19 @@ impl TranspilerRunner {
     }
 
     #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(feature = "transpiler")]
     fn run_with_jit(&self, _input_words: &[u32]) -> Result<ExecutionResult> {
         Err(HostError::Transpiler(
             "JIT execution is only available on x86_64 targets".to_string(),
         ))
     }
 
+    #[cfg(feature = "transpiler")]
     fn run_without_jit(&self, input_words: &[u32]) -> Result<ExecutionResult> {
         self.run_without_jit_internal(input_words, None)
     }
 
+    #[cfg(feature = "transpiler")]
     fn run_without_jit_with_flamegraph(&self, input_words: &[u32]) -> Result<ExecutionResult> {
         let flamegraph = self
             .flamegraph
@@ -184,6 +204,7 @@ impl TranspilerRunner {
         self.run_without_jit_internal(input_words, Some(&mut profiler))
     }
 
+    #[cfg(feature = "transpiler")]
     fn run_without_jit_internal(
         &self,
         input_words: &[u32],
@@ -286,6 +307,7 @@ fn derive_elf_path(bin_path: &Path) -> PathBuf {
     elf_path
 }
 
+#[cfg(feature = "transpiler")]
 fn read_u32_words(path: &Path) -> Result<Vec<u32>> {
     let mut file = std::fs::File::open(path).map_err(|err| {
         HostError::Transpiler(format!("failed to open {}: {err}", path.display()))

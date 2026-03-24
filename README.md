@@ -24,12 +24,10 @@ This project provides:
 
 ## Documentation
 
-Read the latest released documentation:
+Browse the latest published documentation from `main`:
 
-- **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/release)**
-- **[Rust API docs](https://matter-labs.github.io/airbender-platform/api/release/)**
-
-Development book builds from `main` are published at **[latest](https://matter-labs.github.io/airbender-platform/latest)**.
+- **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/latest/)**
+- **[Rust API docs](https://matter-labs.github.io/airbender-platform/api/)**
 
 The book source lives in [`docs/`](./docs/). To build locally:
 

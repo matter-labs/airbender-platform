@@ -49,12 +49,12 @@ pub fn generate(args: GenerateVkArgs) -> Result<()> {
 }
 
 fn ensure_gpu_vk_support() -> Result<()> {
-    #[cfg(feature = "gpu-prover")]
+    #[cfg(any(feature = "gpu-prover", feature = "docs-only"))]
     {
         Ok(())
     }
 
-    #[cfg(not(feature = "gpu-prover"))]
+    #[cfg(not(any(feature = "gpu-prover", feature = "docs-only")))]
     {
         Err(CliError::new(
             "verification key generation requires GPU support in `cargo-airbender`",
@@ -252,12 +252,12 @@ fn write_bincode<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(feature = "gpu-prover"))]
+    #[cfg(not(any(feature = "gpu-prover", feature = "docs-only")))]
     use crate::cli::GenerateVkArgs;
-    #[cfg(not(feature = "gpu-prover"))]
+    #[cfg(not(any(feature = "gpu-prover", feature = "docs-only")))]
     use std::path::PathBuf;
 
-    #[cfg(not(feature = "gpu-prover"))]
+    #[cfg(not(any(feature = "gpu-prover", feature = "docs-only")))]
     #[test]
     fn generate_vk_requires_gpu_support() {
         let err = generate(GenerateVkArgs {

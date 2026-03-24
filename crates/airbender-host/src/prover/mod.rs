@@ -1,17 +1,18 @@
 use crate::error::{HostError, Result};
 use crate::proof::Proof;
 use crate::receipt::Receipt;
+#[cfg(not(feature = "docs-only"))]
 use execution_utils::unrolled::UnrolledProgramProof;
 use std::path::{Path, PathBuf};
 
 mod cpu_prover;
 mod dev_prover;
-#[cfg(feature = "gpu-prover")]
+#[cfg(any(feature = "gpu-prover", feature = "docs-only"))]
 mod gpu_prover;
 
 pub use self::cpu_prover::{CpuProver, CpuProverBuilder};
 pub use self::dev_prover::{DevProver, DevProverBuilder};
-#[cfg(feature = "gpu-prover")]
+#[cfg(any(feature = "gpu-prover", feature = "docs-only"))]
 pub use self::gpu_prover::{GpuProver, GpuProverBuilder};
 
 pub(super) const DEFAULT_RAM_BOUND_BYTES: usize = 1 << 30;
@@ -32,6 +33,7 @@ pub enum ProverLevel {
 }
 
 impl ProverLevel {
+    #[cfg(not(feature = "docs-only"))]
     #[cfg(feature = "gpu-prover")]
     pub fn as_unrolled_level(self) -> execution_utils::unrolled_gpu::UnrolledProverLevel {
         match self {
@@ -113,6 +115,7 @@ pub(super) fn resolve_worker_threads(worker_threads: Option<usize>) -> usize {
         .unwrap_or(1)
 }
 
+#[cfg(not(feature = "docs-only"))]
 pub(super) fn receipt_from_real_proof(proof: &UnrolledProgramProof) -> Receipt {
     let mut registers = [0u32; 32];
     for (idx, reg) in proof
@@ -124,4 +127,9 @@ pub(super) fn receipt_from_real_proof(proof: &UnrolledProgramProof) -> Receipt {
         registers[idx] = reg.value;
     }
     Receipt::from_registers(registers)
+}
+
+#[cfg(feature = "docs-only")]
+pub(super) fn receipt_from_real_proof(_proof: &crate::raw::UnrolledProgramProof) -> Receipt {
+    Receipt::from_registers([0; 32])
 }

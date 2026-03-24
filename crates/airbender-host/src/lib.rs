@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "docs-only", allow(dead_code, unused_imports))]
+
 //! Host-side APIs for executing, proving, and verifying Airbender programs.
 
 mod cycle_marker;
@@ -20,7 +22,7 @@ pub use proof::{DevProof, Proof, RealProof};
 pub use prover::{
     CpuProver, CpuProverBuilder, DevProver, DevProverBuilder, ProveResult, Prover, ProverLevel,
 };
-#[cfg(feature = "gpu-prover")]
+#[cfg(any(feature = "gpu-prover", feature = "docs-only"))]
 pub use prover::{GpuProver, GpuProverBuilder};
 pub use receipt::Receipt;
 pub use runner::{
@@ -42,6 +44,23 @@ pub use vk::{
 /// These items are not recommended for normal use. They are exposed for rare
 /// cases, for example when a project depends on both `airbender-host` and
 /// direct Airbender crates at the same time.
+#[cfg(not(feature = "docs-only"))]
 pub mod raw {
     pub use execution_utils::unrolled::UnrolledProgramProof;
+}
+
+#[cfg(feature = "docs-only")]
+pub mod raw {
+    /// Placeholder for the internal Airbender proof artifact exposed by the
+    /// runtime API in normal builds.
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    pub struct UnrolledProgramProof {
+        _private: (),
+    }
+
+    impl UnrolledProgramProof {
+        pub fn debug_info(&self) -> String {
+            "proof internals are unavailable in docs-only builds".to_string()
+        }
+    }
 }

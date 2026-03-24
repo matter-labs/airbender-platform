@@ -4,11 +4,17 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use crate::runner::{Runner, TranspilerRunnerBuilder};
+#[cfg(not(feature = "docs-only"))]
 use execution_utils::setups;
+#[cfg(not(feature = "docs-only"))]
 use execution_utils::unrolled;
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use riscv_transpiler::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
 use std::path::{Path, PathBuf};
 
@@ -77,6 +83,7 @@ impl CpuProverBuilder {
 }
 
 /// CPU prover wrapper that caches padded artifacts and worker threads.
+#[cfg(not(feature = "docs-only"))]
 pub struct CpuProver {
     app_bin_path: PathBuf,
     app_text_path: PathBuf,
@@ -87,7 +94,13 @@ pub struct CpuProver {
     worker: execution_utils::prover_examples::prover::worker::Worker,
 }
 
+#[cfg(feature = "docs-only")]
+pub struct CpuProver {
+    _private: (),
+}
+
 impl CpuProver {
+    #[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
     fn new(
         app_bin_path: &Path,
         worker_threads: Option<usize>,
@@ -127,9 +140,22 @@ impl CpuProver {
             worker,
         })
     }
+
+    #[cfg(any(feature = "docs-only", not(feature = "transpiler")))]
+    fn new(
+        _app_bin_path: &Path,
+        _worker_threads: Option<usize>,
+        _cycles: Option<usize>,
+        _ram_bound: Option<usize>,
+    ) -> Result<Self> {
+        Err(HostError::Prover(
+            "CPU proving requires the `transpiler` feature".to_string(),
+        ))
+    }
 }
 
 impl Prover for CpuProver {
+    #[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
     fn prove(&self, input_words: &[u32]) -> Result<ProveResult> {
         let cycles_bound = match self.cycles {
             Some(value) => value,
@@ -173,5 +199,12 @@ impl Prover for CpuProver {
             cycles: cycles_bound as u64,
             receipt,
         })
+    }
+
+    #[cfg(any(feature = "docs-only", not(feature = "transpiler")))]
+    fn prove(&self, _input_words: &[u32]) -> Result<ProveResult> {
+        Err(HostError::Prover(
+            "CPU proving requires the `transpiler` feature".to_string(),
+        ))
     }
 }

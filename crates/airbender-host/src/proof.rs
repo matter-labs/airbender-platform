@@ -19,7 +19,7 @@ impl Proof {
                 "dev proof: cycles={}, output={:?}",
                 proof.cycles, proof.receipt.output
             ),
-            Self::Real(proof) => proof.inner.debug_info(),
+            Self::Real(proof) => proof.inner().debug_info(),
         }
     }
 }
@@ -34,18 +34,31 @@ pub struct DevProof {
 }
 
 /// Real cryptographic proof emitted by CPU/GPU provers.
+#[cfg(not(feature = "docs-only"))]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RealProof {
     level: ProverLevel,
     inner: execution_utils::unrolled::UnrolledProgramProof,
 }
 
+#[cfg(feature = "docs-only")]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RealProof {
+    level: ProverLevel,
+}
+
 impl RealProof {
+    #[cfg(not(feature = "docs-only"))]
     pub(crate) fn new(
         level: ProverLevel,
         inner: execution_utils::unrolled::UnrolledProgramProof,
     ) -> Self {
         Self { level, inner }
+    }
+
+    #[cfg(feature = "docs-only")]
+    pub(crate) fn new(level: ProverLevel, _inner: impl Sized) -> Self {
+        Self { level }
     }
 
     pub fn level(&self) -> ProverLevel {
@@ -58,12 +71,24 @@ impl RealProof {
     /// the stable `airbender-host` public API. This is exposed for rare cases,
     /// for example when a project depends on both `airbender-host` and direct
     /// Airbender crates at the same time.
+    #[cfg(not(feature = "docs-only"))]
     pub fn into_inner(self) -> execution_utils::unrolled::UnrolledProgramProof {
         self.inner
     }
 
+    #[cfg(feature = "docs-only")]
+    pub fn into_inner(self) -> crate::raw::UnrolledProgramProof {
+        unreachable!("RealProof::into_inner is unavailable when generating rustdoc")
+    }
+
+    #[cfg(not(feature = "docs-only"))]
     pub(crate) fn inner(&self) -> &execution_utils::unrolled::UnrolledProgramProof {
         &self.inner
+    }
+
+    #[cfg(feature = "docs-only")]
+    pub(crate) fn inner(&self) -> &crate::raw::UnrolledProgramProof {
+        unreachable!("RealProof::inner is unavailable when generating rustdoc")
     }
 }
 

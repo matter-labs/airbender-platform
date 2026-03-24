@@ -10,16 +10,19 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["gpu-prover"]
-gpu-prover = ["dep:gpu_prover", "execution_utils/gpu_prover"]
+default = ["gpu-prover", "proof-system", "transpiler"]
+docs-only = []
+gpu-prover = ["dep:gpu_prover", "proof-system", "execution_utils/gpu_prover"]
+proof-system = ["dep:execution_utils"]
+transpiler = ["dep:riscv_transpiler"]
 
 [dependencies]
 airbender-core = { path = "../airbender-core" }
 airbender-codec = { path = "../airbender-codec" }
 serde = { workspace = true, features = ["derive"] }
-execution_utils = { workspace = true }
+execution_utils = { workspace = true, optional = true }
 gpu_prover = { workspace = true, optional = true }
-riscv_transpiler = { workspace = true, features = ["jit", "flamegraph"] }
+riscv_transpiler = { workspace = true, features = ["jit", "flamegraph"], optional = true }
 sha3 = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }

@@ -3,8 +3,11 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
+#[cfg(not(feature = "docs-only"))]
 use execution_utils::unrolled_gpu::UnrolledProver;
+#[cfg(not(feature = "docs-only"))]
 use gpu_prover::execution::prover::ExecutionProverConfiguration;
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use std::any::Any;
 use std::path::{Path, PathBuf};
@@ -199,6 +202,7 @@ fn spawn_worker(
     }
 }
 
+#[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 fn gpu_worker_loop(
     command_rx: mpsc::Receiver<WorkerCommand>,
     init_tx: mpsc::Sender<Result<()>>,
@@ -244,6 +248,19 @@ fn gpu_worker_loop(
     }
 }
 
+#[cfg(any(feature = "docs-only", not(feature = "transpiler")))]
+fn gpu_worker_loop(
+    _command_rx: mpsc::Receiver<WorkerCommand>,
+    init_tx: mpsc::Sender<Result<()>>,
+    _app_bin_path: PathBuf,
+    _worker_threads: Option<usize>,
+    _level: ProverLevel,
+) {
+    let _ = init_tx.send(Err(HostError::Prover(
+        "GPU proving requires the `transpiler` feature".to_string(),
+    )));
+}
+
 fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
         return message.clone();
@@ -255,6 +272,7 @@ fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
     "unknown panic payload".to_string()
 }
 
+#[cfg(not(feature = "docs-only"))]
 fn create_unrolled_prover(
     app_bin_path: &Path,
     worker_threads: Option<usize>,
