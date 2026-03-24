@@ -34,6 +34,7 @@ Key options:
 - `--project <path>`: guest project directory
 - `--profile <debug|release>`, `--debug`, `--release`
 - `--reproducible`: build inside a pinned Docker container for bit-for-bit identical output across machines and toolchain versions; automatically passes `--locked` to cargo
+- `--workspace-root <path>`: override the directory bind-mounted as `/src` inside the container; only needed with `--reproducible` when the guest has path dependencies pointing outside its own cargo workspace root (see [Monorepo path dependencies](#monorepo-path-dependencies) below); requires `--reproducible`
 
 Forward extra Cargo flags after `--`:
 
@@ -47,7 +48,19 @@ Reproducible build:
 cargo airbender build --reproducible
 ```
 
-This copies the workspace source into a temporary Docker container, compiles the guest inside a pinned image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`), copies the artifacts back out, and removes the container. Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker.
+This bind-mounts the workspace read-only into a temporary Docker container, compiles the guest inside a pinned image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`), copies the artifacts back to the host with `docker cp`, and removes the container. Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker.
+
+### Monorepo path dependencies
+
+The `--reproducible` flag bind-mounts the guest project's cargo workspace root as `/src` inside the container. For most projects this is the guest directory itself. If the guest's `Cargo.toml` contains `path = "../../.."` dependencies pointing to crates outside that directory (typical in platform monorepos where the guest shares crates with the host via local paths), those crates will not be present inside the container and the build will fail.
+
+Pass `--workspace-root` to expand the mount to a directory that contains all referenced crates:
+
+```sh
+cargo airbender build --reproducible --workspace-root . --project examples/fibonacci/guest
+```
+
+This is a developer-only scenario. End users whose guest depends on published crates (crates.io or git) never need this flag.
 
 **Cargo.lock prerequisite:** the guest project must have a `Cargo.lock` committed and generated with the same nightly toolchain used inside the container. If your lock file was created with a different toolchain, regenerate it once before the first reproducible build:
 

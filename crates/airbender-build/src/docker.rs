@@ -12,8 +12,8 @@
 //!
 //! Source is bind-mounted read-only (no host writes). Artifacts are copied out
 //! with `docker cp`, which writes files as the host user — no root-owned files
-//! ever land on the host filesystem. The container is removed by a `TempContainer`
-//! RAII guard on success, failure, or panic.
+//! ever land on the host filesystem. The container is always removed on return,
+//! whether by success, error, or panic.
 //!
 //! # Volume strategy
 //!
@@ -41,6 +41,7 @@ use crate::constants::{DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN};
 use crate::errors::{BuildError, Result};
 use crate::utils::run_command;
 use airbender_core::host::manifest::Profile;
+use std::io::Write;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -125,7 +126,6 @@ fn ensure_image_built() -> Result<()> {
         .spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
         stdin.write_all(dockerfile_contents().as_bytes())?;
     }
 
@@ -143,26 +143,6 @@ fn ensure_image_built() -> Result<()> {
 // Build helpers (used by ReproducibleBuild)
 // ---------------------------------------------------------------------------
 
-/// Walks up from `start` to find the nearest directory containing a `Cargo.toml`
-/// with a `[workspace]` section. Falls back to `start` if none is found.
-fn find_workspace_root(start: &Path) -> PathBuf {
-    let mut dir = start.to_path_buf();
-    loop {
-        let manifest = dir.join("Cargo.toml");
-        if manifest.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&manifest) {
-                if contents.contains("[workspace]") {
-                    return dir;
-                }
-            }
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent.to_path_buf(),
-            None => return start.to_path_buf(),
-        }
-    }
-}
-
 /// RAII guard that force-removes a named Docker container when dropped.
 struct TempContainer(String);
 
@@ -176,6 +156,12 @@ impl Drop for TempContainer {
     }
 }
 
+/// Generates a unique container name for the current build run.
+///
+/// XORs nanosecond timestamp with the process ID so that two concurrent builds
+/// launched at the same instant (same `nanos`) from different processes still
+/// get distinct names, and two builds in the same process at different times
+/// (same `pid`) also get distinct names.
 fn container_name() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -186,30 +172,31 @@ fn container_name() -> String {
 }
 
 /// Builds the `sh -c` command string: `cargo build` then three `cargo objcopy` invocations.
-fn container_sh_command(
+fn build_container_cmd(
     bin_name: &str,
-    target_str: &str,
+    target: &str,
     profile_flag: &str,
     cargo_args: &[String],
 ) -> String {
-    let mut fixed: Vec<&str> = Vec::new();
+    let mut cargo_flags: Vec<&str> = Vec::new();
     if !profile_flag.is_empty() {
-        fixed.push(profile_flag);
+        cargo_flags.push(profile_flag);
     }
-    fixed.extend(["--bin", bin_name, "--target", target_str, "--locked"]);
-    let extra = cargo_args.join(" ");
-    let fixed = if extra.is_empty() {
-        fixed.join(" ")
+    cargo_flags.extend(["--bin", bin_name, "--target", target, "--locked"]);
+    let user_flags = cargo_args.join(" ");
+    let cargo_flags = if user_flags.is_empty() {
+        cargo_flags.join(" ")
     } else {
-        format!("{} {extra}", fixed.join(" "))
+        format!("{} {user_flags}", cargo_flags.join(" "))
     };
 
-    let build = format!("cargo build {fixed}");
-    let obj1 = format!("cargo objcopy {fixed} -- -O binary /dist/app.bin");
-    let obj2 = format!("cargo objcopy {fixed} -- -R .text /dist/app.elf");
-    let obj3 = format!("cargo objcopy {fixed} -- -O binary --only-section=.text /dist/app.text");
+    let build = format!("cargo build {cargo_flags}");
+    let obj_bin = format!("cargo objcopy {cargo_flags} -- -O binary /dist/app.bin");
+    let obj_elf = format!("cargo objcopy {cargo_flags} -- -R .text /dist/app.elf");
+    let obj_text =
+        format!("cargo objcopy {cargo_flags} -- -O binary --only-section=.text /dist/app.text");
 
-    format!("mkdir -p /dist && {build} && {obj1} && {obj2} && {obj3}")
+    format!("mkdir -p /dist && {build} && {obj_bin} && {obj_elf} && {obj_text}")
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +212,7 @@ pub(crate) struct ReproducibleBuild {
     tag: String,
     workspace_root: PathBuf,
     workdir: String,
-    sh_cmd: String,
+    build_cmd: String,
     project_display: String,
 }
 
@@ -236,6 +223,7 @@ impl ReproducibleBuild {
     /// or with Docker errors if the daemon is unreachable or the image cannot be built.
     pub(crate) fn new(
         project_dir: &Path,
+        workspace_root: &Path,
         bin_name: &str,
         target: Option<&str>,
         profile: Profile,
@@ -251,27 +239,26 @@ impl ReproducibleBuild {
         ensure_docker_available()?;
         ensure_image_built()?;
 
-        let target_str = target.unwrap_or(DEFAULT_GUEST_TARGET);
+        let target = target.unwrap_or(DEFAULT_GUEST_TARGET);
         let profile_flag = if profile == Profile::Release {
             "--release"
         } else {
             ""
         };
 
-        let canonical_project = project_dir
+        let project_abs = project_dir
             .canonicalize()
             .unwrap_or_else(|_| project_dir.to_path_buf());
-        let workspace_root = find_workspace_root(&canonical_project);
-        let rel = canonical_project
-            .strip_prefix(&workspace_root)
+        let project_rel = project_abs
+            .strip_prefix(workspace_root)
             .unwrap_or(Path::new(""));
 
         Ok(Self {
             tag: docker_image_tag(),
-            workdir: format!("/src/{}", rel.display()),
-            sh_cmd: container_sh_command(bin_name, target_str, profile_flag, cargo_args),
+            workdir: format!("/src/{}", project_rel.display()),
+            build_cmd: build_container_cmd(bin_name, target, profile_flag, cargo_args),
             project_display: project_dir.display().to_string(),
-            workspace_root,
+            workspace_root: workspace_root.to_path_buf(),
         })
     }
 
@@ -304,22 +291,22 @@ impl ReproducibleBuild {
             &self.tag,
             "sh",
             "-c",
-            &self.sh_cmd,
+            &self.build_cmd,
         ]);
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::piped());
 
         let mut child = cmd.spawn()?;
-        let mut stderr_buf = String::new();
+        let mut build_stderr = String::new();
         if let Some(mut stderr) = child.stderr.take() {
-            stderr.read_to_string(&mut stderr_buf)?;
+            stderr.read_to_string(&mut build_stderr)?;
         }
         let status = child.wait()?;
 
-        eprint!("{stderr_buf}");
+        eprint!("{build_stderr}");
 
         if !status.success() {
-            if stderr_buf.contains("cannot update the lock file") {
+            if build_stderr.contains("cannot update the lock file") {
                 return Err(BuildError::LockfileNotReady {
                     project: self.project_display.clone(),
                     toolchain: DEFAULT_GUEST_TOOLCHAIN,
@@ -416,53 +403,13 @@ mod tests {
     }
 
     #[test]
-    fn find_workspace_root_finds_ancestor_with_workspace_section() {
-        let tmp = std::env::temp_dir().join("airbender_test_workspace_root");
-        let nested = tmp.join("a").join("b");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(tmp.join("Cargo.toml"), "[workspace]\n").unwrap();
-        std::fs::write(nested.join("Cargo.toml"), "[package]\nname = \"pkg\"\n").unwrap();
-
-        let result = find_workspace_root(&nested);
-        assert_eq!(result, tmp);
-
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
-    fn find_workspace_root_falls_back_to_start_when_no_workspace_found() {
-        let tmp = std::env::temp_dir().join("airbender_test_no_workspace");
-        let nested = tmp.join("a").join("b");
-        std::fs::create_dir_all(&nested).unwrap();
-
-        let result = find_workspace_root(&nested);
-        assert_eq!(result, nested);
-
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
-    fn find_workspace_root_stops_at_nearest_workspace() {
-        let tmp = std::env::temp_dir().join("airbender_test_nested_workspace");
-        let inner = tmp.join("inner");
-        let pkg = inner.join("pkg");
-        std::fs::create_dir_all(&pkg).unwrap();
-        std::fs::write(tmp.join("Cargo.toml"), "[workspace]\n").unwrap();
-        std::fs::write(inner.join("Cargo.toml"), "[workspace]\n").unwrap();
-
-        let result = find_workspace_root(&pkg);
-        assert_eq!(result, inner);
-
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
     fn reproducible_build_errors_when_lockfile_missing() {
         let tmp = std::env::temp_dir().join("airbender_test_lockfile_missing");
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"guest\"\n").unwrap();
 
         let result = ReproducibleBuild::new(
+            &tmp,
             &tmp,
             "guest",
             None,
