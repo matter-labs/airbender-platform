@@ -46,10 +46,6 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-// ---------------------------------------------------------------------------
-// Image helpers (stateless)
-// ---------------------------------------------------------------------------
-
 /// Returns the Dockerfile for the reproducible build image.
 ///
 /// Base image digest sourced from `zksync-airbender/tools/reproduce/Dockerfile`.
@@ -86,7 +82,7 @@ WORKDIR /build
 }
 
 fn docker_image_tag() -> String {
-    format!("airbender-build:{}", DEFAULT_GUEST_TOOLCHAIN)
+    format!("airbender-build:{DEFAULT_GUEST_TOOLCHAIN}")
 }
 
 /// Checks that Docker is installed and the daemon is reachable.
@@ -138,10 +134,6 @@ fn ensure_image_built() -> Result<()> {
     }
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Build helpers (used by ReproducibleBuild)
-// ---------------------------------------------------------------------------
 
 /// RAII guard that force-removes a named Docker container when dropped.
 struct TempContainer(String);
@@ -198,10 +190,6 @@ fn build_container_cmd(
 
     format!("mkdir -p /dist && {build} && {obj_bin} && {obj_elf} && {obj_text}")
 }
-
-// ---------------------------------------------------------------------------
-// ReproducibleBuild
-// ---------------------------------------------------------------------------
 
 /// A resolved, ready-to-run reproducible build.
 ///
@@ -330,10 +318,6 @@ impl ReproducibleBuild {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Cleanup
-// ---------------------------------------------------------------------------
-
 /// Removes the shared `airbender-cargo-registry` volume and any stopped
 /// `airbender-build` containers left by interrupted builds.
 ///
@@ -374,10 +358,6 @@ pub fn clean_reproducible_volumes() -> Result<usize> {
 
     Ok(vol_count + ctr_count)
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
