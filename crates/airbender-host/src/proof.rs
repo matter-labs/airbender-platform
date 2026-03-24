@@ -52,6 +52,15 @@ impl RealProof {
         self.level
     }
 
+    /// Returns the wrapped unrolled proof.
+    ///
+    /// Direct use of the inner proof is not recommended. This is exposed as an
+    /// escape hatch and is not considered part of the stable `airbender-host`
+    /// public API.
+    pub fn into_inner(self) -> execution_utils::unrolled::UnrolledProgramProof {
+        self.inner
+    }
+
     pub(crate) fn inner(&self) -> &execution_utils::unrolled::UnrolledProgramProof {
         &self.inner
     }
