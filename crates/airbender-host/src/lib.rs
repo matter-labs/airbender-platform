@@ -1,5 +1,6 @@
 //! Host-side APIs for executing, proving, and verifying Airbender programs.
 
+mod cycle_marker;
 mod error;
 mod inputs;
 mod program;
@@ -11,6 +12,7 @@ mod verifier;
 mod vk;
 
 pub use airbender_core::guest::Commit;
+pub use cycle_marker::{CycleMarker, Mark};
 pub use error::{HostError, Result};
 pub use inputs::Inputs;
 pub use program::Program;

@@ -12,6 +12,8 @@ members = [
     "crates/cargo-airbender",
 ]
 exclude = [
+    "examples/cycle-markers/guest",
+    "examples/cycle-markers/host",
     "examples/fibonacci/guest",
     "examples/fibonacci/host",
     "examples/u256-add/guest",

@@ -21,6 +21,7 @@ This file defines project-specific guidance for coding agents working in `airben
   - `[profile.dev.package.setups]`
   - `[profile.release.package.keccak_special5]`
   - `[profile.release.package.setups]`
+- Prefer `cargo build --release` / `cargo run --release` for standalone host/example crates instead of copying those overrides into local manifests.
 - If a build or lint only works with `RUST_MIN_STACK`, treat that as a project issue and report it.
 - Full workspace clippy can emit large warning streams from upstream dependency crates. For task-focused linting, prefer targeted crate runs.
 

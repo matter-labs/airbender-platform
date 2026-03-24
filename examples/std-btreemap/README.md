@@ -14,11 +14,11 @@ cargo airbender build
 
 ```sh
 cd examples/std-btreemap/host
-cargo run
+cargo run --release
 ```
 
 The default host run executes the guest only. To generate and verify a proof:
 
 ```sh
-cargo run -- --prove
+cargo run --release -- --prove
 ```

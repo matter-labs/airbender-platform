@@ -16,17 +16,18 @@ cargo airbender build
 From the corresponding host directory:
 
 ```sh
-cargo run
+cargo run --release
 ```
 
 To generate and verify a proof:
 
 ```sh
-cargo run -- --prove
+cargo run --release -- --prove
 ```
 
 ## Examples
 
+- `cycle-markers` (transpiler cycle profiling + delegation snapshots)
 - `fibonacci`
 - `u256-add` (no_std + `ruint`)
 - `std-btreemap` (std + `BTreeMap`)
