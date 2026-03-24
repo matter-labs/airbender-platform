@@ -14,11 +14,6 @@ mod vk;
 pub use airbender_core::guest::Commit;
 pub use cycle_marker::{CycleMarker, Mark};
 pub use error::{HostError, Result};
-/// Escape-hatch re-export for accessing the wrapped proof directly.
-///
-/// Direct use of `UnrolledProgramProof` is not recommended and is not
-/// considered part of the stable `airbender-host` public API.
-pub use execution_utils::unrolled::UnrolledProgramProof;
 pub use inputs::Inputs;
 pub use program::Program;
 pub use proof::{DevProof, Proof, RealProof};
@@ -41,3 +36,12 @@ pub use vk::{
     compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
     UnrolledVk,
 };
+
+/// Raw Airbender re-exports without stability guarantees.
+///
+/// These items are not recommended for normal use. They are exposed for rare
+/// cases, for example when a project depends on both `airbender-host` and
+/// direct Airbender crates at the same time.
+pub mod raw {
+    pub use execution_utils::unrolled::UnrolledProgramProof;
+}
