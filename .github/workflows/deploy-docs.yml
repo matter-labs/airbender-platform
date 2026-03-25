@@ -12,7 +12,6 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - '.github/scripts/build-api-docs.sh'
       - '.github/workflows/deploy-docs.yml'
   pull_request:
     paths:
@@ -21,7 +20,6 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - '.github/scripts/build-api-docs.sh'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
     inputs:
@@ -59,65 +57,99 @@ jobs:
         with:
           ref: ${{ inputs.ref || '' }}
 
-      - name: Extract version from tag
-        if: startsWith(github.ref, 'refs/tags/')
-        id: extract-version
-        shell: 'bash -ex {0}'
-        run: |
-          TAG="${{ github.ref_name }}"
-          VERSION="${TAG#*-}"
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
-
-      - name: Resolve deployment version
-        id: resolve-version
-        shell: 'bash -eu {0}'
-        run: |
-          RAW_VERSION="${{ inputs.version || steps.extract-version.outputs.version || github.ref_name }}"
-          if [[ "${RAW_VERSION}" == "${{ github.event.repository.default_branch }}" || "${RAW_VERSION}" == "latest" ]]; then
-            DEPLOY_VERSION="latest"
-          else
-            DEPLOY_VERSION="${RAW_VERSION}"
-          fi
-
-          echo "raw=${RAW_VERSION}" >> "${GITHUB_OUTPUT}"
-          echo "deploy=${DEPLOY_VERSION}" >> "${GITHUB_OUTPUT}"
-
       - name: Install Rust toolchain
         uses: moonrepo/setup-rust@v1
         env:
+          # To fix rate limiting issues with GitHub API
           GITHUB_TOKEN: ${{ github.token }}
         with:
           cache: false
 
       - name: Build Rust API docs
-        if: github.event_name == 'pull_request' || steps.resolve-version.outputs.deploy == 'latest'
+        if: |
+          github.event_name == 'pull_request' ||
+          github.ref_name == github.event.repository.default_branch ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            (
+              inputs.version == '' ||
+              inputs.version == 'latest' ||
+              inputs.version == github.event.repository.default_branch
+            )
+          )
         shell: 'bash -eu {0}'
         run: |
-          bash .github/scripts/build-api-docs.sh "${API_DOCS_DIR}"
+          rm -rf target/doc "${API_DOCS_DIR}"
 
-      - name: Deploy docs
-        uses: matter-labs/deploy-mdbooks@c72ae3825faeb7d20cbf3e67714f7253dd0ee7cb # v1
-        with:
-          version: ${{ steps.resolve-version.outputs.raw }}
-          docs-dir: ${{ env.DOCS_DIR }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          enable-tests: ${{ env.ENABLE_TESTS }}
-          deploy: ${{ github.event_name != 'pull_request' }}
+          cargo doc --workspace --no-deps \
+            --exclude airbender-host \
+            --exclude cargo-airbender
+
+          cargo doc -p airbender-host --no-deps \
+            --no-default-features \
+            --features docs-only
+
+          cargo doc -p cargo-airbender --no-deps \
+            --no-default-features \
+            --features docs-only
+
+          mkdir -p "${API_DOCS_DIR}"
+          cp -a target/doc/. "${API_DOCS_DIR}/"
+          rm -f "${API_DOCS_DIR}/.lock"
 
       - name: Publish Rust API docs
-        if: github.event_name != 'pull_request' && steps.resolve-version.outputs.deploy == 'latest'
+        if: |
+          github.event_name != 'pull_request' &&
+          (
+            github.ref_name == github.event.repository.default_branch ||
+            (
+              github.event_name == 'workflow_dispatch' &&
+              (
+                inputs.version == '' ||
+                inputs.version == 'latest' ||
+                inputs.version == github.event.repository.default_branch
+              )
+            )
+          )
         shell: 'bash -euxo pipefail {0}'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config user.name "Deploy from CI"
+          git config user.email ""
+
+          if gh api "/repos/${GITHUB_REPOSITORY}/branches/gh-pages" > /dev/null 2>&1; then
+            git fetch origin gh-pages
+            git checkout gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rf .
+            git commit --allow-empty -m "Initialize gh-pages branch"
+          fi
+
           rm -rf "${API_ROOT_DIR}"
           mkdir -p "${API_ROOT_DIR}"
           cp -a "${API_DOCS_DIR}/." "${API_ROOT_DIR}/"
 
-          touch .nojekyll
-
-          git add .nojekyll "${API_ROOT_DIR}"
+          git add "${API_ROOT_DIR}"
           if git diff --cached --quiet; then
             exit 0
           fi
 
           git commit --amend -m "Deploy ${GITHUB_SHA::7}"
           git push --force --set-upstream origin gh-pages
+
+      - name: Restore source checkout
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || '' }}
+
+      - name: Deploy docs
+        uses: matter-labs/deploy-mdbooks@c72ae3825faeb7d20cbf3e67714f7253dd0ee7cb # v1
+        with:
+          version: ${{ inputs.version || github.ref_name }}
+          docs-dir: ${{ env.DOCS_DIR }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          enable-tests: ${{ env.ENABLE_TESTS }}
+          deploy: ${{ github.event_name != 'pull_request' }}
