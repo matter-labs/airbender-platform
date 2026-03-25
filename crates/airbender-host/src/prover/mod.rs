@@ -1,7 +1,7 @@
 use crate::error::{HostError, Result};
 use crate::proof::Proof;
 use crate::receipt::Receipt;
-#[cfg(not(feature = "docs-only"))]
+#[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
 use execution_utils::unrolled::UnrolledProgramProof;
 use std::path::{Path, PathBuf};
 
@@ -115,7 +115,7 @@ pub(super) fn resolve_worker_threads(worker_threads: Option<usize>) -> usize {
         .unwrap_or(1)
 }
 
-#[cfg(not(feature = "docs-only"))]
+#[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
 pub(super) fn receipt_from_real_proof(proof: &UnrolledProgramProof) -> Receipt {
     let mut registers = [0u32; 32];
     for (idx, reg) in proof
@@ -129,7 +129,7 @@ pub(super) fn receipt_from_real_proof(proof: &UnrolledProgramProof) -> Receipt {
     Receipt::from_registers(registers)
 }
 
-#[cfg(feature = "docs-only")]
+#[cfg(any(feature = "docs-only", not(feature = "proof-system")))]
 pub(super) fn receipt_from_real_proof(_proof: &crate::raw::UnrolledProgramProof) -> Receipt {
     Receipt::from_registers([0; 32])
 }

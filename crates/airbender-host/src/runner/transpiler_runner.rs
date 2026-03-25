@@ -21,9 +21,9 @@ use riscv_transpiler::vm::{
     DelegationsCounters, FlamegraphConfig as VmFlamegraphConfig, RamWithRomRegion, SimpleTape,
     State, VmFlamegraphProfiler, VM,
 };
-use std::path::{Path, PathBuf};
 #[cfg(feature = "transpiler")]
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 /// Builder for creating a configured transpiler runner.
 pub struct TranspilerRunnerBuilder {

@@ -34,21 +34,21 @@ pub struct DevProof {
 }
 
 /// Real cryptographic proof emitted by CPU/GPU provers.
-#[cfg(not(feature = "docs-only"))]
+#[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RealProof {
     level: ProverLevel,
     inner: execution_utils::unrolled::UnrolledProgramProof,
 }
 
-#[cfg(feature = "docs-only")]
+#[cfg(any(feature = "docs-only", not(feature = "proof-system")))]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RealProof {
     level: ProverLevel,
 }
 
 impl RealProof {
-    #[cfg(not(feature = "docs-only"))]
+    #[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
     pub(crate) fn new(
         level: ProverLevel,
         inner: execution_utils::unrolled::UnrolledProgramProof,
@@ -56,7 +56,7 @@ impl RealProof {
         Self { level, inner }
     }
 
-    #[cfg(feature = "docs-only")]
+    #[cfg(any(feature = "docs-only", not(feature = "proof-system")))]
     pub(crate) fn new(level: ProverLevel, _inner: impl Sized) -> Self {
         Self { level }
     }
@@ -71,24 +71,24 @@ impl RealProof {
     /// the stable `airbender-host` public API. This is exposed for rare cases,
     /// for example when a project depends on both `airbender-host` and direct
     /// Airbender crates at the same time.
-    #[cfg(not(feature = "docs-only"))]
+    #[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
     pub fn into_inner(self) -> execution_utils::unrolled::UnrolledProgramProof {
         self.inner
     }
 
-    #[cfg(feature = "docs-only")]
+    #[cfg(any(feature = "docs-only", not(feature = "proof-system")))]
     pub fn into_inner(self) -> crate::raw::UnrolledProgramProof {
-        unreachable!("RealProof::into_inner is unavailable when generating rustdoc")
+        unreachable!("RealProof::into_inner is unavailable in reduced-feature builds")
     }
 
-    #[cfg(not(feature = "docs-only"))]
+    #[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
     pub(crate) fn inner(&self) -> &execution_utils::unrolled::UnrolledProgramProof {
         &self.inner
     }
 
-    #[cfg(feature = "docs-only")]
+    #[cfg(any(feature = "docs-only", not(feature = "proof-system")))]
     pub(crate) fn inner(&self) -> &crate::raw::UnrolledProgramProof {
-        unreachable!("RealProof::inner is unavailable when generating rustdoc")
+        unreachable!("RealProof::inner is unavailable in reduced-feature builds")
     }
 }
 

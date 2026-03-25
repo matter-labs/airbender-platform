@@ -91,7 +91,7 @@ jobs:
 
           cargo doc -p cargo-airbender --no-deps \
             --no-default-features \
-            --features docs-only
+            --features airbender-host/docs-only
 
           mkdir -p "${API_DOCS_DIR}"
           cp -a target/doc/. "${API_DOCS_DIR}/"

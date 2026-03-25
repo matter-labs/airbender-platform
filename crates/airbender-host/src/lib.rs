@@ -1,4 +1,7 @@
-#![cfg_attr(feature = "docs-only", allow(dead_code, unused_imports))]
+#![cfg_attr(
+    any(feature = "docs-only", not(feature = "proof-system")),
+    allow(dead_code, unused_imports)
+)]
 
 //! Host-side APIs for executing, proving, and verifying Airbender programs.
 
@@ -44,15 +47,15 @@ pub use vk::{
 /// These items are not recommended for normal use. They are exposed for rare
 /// cases, for example when a project depends on both `airbender-host` and
 /// direct Airbender crates at the same time.
-#[cfg(not(feature = "docs-only"))]
+#[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
 pub mod raw {
     pub use execution_utils::unrolled::UnrolledProgramProof;
 }
 
-#[cfg(feature = "docs-only")]
+#[cfg(any(feature = "docs-only", not(feature = "proof-system")))]
 pub mod raw {
     /// Placeholder for the internal Airbender proof artifact exposed by the
-    /// runtime API in normal builds.
+    /// runtime API in full-featured builds.
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub struct UnrolledProgramProof {
         _private: (),
@@ -60,7 +63,7 @@ pub mod raw {
 
     impl UnrolledProgramProof {
         pub fn debug_info(&self) -> String {
-            "proof internals are unavailable in docs-only builds".to_string()
+            "proof internals are unavailable without the `proof-system` feature".to_string()
         }
     }
 }

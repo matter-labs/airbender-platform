@@ -6,9 +6,9 @@ use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
 #[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use crate::runner::{Runner, TranspilerRunnerBuilder};
-#[cfg(not(feature = "docs-only"))]
+#[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
 use execution_utils::setups;
-#[cfg(not(feature = "docs-only"))]
+#[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
 use execution_utils::unrolled;
 #[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
@@ -83,7 +83,7 @@ impl CpuProverBuilder {
 }
 
 /// CPU prover wrapper that caches padded artifacts and worker threads.
-#[cfg(not(feature = "docs-only"))]
+#[cfg(all(not(feature = "docs-only"), feature = "proof-system"))]
 pub struct CpuProver {
     app_bin_path: PathBuf,
     app_text_path: PathBuf,
@@ -94,13 +94,17 @@ pub struct CpuProver {
     worker: execution_utils::prover_examples::prover::worker::Worker,
 }
 
-#[cfg(feature = "docs-only")]
+#[cfg(any(feature = "docs-only", not(feature = "proof-system")))]
 pub struct CpuProver {
     _private: (),
 }
 
 impl CpuProver {
-    #[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
+    #[cfg(all(
+        feature = "proof-system",
+        feature = "transpiler",
+        not(feature = "docs-only")
+    ))]
     fn new(
         app_bin_path: &Path,
         worker_threads: Option<usize>,
@@ -141,7 +145,10 @@ impl CpuProver {
         })
     }
 
-    #[cfg(any(feature = "docs-only", not(feature = "transpiler")))]
+    #[cfg(any(
+        feature = "docs-only",
+        not(all(feature = "proof-system", feature = "transpiler"))
+    ))]
     fn new(
         _app_bin_path: &Path,
         _worker_threads: Option<usize>,
@@ -149,13 +156,17 @@ impl CpuProver {
         _ram_bound: Option<usize>,
     ) -> Result<Self> {
         Err(HostError::Prover(
-            "CPU proving requires the `transpiler` feature".to_string(),
+            "CPU proving requires the `proof-system` and `transpiler` features".to_string(),
         ))
     }
 }
 
 impl Prover for CpuProver {
-    #[cfg(all(feature = "transpiler", not(feature = "docs-only")))]
+    #[cfg(all(
+        feature = "proof-system",
+        feature = "transpiler",
+        not(feature = "docs-only")
+    ))]
     fn prove(&self, input_words: &[u32]) -> Result<ProveResult> {
         let cycles_bound = match self.cycles {
             Some(value) => value,
@@ -201,10 +212,13 @@ impl Prover for CpuProver {
         })
     }
 
-    #[cfg(any(feature = "docs-only", not(feature = "transpiler")))]
+    #[cfg(any(
+        feature = "docs-only",
+        not(all(feature = "proof-system", feature = "transpiler"))
+    ))]
     fn prove(&self, _input_words: &[u32]) -> Result<ProveResult> {
         Err(HostError::Prover(
-            "CPU proving requires the `transpiler` feature".to_string(),
+            "CPU proving requires the `proof-system` and `transpiler` features".to_string(),
         ))
     }
 }
