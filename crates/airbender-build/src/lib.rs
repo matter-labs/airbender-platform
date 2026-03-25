@@ -3,6 +3,8 @@
 mod config;
 mod constants;
 mod errors;
+mod manifest;
+mod resolver;
 mod utils;
 
 pub use airbender_core::host::manifest::{

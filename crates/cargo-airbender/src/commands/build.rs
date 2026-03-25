@@ -16,6 +16,7 @@ pub fn run(args: BuildArgs) -> Result<()> {
         debug,
         release,
         cargo_args,
+        panic_immediate_abort,
     } = args;
 
     let project_dir = match project {
@@ -40,6 +41,7 @@ pub fn run(args: BuildArgs) -> Result<()> {
     config.dist_dir = dist;
     config.profile = resolve_profile(profile, debug, release);
     config.cargo_args = cargo_args;
+    config.panic_immediate_abort = panic_immediate_abort;
 
     let artifacts = build_dist(&config).map_err(|err| {
         CliError::with_source("failed to build guest artifacts", err)

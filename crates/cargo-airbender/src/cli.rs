@@ -62,6 +62,8 @@ pub struct BuildArgs {
     pub debug: bool,
     #[arg(long, conflicts_with = "debug")]
     pub release: bool,
+    #[arg(long)]
+    pub panic_immediate_abort: bool,
     #[arg(last = true, value_name = "CARGO_ARGS")]
     pub cargo_args: Vec<String>,
 }
@@ -258,6 +260,24 @@ mod tests {
             Commands::Build(args) => {
                 assert_eq!(args.app_name, "gpu-profile");
             }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_panic_immediate_abort() {
+        let cli = Cli::parse_from(["cargo-airbender", "build", "--panic-immediate-abort"]);
+        match cli.command {
+            Commands::Build(args) => assert!(args.panic_immediate_abort),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_panic_immediate_abort_defaults_false() {
+        let cli = Cli::parse_from(["cargo-airbender", "build"]);
+        match cli.command {
+            Commands::Build(args) => assert!(!args.panic_immediate_abort),
             other => panic!("unexpected command: {other:?}"),
         }
     }

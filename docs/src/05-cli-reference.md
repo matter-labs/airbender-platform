@@ -32,6 +32,47 @@ Key options:
 - `--dist <path>`: dist root directory (app folder is created under this root; relative paths are resolved from command invocation cwd)
 - `--project <path>`: guest project directory
 - `--profile <debug|release>`, `--debug`, `--release`
+- `--panic-immediate-abort`: inject `panic_immediate_abort` into `build-std-features` for this build
+
+### `--panic-immediate-abort`
+
+Enables the `panic_immediate_abort` Rust compiler feature, which replaces all panic paths with an immediate abort instruction. This reduces binary size by eliminating panic formatting and unwinding infrastructure.
+
+**Via CLI flag** — apply for a single build without changing the project:
+
+```sh
+cargo airbender build --release --panic-immediate-abort
+```
+
+**Via `Cargo.toml`** — enable by default for a specific profile so every build picks it up automatically:
+
+```toml
+[package.metadata]
+airbender.profile.release = { panic-immediate-abort = true }
+airbender.profile.debug   = { panic-immediate-abort = true }
+```
+
+Supported profile keys are `"release"` and `"debug"`. The CLI flag always wins when passed explicitly.
+
+The effective value is recorded in `dist/<app-name>/manifest.toml` under `build.panic_immediate_abort`.
+
+**Verifying the flag is effective** — add a panic with a format argument to your guest, build both variants, and compare:
+
+```rust
+// guest/src/main.rs — temporary probe
+panic!("PROBE_{}", some_value);
+```
+
+```sh
+cargo airbender build --app-name no-pia
+cargo airbender build --panic-immediate-abort --app-name pia
+
+strings dist/no-pia/app.bin | grep PROBE   # present
+strings dist/pia/app.bin    | grep PROBE   # absent
+wc -c dist/no-pia/app.bin dist/pia/app.bin # pia is significantly smaller
+```
+
+The format string disappears because `-Cpanic=immediate-abort` replaces the panic call site with an inline trap before the format argument struct is emitted, so the string is never referenced and dead-code-stripped by the linker. A string-literal-only `panic!("msg")` is less reliable as a probe since the `&str` may survive for other reasons.
 
 Forward extra Cargo flags after `--`:
 

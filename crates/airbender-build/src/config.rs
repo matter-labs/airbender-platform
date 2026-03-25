@@ -2,10 +2,7 @@
 
 use crate::constants::DEFAULT_APP_NAME;
 use crate::errors::Result;
-use crate::utils::{
-    find_package, load_metadata, resolve_bin_name, resolve_git_metadata, run_command,
-    sha256_file_hex, validate_app_name,
-};
+use crate::utils::{run_command, sha256_file_hex};
 use crate::{ArtifactEntry, BuildMetadata, Manifest, Profile, MANIFEST_VERSION_V1};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +25,10 @@ pub struct BuildConfig {
     pub dist_dir: Option<PathBuf>,
     /// Additional arguments forwarded to `cargo build` and `cargo objcopy`.
     pub cargo_args: Vec<String>,
+    /// Force-enable `panic_immediate_abort` build-std feature.
+    /// When `false`, defers to `package.metadata.airbender.profile.<profile>.panic-immediate-abort`
+    /// in the guest's `Cargo.toml`.
+    pub panic_immediate_abort: bool,
 }
 
 impl BuildConfig {
@@ -41,44 +42,55 @@ impl BuildConfig {
             profile: Profile::Release,
             dist_dir: None,
             cargo_args: Vec::new(),
+            panic_immediate_abort: false,
         }
     }
 
     /// Builds the guest binary and writes a dist package for this configuration.
     fn build_dist(&self) -> Result<DistArtifacts> {
-        let invocation_cwd = std::env::current_dir()?;
-        let project_dir = self.resolve_project_dir(&invocation_cwd);
+        let cwd = std::env::current_dir()?;
+        let params = self.resolve(&cwd)?;
 
-        let app_name = self.resolve_app_name()?;
-        let manifest_names = self.resolve_manifest_names(&project_dir)?;
-        let target = self.resolve_target()?;
-        let dist_dir = self.resolve_dist_dir(&app_name, &project_dir, &invocation_cwd);
-        fs::create_dir_all(&dist_dir)?;
+        // Build extra config for `panic_immediate_abort`.
+        // The same --config must be passed to both build and objcopy to prevent
+        // a fall back to a cached artifact built without it.
+        let extra_config = params
+            .panic_immediate_abort
+            .then_some(r#"build.rustflags=["-Zunstable-options","-Cpanic=immediate-abort"]"#);
 
-        self.run_cargo_build(&project_dir, &manifest_names.bin_name, target.as_deref())?;
+        fs::create_dir_all(&params.dist_dir)?;
+        self.run_cargo_build(
+            &params.project_dir,
+            &params.bin_name,
+            params.target.as_deref(),
+            extra_config,
+        )?;
 
-        let app_bin = dist_dir.join("app.bin");
-        let app_elf = dist_dir.join("app.elf");
-        let app_text = dist_dir.join("app.text");
+        let app_bin = params.dist_dir.join("app.bin");
+        let app_elf = params.dist_dir.join("app.elf");
+        let app_text = params.dist_dir.join("app.text");
 
         self.run_cargo_objcopy(
-            &project_dir,
-            &manifest_names.bin_name,
-            target.as_deref(),
+            &params.project_dir,
+            &params.bin_name,
+            params.target.as_deref(),
+            extra_config,
             &["-O", "binary"],
             &app_bin,
         )?;
         self.run_cargo_objcopy(
-            &project_dir,
-            &manifest_names.bin_name,
-            target.as_deref(),
+            &params.project_dir,
+            &params.bin_name,
+            params.target.as_deref(),
+            extra_config,
             &["-R", ".text"],
             &app_elf,
         )?;
         self.run_cargo_objcopy(
-            &project_dir,
-            &manifest_names.bin_name,
-            target.as_deref(),
+            &params.project_dir,
+            &params.bin_name,
+            params.target.as_deref(),
+            extra_config,
             &["-O", "binary", "--only-section=.text"],
             &app_text,
         )?;
@@ -86,16 +98,14 @@ impl BuildConfig {
         let bin_sha256 = sha256_file_hex(&app_bin)?;
         let elf_sha256 = sha256_file_hex(&app_elf)?;
         let text_sha256 = sha256_file_hex(&app_text)?;
-        let git_metadata = resolve_git_metadata(&project_dir);
-        let manifest_bin_name = manifest_names.manifest_bin_name();
 
-        let manifest_path = dist_dir.join("manifest.toml");
+        let manifest_path = params.dist_dir.join("manifest.toml");
         let manifest = Manifest {
-            package: manifest_names.package,
-            bin_name: manifest_bin_name,
+            package: params.package_name,
+            bin_name: params.manifest_bin_name,
             manifest: MANIFEST_VERSION_V1.to_string(),
             codec: format!("v{}", airbender_codec::AIRBENDER_CODEC_V0),
-            target,
+            target: params.target,
             bin: ArtifactEntry {
                 path: "app.bin".to_string(),
                 sha256: bin_sha256,
@@ -110,15 +120,16 @@ impl BuildConfig {
             },
             build: BuildMetadata {
                 profile: self.profile,
-                git_branch: git_metadata.branch,
-                git_commit: git_metadata.commit,
-                is_dirty: git_metadata.is_dirty,
+                panic_immediate_abort: params.panic_immediate_abort,
+                git_branch: params.git_branch,
+                git_commit: params.git_commit,
+                is_dirty: params.git_is_dirty,
             },
         };
         manifest.write_to_file(&manifest_path)?;
 
         Ok(DistArtifacts {
-            dist_dir,
+            dist_dir: params.dist_dir,
             app_bin,
             app_elf,
             app_text,
@@ -132,19 +143,20 @@ impl BuildConfig {
         project_dir: &Path,
         bin_name: &str,
         target: Option<&str>,
+        extra_config: Option<&str>,
     ) -> Result<()> {
         let mut cmd = Command::new("cargo");
-
         cmd.arg("build");
         if self.profile == Profile::Release {
             cmd.arg("--release");
         }
-
         cmd.arg("--bin").arg(bin_name);
         if let Some(target) = target {
             cmd.arg("--target").arg(target);
         }
-
+        if let Some(cfg) = extra_config {
+            cmd.arg("--config").arg(cfg);
+        }
         cmd.args(&self.cargo_args);
         cmd.current_dir(project_dir);
         run_command(cmd, "cargo build")
@@ -156,99 +168,28 @@ impl BuildConfig {
         project_dir: &Path,
         bin_name: &str,
         target: Option<&str>,
+        extra_config: Option<&str>,
         objcopy_args: &[&str],
         output: &Path,
     ) -> Result<()> {
         let mut cmd = Command::new("cargo");
-
         cmd.arg("objcopy");
         if self.profile == Profile::Release {
             cmd.arg("--release");
         }
-
         cmd.arg("--bin").arg(bin_name);
         if let Some(target) = target {
             cmd.arg("--target").arg(target);
         }
-
+        if let Some(cfg) = extra_config {
+            cmd.arg("--config").arg(cfg);
+        }
         cmd.args(&self.cargo_args);
         cmd.arg("--");
         cmd.args(objcopy_args);
         cmd.arg(output);
         cmd.current_dir(project_dir);
         run_command(cmd, "cargo objcopy")
-    }
-
-    /// Resolves names used during build and manifest generation.
-    fn resolve_manifest_names(&self, project_dir: &Path) -> Result<ManifestNames> {
-        let manifest_path = project_dir.join("Cargo.toml");
-        let metadata = load_metadata(&manifest_path)?;
-        let package = find_package(&metadata, &manifest_path)?;
-        let bin_name = resolve_bin_name(package, self.bin_name.as_deref())?;
-
-        Ok(ManifestNames {
-            package: package.name.clone(),
-            bin_name,
-        })
-    }
-
-    /// Validates and returns the configured app name.
-    fn resolve_app_name(&self) -> Result<String> {
-        validate_app_name(&self.app_name)?;
-        Ok(self.app_name.clone())
-    }
-
-    /// Resolves the build target, using explicit override when provided.
-    fn resolve_target(&self) -> Result<Option<String>> {
-        Ok(self.target.clone())
-    }
-
-    /// Resolves the project directory relative to the command invocation cwd.
-    fn resolve_project_dir(&self, invocation_cwd: &Path) -> PathBuf {
-        if self.project_dir.is_absolute() {
-            self.project_dir.clone()
-        } else {
-            invocation_cwd.join(&self.project_dir)
-        }
-    }
-
-    /// Resolves the final dist directory for this app configuration.
-    ///
-    /// `--dist` follows standard CLI semantics: relative paths are interpreted
-    /// from command invocation cwd, not from the guest project directory.
-    fn resolve_dist_dir(
-        &self,
-        app_name: &str,
-        project_dir: &Path,
-        invocation_cwd: &Path,
-    ) -> PathBuf {
-        let dist_root = self.dist_dir.clone().map_or_else(
-            || project_dir.join("dist"),
-            |dist_dir| {
-                if dist_dir.is_absolute() {
-                    dist_dir
-                } else {
-                    invocation_cwd.join(dist_dir)
-                }
-            },
-        );
-        dist_root.join(app_name)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ManifestNames {
-    package: String,
-    bin_name: String,
-}
-
-impl ManifestNames {
-    fn manifest_bin_name(&self) -> Option<String> {
-        if self.bin_name == self.package {
-            None
-        } else {
-            Some(self.bin_name.clone())
-        }
     }
 }
 
@@ -270,101 +211,4 @@ pub struct DistArtifacts {
 /// Builds and packages guest artifacts using the provided configuration.
 pub fn build_dist(config: &BuildConfig) -> Result<DistArtifacts> {
     config.build_dist()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_to_no_target_override() {
-        let config = BuildConfig::new(PathBuf::from("."));
-        let target = config.resolve_target().expect("target resolution");
-        assert_eq!(target, None);
-    }
-
-    #[test]
-    fn accepts_explicit_target_override() {
-        let mut config = BuildConfig::new(PathBuf::from("."));
-        config.target = Some("riscv32im-risc0-zkvm-elf".to_string());
-        let target = config.resolve_target().expect("target resolution");
-        assert_eq!(target.as_deref(), Some("riscv32im-risc0-zkvm-elf"));
-    }
-
-    #[test]
-    fn defaults_to_app_name() {
-        let config = BuildConfig::new(PathBuf::from("."));
-        let app_name = config.resolve_app_name().expect("app-name resolution");
-        assert_eq!(app_name, DEFAULT_APP_NAME);
-    }
-
-    #[test]
-    fn accepts_custom_app_name() {
-        let mut config = BuildConfig::new(PathBuf::from("."));
-        config.app_name = "gpu-profile".to_string();
-        let app_name = config.resolve_app_name().expect("app-name resolution");
-        assert_eq!(app_name, "gpu-profile");
-    }
-
-    #[test]
-    fn rejects_nested_app_name() {
-        let mut config = BuildConfig::new(PathBuf::from("."));
-        config.app_name = "profiles/gpu".to_string();
-        let err = config.resolve_app_name().expect_err("invalid app-name");
-        assert!(matches!(err, crate::BuildError::InvalidConfig(_)));
-    }
-
-    #[test]
-    fn resolves_default_dist_dir_under_project_root() {
-        let mut config = BuildConfig::new(PathBuf::from("/workspace/project"));
-        config.app_name = "gpu-profile".to_string();
-        let app_name = config.resolve_app_name().expect("app-name resolution");
-        let invocation_cwd = Path::new("/workspace/caller");
-        let project_dir = config.resolve_project_dir(invocation_cwd);
-        let dist_dir = config.resolve_dist_dir(&app_name, &project_dir, invocation_cwd);
-        assert_eq!(
-            dist_dir,
-            PathBuf::from("/workspace/project/dist/gpu-profile")
-        );
-    }
-
-    #[test]
-    fn resolves_custom_relative_dist_root_from_invocation_cwd() {
-        let mut config = BuildConfig::new(PathBuf::from("/workspace/project"));
-        config.dist_dir = Some(PathBuf::from("builds"));
-        config.app_name = "gpu-profile".to_string();
-        let app_name = config.resolve_app_name().expect("app-name resolution");
-        let invocation_cwd = Path::new("/workspace/caller");
-        let project_dir = config.resolve_project_dir(invocation_cwd);
-        let dist_dir = config.resolve_dist_dir(&app_name, &project_dir, invocation_cwd);
-        assert_eq!(
-            dist_dir,
-            PathBuf::from("/workspace/caller/builds/gpu-profile")
-        );
-    }
-
-    #[test]
-    fn resolves_relative_project_dir_from_invocation_cwd() {
-        let config = BuildConfig::new(PathBuf::from("examples/fibonacci/guest"));
-        let invocation_cwd = Path::new("/workspace/repo");
-        let project_dir = config.resolve_project_dir(invocation_cwd);
-
-        assert_eq!(
-            project_dir,
-            PathBuf::from("/workspace/repo/examples/fibonacci/guest")
-        );
-    }
-
-    #[test]
-    fn resolves_custom_absolute_dist_root_without_rebasing() {
-        let mut config = BuildConfig::new(PathBuf::from("/workspace/project"));
-        config.dist_dir = Some(PathBuf::from("/workspace/builds"));
-        config.app_name = "gpu-profile".to_string();
-        let app_name = config.resolve_app_name().expect("app-name resolution");
-        let invocation_cwd = Path::new("/workspace/caller");
-        let project_dir = config.resolve_project_dir(invocation_cwd);
-        let dist_dir = config.resolve_dist_dir(&app_name, &project_dir, invocation_cwd);
-
-        assert_eq!(dist_dir, PathBuf::from("/workspace/builds/gpu-profile"));
-    }
 }
