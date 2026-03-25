@@ -7,6 +7,7 @@ This chapter gets you from a fresh machine to your first Airbender guest build, 
 - Rust nightly toolchain from [`rust-toolchain.toml`](https://github.com/matter-labs/airbender-platform/blob/main/rust-toolchain.toml)
 - `clang` available in `PATH`
 - `cargo-binutils` for `cargo objcopy`
+- Docker (required only for `cargo airbender build --reproducible`)
 
 Install `cargo-binutils`:
 
