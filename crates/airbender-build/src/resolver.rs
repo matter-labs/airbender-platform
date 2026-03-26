@@ -115,8 +115,7 @@ impl BuildConfig {
         let dist_dir = self.resolve_dist_dir(&self.app_name, &project_dir, cwd);
         let manifest = ProjectManifest::load(&project_dir.join("Cargo.toml"))?;
         let bin_name = resolve_bin_name(&manifest, self.bin_name.as_deref())?;
-        let panic_immediate_abort =
-            self.panic_immediate_abort || manifest.panic_immediate_abort(self.profile);
+        let panic_immediate_abort = manifest.panic_immediate_abort(self.profile);
         // Omit bin_name from the manifest when it matches the package name — the common case.
         // Downstream tooling treats an absent bin_name as identical to package_name.
         let manifest_bin_name = (bin_name != manifest.package_name).then(|| bin_name.clone());
@@ -281,16 +280,6 @@ mod tests {
         config.app_name = "foo/bar".to_string();
         let err = config.resolve(dir.path()).expect_err("invalid app name");
         assert!(matches!(err, crate::BuildError::InvalidConfig(_)));
-    }
-
-    #[test]
-    fn resolve_panic_immediate_abort_cli_wins_over_manifest() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        write_minimal_project(dir.path());
-        let mut config = BuildConfig::new(dir.path());
-        config.panic_immediate_abort = true;
-        let params = config.resolve(dir.path()).expect("resolve");
-        assert!(params.panic_immediate_abort);
     }
 
     #[test]

@@ -20,13 +20,22 @@ fn write_file(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
 }
 
-/// Creates a minimal guest project with a format-string panic in an unreachable branch.
+/// Scaffolds a minimal probe guest, optionally enabling `panic-immediate-abort` via
+/// `[package.metadata.airbender]` in `Cargo.toml`.
 ///
 /// A string-literal-only panic is an unreliable probe because the `&str` can survive
 /// for unrelated reasons. A format-argument panic is stripped only when
 /// `-Cpanic=immediate-abort` replaces the call site before the format struct is emitted.
-fn scaffold_probe_guest(dir: &Path) {
+fn scaffold_probe_guest(dir: &Path, panic_immediate_abort: bool) {
     let sdk = sdk_path();
+    let metadata = if panic_immediate_abort {
+        r#"
+[package.metadata]
+airbender.profile.release = { panic-immediate-abort = true }
+"#
+    } else {
+        ""
+    };
 
     write_file(
         &dir.join("Cargo.toml"),
@@ -38,7 +47,7 @@ edition = "2021"
 
 [dependencies]
 airbender = {{ package = "airbender-sdk", path = "{}" }}
-"#,
+{metadata}"#,
             sdk.display()
         ),
     );
@@ -92,24 +101,24 @@ fn main() -> u32 {
     );
 }
 
-/// Verifies that `--panic-immediate-abort` eliminates format strings from the guest binary.
+/// Verifies that `panic-immediate-abort = true` in `[package.metadata.airbender]` eliminates
+/// format strings from the guest binary.
 ///
-/// Builds the same probe guest twice:
-/// - without the flag: `PROBE_` format string must be present in the binary
-/// - with the flag:    `PROBE_` format string must be absent from the binary
+/// Builds two probe guests:
+/// - without the metadata key: `PROBE_` format string must be present in the binary
+/// - with the metadata key:    `PROBE_` format string must be absent from the binary
 ///
-/// Also asserts that `manifest.toml` records the correct `panic_immediate_abort` value
-/// and that the panic_immediate_abort binary is smaller than the default binary.
+/// Also asserts that the panic_immediate_abort binary is less than half the size of the default,
+/// reflecting the elimination of panic formatting infrastructure (~5x reduction in practice).
 #[test]
 fn panic_immediate_abort_strips_format_string_from_binary() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let guest_dir = tmp.path().join("guest");
     let dist_dir = tmp.path().join("dist");
-    scaffold_probe_guest(&guest_dir);
 
-    // Build WITHOUT --panic-immediate-abort: format string must be present.
-    let mut config = BuildConfig::new(&guest_dir);
-    config.app_name = "default".to_string();
+    // Build WITHOUT panic_immediate_abort metadata: format string must be present.
+    let guest_default = tmp.path().join("guest-default");
+    scaffold_probe_guest(&guest_default, false);
+    let mut config = BuildConfig::new(&guest_default);
     config.dist_dir = Some(dist_dir.clone());
     let artifacts_without = build_dist(&config).expect("build without panic_immediate_abort");
 
@@ -120,11 +129,11 @@ fn panic_immediate_abort_strips_format_string_from_binary() {
         bin_without.len(),
     );
 
-    // Build WITH --panic-immediate-abort: format string must be absent.
-    let mut config = BuildConfig::new(&guest_dir);
-    config.app_name = "panic-immediate-abort".to_string();
+    // Build WITH panic_immediate_abort metadata: format string must be absent.
+    let guest_with_pia = tmp.path().join("guest-panic-immediate-abort");
+    scaffold_probe_guest(&guest_with_pia, true);
+    let mut config = BuildConfig::new(&guest_with_pia);
     config.dist_dir = Some(dist_dir.clone());
-    config.panic_immediate_abort = true;
     let artifacts_with = build_dist(&config).expect("build with panic_immediate_abort");
 
     let bin_with = fs::read(&artifacts_with.app_bin).expect("read app.bin");
@@ -137,7 +146,7 @@ fn panic_immediate_abort_strips_format_string_from_binary() {
     // panic_immediate_abort binary must be less than half the size of the default binary.
     // Eliminating panic formatting infrastructure typically produces a ~5x reduction;
     // the 2x threshold is conservative enough to avoid brittleness while still catching
-    // a missing flag (where the size would be equal).
+    // a missing metadata key (where the size would be equal).
     assert!(
         bin_with.len() * 2 < bin_without.len(),
         "panic_immediate_abort binary ({} bytes) must be less than half the default binary ({} bytes)",

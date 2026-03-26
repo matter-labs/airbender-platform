@@ -35,10 +35,6 @@ pub struct BuildConfig {
     /// the guest shares crates with the host via `path = "../../.."`).
     /// Has no effect unless `reproducible` is also true.
     pub workspace_root_override: Option<PathBuf>,
-    /// Force-enable `panic_immediate_abort` build-std feature.
-    /// When `false`, defers to `package.metadata.airbender.profile.<profile>.panic-immediate-abort`
-    /// in the guest's `Cargo.toml`.
-    pub panic_immediate_abort: bool,
 }
 
 impl BuildConfig {
@@ -54,7 +50,6 @@ impl BuildConfig {
             cargo_args: Vec::new(),
             reproducible: false,
             workspace_root_override: None,
-            panic_immediate_abort: false,
         }
     }
 
