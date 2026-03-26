@@ -40,6 +40,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --locked
       - name: Build
         run: cargo build --workspace
       - name: Test

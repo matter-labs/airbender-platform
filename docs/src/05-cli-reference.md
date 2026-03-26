@@ -59,23 +59,6 @@ Supported profile keys are `"release"` and `"debug"`. The CLI flag always wins w
 
 The effective value is recorded in `dist/<app-name>/manifest.toml` under `build.panic_immediate_abort`.
 
-**Verifying the flag is effective** — add a panic with a format argument to your guest, build both variants, and compare:
-
-```rust
-// guest/src/main.rs — temporary probe
-panic!("PROBE_{}", some_value);
-```
-
-```sh
-cargo airbender build --app-name no-pia
-cargo airbender build --panic-immediate-abort --app-name pia
-
-strings dist/no-pia/app.bin | grep PROBE   # present
-strings dist/pia/app.bin    | grep PROBE   # absent
-wc -c dist/no-pia/app.bin dist/pia/app.bin # pia is significantly smaller
-```
-
-The format string disappears because `-Cpanic=immediate-abort` replaces the panic call site with an inline trap before the format argument struct is emitted, so the string is never referenced and dead-code-stripped by the linker. A string-literal-only `panic!("msg")` is less reliable as a probe since the `&str` may survive for other reasons.
 
 Forward extra Cargo flags after `--`:
 
