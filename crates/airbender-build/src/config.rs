@@ -146,7 +146,6 @@ impl BuildConfig {
             build: BuildMetadata {
                 profile: self.profile,
                 reproducible: self.reproducible,
-                panic_immediate_abort: params.panic_immediate_abort,
                 git_branch: params.git_branch,
                 git_commit: params.git_commit,
                 is_dirty: params.git_is_dirty,

@@ -62,8 +62,6 @@ pub struct ArtifactEntry {
 pub struct BuildMetadata {
     /// Cargo build profile used to produce artifacts.
     pub profile: Profile,
-    /// Whether the guest was built with `panic_immediate_abort`.
-    pub panic_immediate_abort: bool,
     /// Git branch name at build time, or `N/A` if unavailable.
     pub git_branch: String,
     /// Git commit hash at build time, or `N/A` if unavailable.
@@ -151,7 +149,6 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-                panic_immediate_abort: false,
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
@@ -170,48 +167,8 @@ mod tests {
         assert!(toml.contains("[text]"));
         assert!(toml.contains("[build]"));
         assert!(!toml.contains("is_dirty"));
-        assert!(toml.contains("panic_immediate_abort = false"));
         let parsed = Manifest::parse(&toml).expect("parse");
         assert_eq!(parsed, manifest);
-    }
-
-    #[test]
-    fn includes_panic_immediate_abort_when_true() {
-        let manifest = Manifest {
-            package: "demo".to_string(),
-            bin_name: None,
-            manifest: MANIFEST_VERSION_V1.to_string(),
-            codec: CODEC_VERSION_V0.to_string(),
-            target: None,
-            bin: ArtifactEntry {
-                path: "app.bin".to_string(),
-                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                    .to_string(),
-            },
-            elf: ArtifactEntry {
-                path: "app.elf".to_string(),
-                sha256: "b8f1d1d6b064577aa66013024e69c0dcde721573ae58da439b84e1c862437288"
-                    .to_string(),
-            },
-            text: ArtifactEntry {
-                path: "app.text".to_string(),
-                sha256: "0476bd0bb997b387b72f721b3f0f38f112e43e32f151e1d1f2ec20bc7c5ad5a6"
-                    .to_string(),
-            },
-            build: BuildMetadata {
-                profile: Profile::Release,
-                panic_immediate_abort: true,
-                git_branch: "main".to_string(),
-                git_commit: "abc123".to_string(),
-                is_dirty: false,
-                reproducible: false,
-            },
-        };
-
-        let toml = manifest.to_toml().expect("serialize");
-        assert!(toml.contains("panic_immediate_abort = true"));
-        let parsed = Manifest::parse(&toml).expect("parse");
-        assert_eq!(parsed.build.panic_immediate_abort, true);
     }
 
     #[test]
@@ -236,7 +193,7 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-                panic_immediate_abort: false,
+
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
@@ -269,7 +226,7 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-                panic_immediate_abort: false,
+
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
@@ -307,7 +264,7 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-                panic_immediate_abort: false,
+
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: true,
@@ -344,7 +301,7 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-                panic_immediate_abort: false,
+
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
@@ -383,7 +340,7 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-                panic_immediate_abort: false,
+
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,

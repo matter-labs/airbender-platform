@@ -119,11 +119,6 @@ fn panic_immediate_abort_strips_format_string_from_binary() {
         "format string must be present in default binary ({} bytes)",
         bin_without.len(),
     );
-    let manifest_without = fs::read_to_string(&artifacts_without.manifest).expect("read manifest");
-    assert!(
-        manifest_without.contains("panic_immediate_abort = false"),
-        "manifest must record panic_immediate_abort = false\n{manifest_without}",
-    );
 
     // Build WITH --panic-immediate-abort: format string must be absent.
     let mut config = BuildConfig::new(&guest_dir);
@@ -137,11 +132,6 @@ fn panic_immediate_abort_strips_format_string_from_binary() {
         !contains_bytes(&bin_with, b"PROBE_"),
         "format string must be absent from panic_immediate_abort binary ({} bytes)",
         bin_with.len(),
-    );
-    let manifest_with = fs::read_to_string(&artifacts_with.manifest).expect("read manifest");
-    assert!(
-        manifest_with.contains("panic_immediate_abort = true"),
-        "manifest must record panic_immediate_abort = true\n{manifest_with}",
     );
 
     // panic_immediate_abort binary must be less than half the size of the default binary.

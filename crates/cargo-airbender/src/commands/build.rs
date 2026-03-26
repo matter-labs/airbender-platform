@@ -18,7 +18,6 @@ pub fn run(args: BuildArgs) -> Result<()> {
         debug,
         release,
         cargo_args,
-        panic_immediate_abort,
         reproducible,
         workspace_root,
     } = args;
@@ -45,7 +44,6 @@ pub fn run(args: BuildArgs) -> Result<()> {
     config.dist_dir = dist;
     config.profile = resolve_profile(profile, debug, release);
     config.cargo_args = cargo_args;
-    config.panic_immediate_abort = panic_immediate_abort;
     config.reproducible = reproducible;
     config.workspace_root_override = workspace_root;
 
