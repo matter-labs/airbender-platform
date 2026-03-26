@@ -193,7 +193,6 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
@@ -226,7 +225,6 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
@@ -264,7 +262,6 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: true,
@@ -301,7 +298,6 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
@@ -340,7 +336,6 @@ mod tests {
             },
             build: BuildMetadata {
                 profile: Profile::Release,
-
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
                 is_dirty: false,
