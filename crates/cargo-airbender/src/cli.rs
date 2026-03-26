@@ -42,6 +42,8 @@ pub enum Commands {
     GenerateVk(GenerateVkArgs),
     /// Verify a proof against verification keys.
     VerifyProof(VerifyProofArgs),
+    /// Remove Docker resources created by reproducible builds.
+    Clean,
 }
 
 #[derive(Args, Debug)]
@@ -66,6 +68,16 @@ pub struct BuildArgs {
     pub panic_immediate_abort: bool,
     #[arg(last = true, value_name = "CARGO_ARGS")]
     pub cargo_args: Vec<String>,
+    /// Build inside a pinned Docker container for bit-for-bit reproducible output.
+    /// Automatically passes `--locked` to cargo; the project must have a committed `Cargo.lock`.
+    #[arg(long)]
+    pub reproducible: bool,
+    /// Override the directory bind-mounted as /src inside the reproducible build container.
+    /// Only needed when the guest has path dependencies pointing outside its own cargo workspace
+    /// root, e.g. in a monorepo where the guest shares crates with the host via relative paths.
+    /// Has no effect without --reproducible.
+    #[arg(long, requires = "reproducible")]
+    pub workspace_root: Option<PathBuf>,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -280,6 +292,43 @@ mod tests {
             Commands::Build(args) => assert!(!args.panic_immediate_abort),
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_build_reproducible_flag() {
+        let cli = Cli::parse_from(["cargo-airbender", "build", "--reproducible"]);
+        match cli.command {
+            Commands::Build(args) => {
+                assert!(args.reproducible);
+                assert_eq!(args.app_name, "app");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_workspace_root_with_reproducible() {
+        let cli = Cli::parse_from([
+            "cargo-airbender",
+            "build",
+            "--reproducible",
+            "--workspace-root",
+            "/repo",
+        ]);
+        match cli.command {
+            Commands::Build(args) => {
+                assert!(args.reproducible);
+                assert_eq!(args.workspace_root, Some(PathBuf::from("/repo")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_workspace_root_requires_reproducible() {
+        let err = Cli::try_parse_from(["cargo-airbender", "build", "--workspace-root", "/repo"])
+            .expect_err("--workspace-root without --reproducible should fail");
+        assert!(err.to_string().contains("--reproducible"));
     }
 
     #[test]

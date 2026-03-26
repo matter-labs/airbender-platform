@@ -1,7 +1,9 @@
 use crate::cli::{BuildArgs, BuildProfile};
 use crate::error::{CliError, Result};
 use crate::ui;
-use airbender_build::{build_dist, BuildConfig, Profile, DEFAULT_GUEST_TARGET};
+use airbender_build::{
+    build_dist, BuildConfig, Profile, DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +19,8 @@ pub fn run(args: BuildArgs) -> Result<()> {
         release,
         cargo_args,
         panic_immediate_abort,
+        reproducible,
+        workspace_root,
     } = args;
 
     let project_dir = match project {
@@ -42,6 +46,8 @@ pub fn run(args: BuildArgs) -> Result<()> {
     config.profile = resolve_profile(profile, debug, release);
     config.cargo_args = cargo_args;
     config.panic_immediate_abort = panic_immediate_abort;
+    config.reproducible = reproducible;
+    config.workspace_root_override = workspace_root;
 
     let artifacts = build_dist(&config).map_err(|err| {
         CliError::with_source("failed to build guest artifacts", err)
@@ -49,6 +55,10 @@ pub fn run(args: BuildArgs) -> Result<()> {
     })?;
 
     ui::success("built guest artifacts");
+    if reproducible {
+        ui::info("reproducible build (Docker)");
+        ui::field("toolchain", DEFAULT_GUEST_TOOLCHAIN);
+    }
     ui::field("dist", artifacts.dist_dir.display());
     ui::field("app.bin", artifacts.app_bin.display());
     ui::field("app.elf", artifacts.app_elf.display());

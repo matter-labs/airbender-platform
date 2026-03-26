@@ -91,6 +91,8 @@ pub struct ResolvedBuildParams {
     pub target: Option<String>,
     /// Absolute path to the dist app directory.
     pub dist_dir: PathBuf,
+    /// Cargo workspace root reported by `cargo metadata`.
+    pub workspace_root: PathBuf,
     /// Effective `panic_immediate_abort` flag after merging CLI and manifest settings.
     pub panic_immediate_abort: bool,
     /// Git branch, or `"N/A"` if unavailable.
@@ -127,6 +129,7 @@ impl BuildConfig {
             manifest_bin_name,
             target: self.target.clone(),
             dist_dir,
+            workspace_root: manifest.workspace_root,
             panic_immediate_abort,
             git_branch: git.branch,
             git_commit: git.commit,
@@ -439,6 +442,7 @@ mod tests {
             package_name: package_name.to_string(),
             bin_targets: bin_targets.iter().map(|s| s.to_string()).collect(),
             airbender: Default::default(),
+            workspace_root: PathBuf::new(),
         }
     }
 

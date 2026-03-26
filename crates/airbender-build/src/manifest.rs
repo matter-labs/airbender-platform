@@ -14,6 +14,8 @@ pub struct ProjectManifest {
     pub package_name: String,
     /// Binary target names declared by the package.
     pub bin_targets: Vec<String>,
+    /// Cargo workspace root reported by `cargo metadata`.
+    pub workspace_root: std::path::PathBuf,
     /// Typed `[package.metadata.airbender]` settings, defaulting to empty if absent.
     pub airbender: AirbenderConfig,
 }
@@ -80,11 +82,13 @@ impl ProjectManifest {
             .filter(|t| t.kind.iter().any(|k| k == "bin"))
             .map(|t| t.name.clone())
             .collect();
+        let workspace_root = metadata.workspace_root.clone().into_std_path_buf();
         let airbender =
             serde_json::from_value(package.metadata["airbender"].clone()).unwrap_or_default();
         Ok(Self {
             package_name: package.name.clone(),
             bin_targets,
+            workspace_root,
             airbender,
         })
     }
@@ -118,6 +122,7 @@ mod tests {
         ProjectManifest {
             package_name: package_name.to_string(),
             bin_targets: bin_targets.iter().map(|s| s.to_string()).collect(),
+            workspace_root: std::path::PathBuf::new(),
             airbender,
         }
     }

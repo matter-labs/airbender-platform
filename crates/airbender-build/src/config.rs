@@ -1,6 +1,7 @@
 //! Build configuration and artifact packaging flow.
 
 use crate::constants::DEFAULT_APP_NAME;
+use crate::docker::ReproducibleBuild;
 use crate::errors::Result;
 use crate::utils::{run_command, sha256_file_hex};
 use crate::{ArtifactEntry, BuildMetadata, Manifest, Profile, MANIFEST_VERSION_V1};
@@ -25,6 +26,15 @@ pub struct BuildConfig {
     pub dist_dir: Option<PathBuf>,
     /// Additional arguments forwarded to `cargo build` and `cargo objcopy`.
     pub cargo_args: Vec<String>,
+    /// When true, compilation runs inside a pinned Docker container for
+    /// bit-for-bit reproducible output across host environments.
+    pub reproducible: bool,
+    /// Overrides the directory bind-mounted as `/src` inside the reproducible
+    /// build container. Only needed when the guest has path dependencies that
+    /// point outside its own cargo workspace root (e.g. in-tree monorepos where
+    /// the guest shares crates with the host via `path = "../../.."`).
+    /// Has no effect unless `reproducible` is also true.
+    pub workspace_root_override: Option<PathBuf>,
     /// Force-enable `panic_immediate_abort` build-std feature.
     /// When `false`, defers to `package.metadata.airbender.profile.<profile>.panic-immediate-abort`
     /// in the guest's `Cargo.toml`.
@@ -42,6 +52,8 @@ impl BuildConfig {
             profile: Profile::Release,
             dist_dir: None,
             cargo_args: Vec::new(),
+            reproducible: false,
+            workspace_root_override: None,
             panic_immediate_abort: false,
         }
     }
@@ -59,41 +71,54 @@ impl BuildConfig {
             .then_some(r#"build.rustflags=["-Zunstable-options","-Cpanic=immediate-abort"]"#);
 
         fs::create_dir_all(&params.dist_dir)?;
-        self.run_cargo_build(
-            &params.project_dir,
-            &params.bin_name,
-            params.target.as_deref(),
-            extra_config,
-        )?;
 
         let app_bin = params.dist_dir.join("app.bin");
         let app_elf = params.dist_dir.join("app.elf");
         let app_text = params.dist_dir.join("app.text");
 
-        self.run_cargo_objcopy(
-            &params.project_dir,
-            &params.bin_name,
-            params.target.as_deref(),
-            extra_config,
-            &["-O", "binary"],
-            &app_bin,
-        )?;
-        self.run_cargo_objcopy(
-            &params.project_dir,
-            &params.bin_name,
-            params.target.as_deref(),
-            extra_config,
-            &["-R", ".text"],
-            &app_elf,
-        )?;
-        self.run_cargo_objcopy(
-            &params.project_dir,
-            &params.bin_name,
-            params.target.as_deref(),
-            extra_config,
-            &["-O", "binary", "--only-section=.text"],
-            &app_text,
-        )?;
+        if self.reproducible {
+            let mount_root = self.resolve_mount_root(&params.workspace_root, &cwd);
+            ReproducibleBuild::new(
+                &params.project_dir,
+                &mount_root,
+                &params.bin_name,
+                params.target.as_deref(),
+                self.profile,
+                &self.cargo_args,
+            )?
+            .run(&params.dist_dir)?;
+        } else {
+            self.run_cargo_build(
+                &params.project_dir,
+                &params.bin_name,
+                params.target.as_deref(),
+                extra_config,
+            )?;
+            self.run_cargo_objcopy(
+                &params.project_dir,
+                &params.bin_name,
+                params.target.as_deref(),
+                extra_config,
+                &["-O", "binary"],
+                &app_bin,
+            )?;
+            self.run_cargo_objcopy(
+                &params.project_dir,
+                &params.bin_name,
+                params.target.as_deref(),
+                extra_config,
+                &["-R", ".text"],
+                &app_elf,
+            )?;
+            self.run_cargo_objcopy(
+                &params.project_dir,
+                &params.bin_name,
+                params.target.as_deref(),
+                extra_config,
+                &["-O", "binary", "--only-section=.text"],
+                &app_text,
+            )?;
+        }
 
         let bin_sha256 = sha256_file_hex(&app_bin)?;
         let elf_sha256 = sha256_file_hex(&app_elf)?;
@@ -120,6 +145,7 @@ impl BuildConfig {
             },
             build: BuildMetadata {
                 profile: self.profile,
+                reproducible: self.reproducible,
                 panic_immediate_abort: params.panic_immediate_abort,
                 git_branch: params.git_branch,
                 git_commit: params.git_commit,
@@ -191,6 +217,20 @@ impl BuildConfig {
         cmd.current_dir(project_dir);
         run_command(cmd, "cargo objcopy")
     }
+
+    /// Resolves the directory to bind-mounted as `/src` inside the reproducible build container.
+    ///
+    /// When `workspace_root_override` is set, that path is used directly (relative paths are
+    /// resolved from invocation cwd, matching `--dist` semantics). Otherwise falls back to the
+    /// cargo workspace root reported by `cargo metadata`, which is the guest directory itself for
+    /// projects excluded from the top-level workspace.
+    fn resolve_mount_root(&self, cargo_workspace_root: &Path, invocation_cwd: &Path) -> PathBuf {
+        match &self.workspace_root_override {
+            Some(p) if p.is_absolute() => p.clone(),
+            Some(p) => invocation_cwd.join(p),
+            None => cargo_workspace_root.to_path_buf(),
+        }
+    }
 }
 
 /// Output paths produced by one successful build/package invocation.
@@ -211,4 +251,50 @@ pub struct DistArtifacts {
 /// Builds and packages guest artifacts using the provided configuration.
 pub fn build_dist(config: &BuildConfig) -> Result<DistArtifacts> {
     config.build_dist()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reproducible_flag_defaults_to_false() {
+        let config = BuildConfig::new(PathBuf::from("."));
+        assert!(!config.reproducible);
+    }
+
+    #[test]
+    fn workspace_root_override_defaults_to_none() {
+        let config = BuildConfig::new(PathBuf::from("."));
+        assert!(config.workspace_root_override.is_none());
+    }
+
+    #[test]
+    fn mount_root_falls_back_to_cargo_workspace_root_when_override_absent() {
+        let config = BuildConfig::new(PathBuf::from("."));
+        let cargo_root = Path::new("/workspace/project/guest");
+        let invocation_cwd = Path::new("/workspace/caller");
+        let mount_root = config.resolve_mount_root(cargo_root, invocation_cwd);
+        assert_eq!(mount_root, PathBuf::from("/workspace/project/guest"));
+    }
+
+    #[test]
+    fn mount_root_uses_absolute_override_without_rebasing() {
+        let mut config = BuildConfig::new(PathBuf::from("."));
+        config.workspace_root_override = Some(PathBuf::from("/repo"));
+        let cargo_root = Path::new("/workspace/project/guest");
+        let invocation_cwd = Path::new("/workspace/caller");
+        let mount_root = config.resolve_mount_root(cargo_root, invocation_cwd);
+        assert_eq!(mount_root, PathBuf::from("/repo"));
+    }
+
+    #[test]
+    fn mount_root_resolves_relative_override_from_invocation_cwd() {
+        let mut config = BuildConfig::new(PathBuf::from("."));
+        config.workspace_root_override = Some(PathBuf::from("."));
+        let cargo_root = Path::new("/workspace/project/guest");
+        let invocation_cwd = Path::new("/workspace/caller");
+        let mount_root = config.resolve_mount_root(cargo_root, invocation_cwd);
+        assert_eq!(mount_root, PathBuf::from("/workspace/caller"));
+    }
 }

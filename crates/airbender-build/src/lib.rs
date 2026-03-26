@@ -2,6 +2,7 @@
 
 mod config;
 mod constants;
+mod docker;
 mod errors;
 mod manifest;
 mod resolver;
@@ -12,4 +13,5 @@ pub use airbender_core::host::manifest::{
 };
 pub use config::{build_dist, BuildConfig, DistArtifacts};
 pub use constants::{DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN};
+pub use docker::clean_reproducible_volumes;
 pub use errors::{BuildError, Result};
