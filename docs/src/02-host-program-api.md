@@ -1,6 +1,6 @@
 # Host Program API
 
-Use `airbender-host` from native host applications to execute, prove, and verify guest programs.
+The host is where you load your guest program, feed it inputs, and decide whether to just run it or generate a proof. Everything here is normal Rust, no RISC-V, no `no_std`.
 
 ## Add Dependency
 
@@ -9,20 +9,18 @@ Use `airbender-host` from native host applications to execute, prove, and verify
 airbender-host = { path = "../../crates/airbender-host" }
 ```
 
-GPU support is enabled by default. To keep a dev-only host binary, disable default features:
+GPU support is enabled by default. If you only need the dev prover, disable default features:
 
 ```toml
 [dependencies]
 airbender-host = { path = "../../crates/airbender-host", default-features = false }
 ```
 
-Prefer `cargo build --release` / `cargo run --release` for host binaries.
+Always use `--release` when building or running host binaries.
 
-## Core Workflow with `Program`
+## Core Workflow
 
-`Program` is the highest-level API.
-
-Create runners/provers once and reuse them across multiple `runner.run(...)` / `prover.prove(...)` calls.
+Load the program, push inputs, run it, then prove and verify. Runners and provers are reusable: build them once, call `run()`/`prove()` as many times as you need.
 
 ```rust
 use airbender_host::{
@@ -30,18 +28,23 @@ use airbender_host::{
 };
 
 fn run() -> Result<()> {
+    // Load guest artifacts from the dist directory
     let program = Program::load("../guest/dist/app")?;
 
+    // Serialize inputs - order must match guest read() calls
     let mut inputs = Inputs::new();
     inputs.push(&10u32)?;
 
+    // Run the guest
     let runner = program.transpiler_runner().build()?;
     let execution = runner.run(inputs.words())?;
     println!("output x10={}", execution.receipt.output[0]);
 
+    // Prove execution
     let prover = program.dev_prover().build()?;
     let prove_result = prover.prove(inputs.words())?;
 
+    // Verify the proof
     let verifier = program.dev_verifier().build()?;
     let vk = verifier.generate_vk()?;
     verifier.verify(
@@ -53,86 +56,88 @@ fn run() -> Result<()> {
 }
 ```
 
-## `Inputs`
+## Inputs
 
-`Inputs` frames host data for guest reads.
+`Inputs` serializes host data into the `u32` word stream that the guest reads.
 
-- `Inputs::push(&value)` serializes typed data via Airbender codec
-- `Inputs::push_bytes(&bytes)` pushes raw bytes using the canonical input wire framing (`airbender_core::wire::frame_words_from_bytes`)
-- `Inputs::words()` exposes the low-level `u32` word stream
-- `Inputs::write_hex_file(path)` writes CLI-compatible hex input (`--input`)
+**Push order matters.** Guest-side `read::<T>()` calls consume values in the exact order they were pushed. If you push a `u32` then a `Vec<u8>`, the guest must read a `u32` first and a `Vec<u8>` second. A mismatch will cause a decode error on the guest side.
 
-Guest-side `read::<T>()` calls consume values in the same order they were pushed.
+- `push(&value)` - serialize any `serde::Serialize` type via the Airbender codec
+- `push_bytes(&bytes)` - push raw bytes using the wire framing protocol
+- `words()` - access the underlying `u32` word stream
+- `write_hex_file(path)` - write a CLI-compatible hex input file (for use with `--input`)
 
-## Execution APIs
+## Running
 
-High-level:
+`Program::transpiler_runner()` returns a builder for transpiler-based execution:
 
-- `Program::transpiler_runner()`
-- `Program::dev_prover()`
-- `Program::gpu_prover()`
-- `Program::cpu_prover()`
-- `Program::dev_verifier()`
-- `Program::real_verifier(level)`
-- `Runner::run(&input_words)`
-- `Prover::prove(&input_words)`
-- `Verifier::generate_vk()`
-- `Verifier::verify(&proof, &vk, request)`
-- `VerificationRequest::dev(...)` / `VerificationRequest::real(...)`
-- `Mark::diff(...)` to derive the work between two collected cycle markers
+```rust
+let runner = program.transpiler_runner()
+    .with_cycles(1_000_000)  // optional cycle limit
+    .with_jit()              // optional JIT on x86_64
+    .build()?;
+let result = runner.run(inputs.words())?;
+```
 
-Lower-level:
+The default cycle limit is high enough for most programs. JIT is faster but disables cycle marker collection.
 
-- `TranspilerRunnerBuilder::new(app_bin).with_...().with_jit().build()` (`with_jit()` is optional and x86_64-only)
-- `DevProverBuilder::new(app_bin).with_...().build()`
-- `GpuProverBuilder::new(app_bin).with_...().build()`
-- `CpuProverBuilder::new(app_bin).with_...().build()`
-- `DevVerifierBuilder::new(app_bin).build()`
-- `RealVerifierBuilder::new(app_bin, level).build()`
-- `compute_unified_vk(...)`, `compute_unrolled_vk(...)`
-- `verify_proof(...)`, `verify_unrolled_proof(...)`
+## Proving
 
-Verification APIs can enforce expected public outputs (`x10..x17`) in addition to proof validity.
+Three prover backends are available:
 
-## `Receipt` Output
+```rust
+// Dev - no real cryptography, for local testing
+let prover = program.dev_prover().build()?;
 
-`Receipt` captures post-execution registers and output slices:
+// GPU - full proving, requires NVIDIA GPU with 32GB+ VRAM
+let prover = program.gpu_prover()
+    .with_level(ProverLevel::RecursionUnified)
+    .build()?;
 
-- `receipt.output` maps to `x10..x17` (8 words)
-- `receipt.output_extended` maps to `x10..x25` (16 words, includes recursion-chain fields)
+// CPU - base layer only, mainly for debugging circuits
+let prover = program.cpu_prover()
+    .with_worker_threads(8)
+    .build()?;
+```
 
-`#[airbender::main]` return values and `guest::commit(...)` map to `receipt.output`.
+All provers share the same interface: `prover.prove(inputs.words())`.
 
-For non-JIT transpiler runs, `ExecutionResult::cycle_markers` contains the
-captured marker snapshots. JIT runs return `None`.
+## Verification
 
-## Prover Construction
+```rust
+// Dev verification
+let verifier = program.dev_verifier().build()?;
+let vk = verifier.generate_vk()?;
+verifier.verify(&proof, &vk, VerificationRequest::dev(inputs.words(), &expected))?;
 
-- `DevProverBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, then `build()`.
-- `GpuProverBuilder::new(...)` accepts path and supports `with_worker_threads(...)`, `with_level(...)`, then `build()`.
-- `CpuProverBuilder::new(...)` accepts path and supports `with_worker_threads(...)`, `with_cycles(...)`, `with_ram_bound(...)`, then `build()`.
-- `build()` returns `Result<...>` and performs path/config validation.
-- CPU proving currently supports base-layer proving (`ProverLevel::Base`) only.
-- GPU proving is enabled by default; if you disable default features, re-enable `gpu-prover`.
+// Real verification (GPU-generated proofs)
+let verifier = program.real_verifier(ProverLevel::RecursionUnified).build()?;
+let vk = verifier.generate_vk()?;
+verifier.verify(&proof, &vk, VerificationRequest::real(&expected))?;
+```
 
-## Runner Construction
+Verification can optionally enforce expected public outputs (`x10..x17`) in addition to proof validity.
 
-- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, `with_jit()`, then `build()`.
-- Cycle markers are collected automatically for non-JIT transpiler runs.
+## Receipt Output
 
-## Cycle Budget
+After execution or proving, the `Receipt` contains the guest's output:
 
-For transpiler execution, you can:
+- `receipt.output` - registers `x10..x17` (8 words). This is where `#[airbender::main]` return values and `guest::commit(...)` land.
+- `receipt.output_extended` - registers `x10..x25` (16 words, includes recursion-chain fields).
 
-- pass an explicit cycle limit
+For non-JIT transpiler runs, `ExecutionResult::cycle_markers` contains the captured marker snapshots. JIT runs return `None`.
 
-If no explicit cycle limit is set through your flow, a default high value will be used.
+## Common Mistakes
 
-## Complete Working Examples
+- **Input order mismatch:** the host pushes values in a different order than the guest reads them. The guest will get a codec decode error.
+- **Forgetting `--release`:** host binaries are significantly slower in debug mode. Proving can be orders of magnitude slower.
+- **GPU features disabled:** if you installed `airbender-host` with `default-features = false`, GPU prover/verifier methods won't be available. Re-enable with `features = ["gpu-prover"]`.
+
+## Examples
 
 See full host-side usage in:
 
-- [`examples/cycle-markers/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers/host)
 - [`examples/fibonacci/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/host)
 - [`examples/u256-add/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/host)
 - [`examples/std-btreemap/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/host)
+- [`examples/cycle-markers/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers/host)
