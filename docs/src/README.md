@@ -2,6 +2,9 @@
 
 This book is the user manual for building and running Airbender programs.
 
+API reference docs for the current `main` branch are published at
+[`/api/`](https://matter-labs.github.io/airbender-platform/api/).
+
 ## Suggested Reading Order
 
 - Start with [Installation & Hello World](./01-installation-and-hello-world.md).
