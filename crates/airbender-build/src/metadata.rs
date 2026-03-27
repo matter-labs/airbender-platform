@@ -38,10 +38,24 @@ struct AirbenderProfileConfig {
 }
 
 fn load_metadata(manifest_path: &Path) -> Result<Metadata> {
-    MetadataCommand::new()
-        .manifest_path(manifest_path)
-        .no_deps()
-        .exec()
+    load_metadata_with(manifest_path, None)
+}
+
+fn load_metadata_with(manifest_path: &Path, cargo_path: Option<&Path>) -> Result<Metadata> {
+    // `cargo metadata --manifest-path ...` still resolves rustup toolchain files from the
+    // subprocess cwd, so anchor the command to the guest project directory selected by
+    // `--project` instead of inheriting the caller's cwd.
+    let current_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut cmd = MetadataCommand::new();
+    cmd.manifest_path(manifest_path)
+        .current_dir(current_dir)
+        .no_deps();
+    if let Some(cargo_path) = cargo_path {
+        cmd.cargo_path(cargo_path);
+    }
+
+    cmd.exec()
         .map_err(|err| BuildError::InvalidConfig(format!("cargo metadata failed: {err}")))
 }
 
@@ -109,6 +123,8 @@ impl CargoMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     fn make_metadata(json: &str) -> CargoMetadata {
         CargoMetadata {
@@ -165,5 +181,44 @@ mod tests {
         let m = CargoMetadata::load(&temp_dir.path().join("Cargo.toml")).expect("load manifest");
         assert!(!m.panic_immediate_abort(Profile::Release));
         assert!(!m.panic_immediate_abort(Profile::Debug));
+    }
+
+    #[test]
+    fn load_runs_cargo_metadata_from_manifest_directory() {
+        let temp_dir = tempfile::tempdir().expect("create temp directory");
+        let project_dir = temp_dir.path().join("guest");
+        fs::create_dir_all(project_dir.join("src")).expect("create guest src");
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"guest\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write manifest");
+        fs::write(project_dir.join("src/main.rs"), "fn main() {}\n").expect("write main");
+
+        let log_path = temp_dir.path().join("cargo.cwd");
+        let cargo_wrapper = temp_dir.path().join("cargo-wrapper.sh");
+        let real_cargo = std::env::var_os("CARGO")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("cargo"));
+        fs::write(
+            &cargo_wrapper,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> \"{}\"\nexec \"{}\" \"$@\"\n",
+                log_path.display(),
+                real_cargo.display()
+            ),
+        )
+        .expect("write cargo wrapper");
+        let mut permissions = fs::metadata(&cargo_wrapper)
+            .expect("read cargo wrapper metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&cargo_wrapper, permissions).expect("set cargo wrapper permissions");
+
+        load_metadata_with(&project_dir.join("Cargo.toml"), Some(&cargo_wrapper))
+            .expect("load metadata");
+
+        let cwd_log = fs::read_to_string(log_path).expect("read cargo cwd log");
+        assert_eq!(cwd_log.trim(), project_dir.display().to_string());
     }
 }
