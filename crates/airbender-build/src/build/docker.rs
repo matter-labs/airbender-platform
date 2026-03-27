@@ -266,7 +266,7 @@ impl<'a> ReproducibleBuild<'a> {
             &self.params.bin_name,
             &self.params.target,
             profile,
-            &cargo_args,
+            cargo_args,
             extra_config,
         );
 
@@ -319,7 +319,7 @@ impl<'a> ReproducibleBuild<'a> {
 
     /// Copies artifacts from `/dist` inside the container to the host paths in `dist_app`.
     fn cp_artifacts(&self, name: &str) -> Result<()> {
-        std::fs::create_dir_all(&self.params.dist_app.dir())?;
+        std::fs::create_dir_all(self.params.dist_app.dir())?;
         for (container_name, host_path) in [
             ("app.bin", self.params.dist_app.bin()),
             ("app.elf", self.params.dist_app.elf()),

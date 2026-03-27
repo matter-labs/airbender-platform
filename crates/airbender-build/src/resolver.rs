@@ -49,7 +49,7 @@ impl ResolvedBuildParams {
             .unwrap_or(DEFAULT_GUEST_TARGET.to_string());
         let project_metadata = CargoMetadata::load(&project_dir.join("Cargo.toml"))?;
         let bin_name = Self::resolve_bin_name(build_config, &project_metadata)?;
-        let mount_root = Self::resolve_mount_root(&build_config, &project_metadata, cwd);
+        let mount_root = Self::resolve_mount_root(build_config, &project_metadata, cwd);
         let panic_immediate_abort = project_metadata.panic_immediate_abort(build_config.profile);
         // Omit bin_name from the manifest when it matches the package name — the common case.
         // Downstream tooling treats an absent bin_name as identical to package_name.

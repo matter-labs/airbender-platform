@@ -90,6 +90,7 @@ impl<'a> LocalBuild<'a> {
     }
 
     /// Runs `cargo objcopy` to generate one concrete output artifact.
+    #[allow(clippy::too_many_arguments)]
     fn run_cargo_objcopy(
         profile: Profile,
         cargo_args: &Vec<String>,
