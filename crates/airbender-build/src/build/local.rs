@@ -21,7 +21,7 @@ impl<'a> LocalBuild<'a> {
     pub(crate) fn run(
         &self,
         profile: Profile,
-        cargo_args: &Vec<String>,
+        cargo_args: &[String],
         extra_config: Option<&str>,
     ) -> Result<()> {
         Self::run_cargo_build(
@@ -67,7 +67,7 @@ impl<'a> LocalBuild<'a> {
     /// Runs `cargo build` for the given binary and target.
     fn run_cargo_build(
         profile: Profile,
-        cargo_args: &Vec<String>,
+        cargo_args: &[String],
         project_dir: &Path,
         bin_name: &str,
         target: &str,
@@ -93,7 +93,7 @@ impl<'a> LocalBuild<'a> {
     #[allow(clippy::too_many_arguments)]
     fn run_cargo_objcopy(
         profile: Profile,
-        cargo_args: &Vec<String>,
+        cargo_args: &[String],
         project_dir: &Path,
         bin_name: &str,
         target: &str,

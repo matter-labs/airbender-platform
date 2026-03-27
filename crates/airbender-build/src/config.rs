@@ -7,7 +7,7 @@ use crate::errors::Result;
 use crate::resolver::ResolvedBuildParams;
 use crate::{ArtifactEntry, BuildMetadata, Manifest, Profile, MANIFEST_VERSION_V1};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Input settings for guest compilation and dist packaging.
 #[derive(Clone, Debug)]
@@ -81,6 +81,13 @@ impl BuildConfig {
             manifest_path: params.dist_app.manifest().to_path_buf(),
         };
 
+        fn file_name(p: &Path) -> String {
+            p.file_name()
+                .expect("must be valid")
+                .to_str()
+                .expect("must be valid")
+                .to_string()
+        }
         let manifest = Manifest {
             package: params.package_name,
             bin_name: params.manifest_bin_name,
@@ -88,15 +95,15 @@ impl BuildConfig {
             codec: format!("v{}", airbender_codec::AIRBENDER_CODEC_V0),
             target: params.target,
             bin: ArtifactEntry {
-                path: "app.bin".to_string(),
+                path: file_name(params.dist_app.bin()),
                 sha256: artifacts.app_bin.sha256.clone(),
             },
             elf: ArtifactEntry {
-                path: "app.elf".to_string(),
+                path: file_name(params.dist_app.elf()),
                 sha256: artifacts.app_elf.sha256.clone(),
             },
             text: ArtifactEntry {
-                path: "app.text".to_string(),
+                path: file_name(params.dist_app.text()),
                 sha256: artifacts.app_text.sha256.clone(),
             },
             build: BuildMetadata {

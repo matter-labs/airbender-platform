@@ -37,6 +37,7 @@
 //! the shared registry cache and any stopped `airbender-build` containers left by
 //! interrupted builds.
 
+use crate::build::DistApp;
 use crate::constants::DEFAULT_GUEST_TOOLCHAIN;
 use crate::errors::{BuildError, Result};
 use crate::resolver::ResolvedBuildParams;
@@ -168,6 +169,7 @@ fn container_name() -> String {
 fn build_container_cmd(
     bin_name: &str,
     target: &str,
+    dist_app: &DistApp,
     profile: Profile,
     cargo_args: &[String],
     extra_config: Option<&str>,
@@ -199,11 +201,26 @@ fn build_container_cmd(
         }
     };
 
+    fn file_name(p: &Path) -> &str {
+        p.file_name()
+            .expect("must be valid")
+            .to_str()
+            .expect("must be valid")
+    }
+
     let build = format!("cargo build {cargo_flags}");
-    let obj_bin = format!("cargo objcopy {cargo_flags} -- -O binary /dist/app.bin");
-    let obj_elf = format!("cargo objcopy {cargo_flags} -- -R .text /dist/app.elf");
-    let obj_text =
-        format!("cargo objcopy {cargo_flags} -- -O binary --only-section=.text /dist/app.text");
+    let obj_bin = format!(
+        "cargo objcopy {cargo_flags} -- -O binary /dist/{}",
+        file_name(dist_app.bin())
+    );
+    let obj_elf = format!(
+        "cargo objcopy {cargo_flags} -- -R .text /dist/{}",
+        file_name(dist_app.elf())
+    );
+    let obj_text = format!(
+        "cargo objcopy {cargo_flags} -- -O binary --only-section=.text /dist/{}",
+        file_name(dist_app.text())
+    );
 
     format!("mkdir -p /dist && {build} && {obj_bin} && {obj_elf} && {obj_text}")
 }
@@ -234,7 +251,7 @@ impl<'a> ReproducibleBuild<'a> {
     pub(crate) fn run(
         &self,
         profile: Profile,
-        cargo_args: &Vec<String>,
+        cargo_args: &[String],
         extra_config: Option<&str>,
     ) -> Result<()> {
         // Guard registered before any Docker call — no orphan window.
@@ -248,7 +265,7 @@ impl<'a> ReproducibleBuild<'a> {
     fn run_container(
         &self,
         profile: Profile,
-        cargo_args: &Vec<String>,
+        cargo_args: &[String],
         extra_config: Option<&str>,
         name: &str,
     ) -> Result<()> {
@@ -265,6 +282,7 @@ impl<'a> ReproducibleBuild<'a> {
         let build_cmd = build_container_cmd(
             &self.params.bin_name,
             &self.params.target,
+            &self.params.dist_app,
             profile,
             cargo_args,
             extra_config,
@@ -317,20 +335,13 @@ impl<'a> ReproducibleBuild<'a> {
         Ok(())
     }
 
-    /// Copies artifacts from `/dist` inside the container to the host paths in `dist_app`.
+    /// Copies all artifacts from `/dist` inside the container to `dist_app` in one call.
     fn cp_artifacts(&self, name: &str) -> Result<()> {
         std::fs::create_dir_all(self.params.dist_app.dir())?;
-        for (container_name, host_path) in [
-            ("app.bin", self.params.dist_app.bin()),
-            ("app.elf", self.params.dist_app.elf()),
-            ("app.text", self.params.dist_app.text()),
-        ] {
-            let src = format!("{name}:/dist/{container_name}");
-            let mut cmd = Command::new("docker");
-            cmd.args(["cp", &src, host_path.to_str().unwrap()]);
-            run_command(cmd, "docker cp")?;
-        }
-        Ok(())
+        let src = format!("{name}:/dist/.");
+        let mut cmd = Command::new("docker");
+        cmd.args(["cp", &src, self.params.dist_app.dir().to_str().unwrap()]);
+        run_command(cmd, "docker cp")
     }
 }
 
