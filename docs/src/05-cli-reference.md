@@ -36,6 +36,18 @@ Key options:
 - `--reproducible`: build inside a pinned Docker container for bit-for-bit identical output across machines and toolchain versions; automatically passes `--locked` to cargo
 - `--workspace-root <path>`: override the directory bind-mounted as `/src` inside the container; only needed with `--reproducible` when the guest has path dependencies pointing outside its own cargo workspace root (see [Monorepo path dependencies](#monorepo-path-dependencies) below); requires `--reproducible`
 
+### `panic-immediate-abort`
+
+Replaces all panic call sites with an immediate trap instruction, eliminating panic formatting and unwinding infrastructure and significantly reducing binary size. Enable per-profile in the guest `Cargo.toml`:
+
+```toml
+[package.metadata]
+airbender.profile.release = { panic-immediate-abort = true }
+airbender.profile.debug   = { panic-immediate-abort = true }
+```
+
+Supported profile keys are `"release"` and `"debug"`.
+
 Forward extra Cargo flags after `--`:
 
 ```sh

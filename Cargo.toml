@@ -36,6 +36,7 @@ categories = ["cryptography"]
 [workspace.dependencies]
 anyhow = "1"
 serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false }
 bincode = { version = "2", default-features = false }
 clap = "4"
 dialoguer = "0.11"
