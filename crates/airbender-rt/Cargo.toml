@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Guest runtime support for Airbender programs"
+readme = "README.md"
 
 [dependencies]
 riscv_common = { workspace = true, features = ["boot_sequence", "custom_allocator", "custom_panic"] }

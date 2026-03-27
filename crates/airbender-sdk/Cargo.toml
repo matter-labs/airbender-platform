@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Public SDK for writing Airbender guest programs"
+readme = "README.md"
 
 [lib]
 name = "airbender"

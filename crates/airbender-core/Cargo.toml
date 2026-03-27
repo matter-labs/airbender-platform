@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Shared core definitions for Airbender tooling, manifests, and runtimes"
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true, default-features = false, features = ["derive"], optional = true }

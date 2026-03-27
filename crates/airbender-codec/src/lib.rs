@@ -1,6 +1,5 @@
+#![doc = include_str!("../README.md")]
 #![no_std]
-
-//! Versioned serialization for Airbender host/guest communication.
 
 extern crate alloc;
 

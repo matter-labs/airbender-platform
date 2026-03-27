@@ -8,10 +8,13 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Cargo subcommand for scaffolding, building, running, and proving Airbender projects"
+readme = "README.md"
 include = [
     "src/**",
     "templates/**",
     "Cargo.toml",
+    "README.md",
 ]
 
 [features]

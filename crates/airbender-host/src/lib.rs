@@ -1,4 +1,4 @@
-//! Host-side APIs for executing, proving, and verifying Airbender programs.
+#![doc = include_str!("../README.md")]
 
 mod cycle_marker;
 mod error;

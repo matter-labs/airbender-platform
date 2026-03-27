@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Build and package Airbender guest artifacts into distributable bundles"
+readme = "README.md"
 
 [dependencies]
 airbender-codec = { path = "../airbender-codec" }

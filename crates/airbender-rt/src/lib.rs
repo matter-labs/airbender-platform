@@ -1,10 +1,9 @@
+#![doc = include_str!("../README.md")]
 #![no_std]
 #![cfg_attr(
     target_arch = "riscv32",
     feature(alloc_error_handler, allocator_api, str_from_raw_parts)
 )]
-
-//! Airbender guest runtime: boot, allocator, syscalls, and UART utilities.
 
 extern crate alloc;
 
