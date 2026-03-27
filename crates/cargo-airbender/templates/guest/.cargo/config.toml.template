@@ -1,5 +1,5 @@
 [build]
-target = "__AIRBENDER_GUEST_TARGET__"
+target = "{guest_target}"
 rustflags = [
   "-C", "target-feature=+m,-unaligned-scalar-mem,+relax",
   "-C", "link-arg=-Tmemory.x",

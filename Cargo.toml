@@ -54,6 +54,7 @@ cargo_metadata = "0.18"
 thiserror = "2"
 talc = { version = "4.4.3", default-features = false }
 tempfile = "3"
+tinytemplate = "1.2"
 
 # Dependencies for airbender-crypto
 common_constants = { git = "https://github.com/matter-labs/zksync-airbender", branch = "dev", default-features = false }
