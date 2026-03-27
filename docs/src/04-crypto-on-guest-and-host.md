@@ -69,7 +69,7 @@ Prefer delegated primitives when they're available. They can be orders of magnit
 - `bn254` base/extension field and curve arithmetic (delegated `Fq`; `Fr` uses arkworks)
 - `bls12_381` field and curve arithmetic (`Fq`, `Fr`, and extension fields)
 
-**Not delegated yet** (software-only, higher proving cost):
+**Also available, without delegation** (software-only, higher proving cost):
 
 - `sha256`
 - `ripemd160`
