@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_codec/) | [Platform guide](https://matter-labs.github.io/airbender-platform/latest/)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-codec` defines the stable, versioned serialization layer used between host inputs and guest reads. It is `no_std`-compatible and currently exposes `AirbenderCodecV0`, built on `bincode` v2 with a fixed configuration.
 
 ## What It Provides
@@ -16,7 +19,7 @@ This crate sits underneath `airbender-host::Inputs` and `airbender::guest::read`
 
 ```toml
 [dependencies]
-airbender-codec = "0.1.0"
+airbender-codec = { git = "https://github.com/matter-labs/airbender-platform", branch = "main" }
 ```
 
 ## License

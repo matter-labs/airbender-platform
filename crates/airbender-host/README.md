@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_host/) | [Host program guide](https://matter-labs.github.io/airbender-platform/latest/02-host-program-api.html)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-host` is the host-side API for executing, proving, and verifying Airbender guest programs from native Rust applications.
 
 ## What It Provides
@@ -19,7 +22,7 @@ Disable default features if you want a dev-only host binary without GPU support:
 
 ```toml
 [dependencies]
-airbender-host = { version = "0.1.0", default-features = false }
+airbender-host = { git = "https://github.com/matter-labs/airbender-platform", branch = "main", default-features = false }
 ```
 
 Complete host-side examples live in [`examples/`](https://github.com/matter-labs/airbender-platform/tree/main/examples).

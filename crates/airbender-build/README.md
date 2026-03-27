@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_build/) | [CLI build reference](https://matter-labs.github.io/airbender-platform/latest/05-cli-reference.html)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-build` compiles guest crates and packages the resulting `dist/` bundle used by the rest of the platform. It is the library behind `cargo airbender build`, and is useful when you want to embed the same build and packaging flow in Rust tooling.
 
 ## What It Provides
@@ -16,7 +19,7 @@ Reproducible builds run inside a pinned Docker container and record provenance m
 
 ```toml
 [dependencies]
-airbender-build = "0.1.0"
+airbender-build = { git = "https://github.com/matter-labs/airbender-platform", branch = "main" }
 ```
 
 Use `cargo-airbender` for normal CLI workflows. Reach for this crate when you need the same packaging behavior inside a custom build pipeline or host-side tool.

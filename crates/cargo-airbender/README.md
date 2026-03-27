@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/cargo_airbender/) | [CLI reference](https://matter-labs.github.io/airbender-platform/latest/05-cli-reference.html)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `cargo-airbender` is the main CLI for Airbender project scaffolding, guest builds, execution, proving, and verification.
 
 ## Commands

@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_rt/) | [Guest program guide](https://matter-labs.github.io/airbender-platform/latest/03-guest-program-api.html)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-rt` is the low-level runtime support crate for Airbender guest programs. It handles bootstrapping, allocator setup, syscalls, and UART helpers used by the guest-facing APIs.
 
 ## What It Provides

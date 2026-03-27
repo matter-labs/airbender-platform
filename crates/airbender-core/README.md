@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_core/) | [Platform guide](https://matter-labs.github.io/airbender-platform/latest/)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-core` contains the shared data model that other Airbender crates build on. It keeps the host and guest boundary explicit: commit layouts, framed input words, and the manifest schema for packaged guest artifacts.
 
 ## What It Provides
@@ -18,7 +21,7 @@ Disable default features for `no_std` guest-side use:
 
 ```toml
 [dependencies]
-airbender-core = { version = "0.1.0", default-features = false }
+airbender-core = { git = "https://github.com/matter-labs/airbender-platform", branch = "main", default-features = false }
 ```
 
 ## License

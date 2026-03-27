@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_crypto/) | [Crypto guide](https://matter-labs.github.io/airbender-platform/latest/04-crypto-on-guest-and-host.html)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-crypto` provides shared crypto primitives for Airbender host and guest programs. The same Rust API can be used on both sides, while guest builds can opt into delegated backends for proving-oriented workloads.
 
 ## What It Provides
@@ -19,7 +22,7 @@
 
 ```toml
 [dependencies]
-airbender-crypto = "0.1.0"
+airbender-crypto = { git = "https://github.com/matter-labs/airbender-platform", branch = "main" }
 ```
 
 Use `features = ["proving"]` for guest builds, or enable the `crypto` feature on `airbender-sdk` if you want the same API through the SDK re-export.

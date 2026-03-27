@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_guest/) | [Guest program guide](https://matter-labs.github.io/airbender-platform/latest/03-guest-program-api.html)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-guest` contains the lower-level guest-side APIs that power `airbender-sdk`. Most applications should depend on the SDK and use `airbender::guest`, but this crate is available directly when you want a thinner guest dependency surface.
 
 ## What It Provides
@@ -20,7 +23,7 @@
 
 ```toml
 [dependencies]
-airbender-guest = "0.1.0"
+airbender-guest = { git = "https://github.com/matter-labs/airbender-platform", branch = "main" }
 ```
 
 If you are building a normal guest program, prefer `airbender-sdk` and import these APIs from `airbender::guest`.

@@ -2,6 +2,9 @@
 
 **Documentation:** [API docs](https://matter-labs.github.io/airbender-platform/api/airbender_sdk/) | [Guest program guide](https://matter-labs.github.io/airbender-platform/latest/03-guest-program-api.html)
 
+> [!WARNING]
+> airbender-platform project is under active development and is in alpha state. Use at your own risk.
+
 `airbender-sdk` is the main entry point for writing Airbender guest programs. It re-exports the guest API, runtime, codec helpers, and the `#[airbender::main]` attribute behind a single dependency, so guest code can import everything from `airbender`.
 
 ## What It Provides
@@ -21,7 +24,7 @@
 
 ```toml
 [dependencies]
-airbender = { package = "airbender-sdk", version = "0.1.0" }
+airbender = { package = "airbender-sdk", git = "https://github.com/matter-labs/airbender-platform", branch = "main" }
 ```
 
 Complete guest + host examples live in [`examples/`](https://github.com/matter-labs/airbender-platform/tree/main/examples).
