@@ -25,6 +25,7 @@ This project provides:
 ## Documentation
 
 Read the **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/latest)** for the full user guide.
+Browse the **[workspace API docs](https://matter-labs.github.io/airbender-platform/api/)** for the current `main` branch rustdocs.
 
 The book source lives in [`docs/`](./docs/). To build locally:
 
