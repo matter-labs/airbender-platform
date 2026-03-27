@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Host-side APIs for executing, proving, and verifying Airbender programs"
+readme = "README.md"
 
 [features]
 default = ["gpu-prover"]

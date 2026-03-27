@@ -1,6 +1,5 @@
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "host"), no_std)]
-
-//! Shared definitions for Airbender tooling and runtimes.
 
 extern crate alloc;
 

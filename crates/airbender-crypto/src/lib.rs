@@ -1,9 +1,9 @@
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(test), no_std)]
 #![allow(static_mut_refs)]
 #![allow(clippy::uninit_assumed_init)]
 #![allow(clippy::new_without_default)]
 #![feature(allocator_api)]
-
 #[allow(clippy::all)]
 #[allow(unused_imports, dead_code)]
 #[cfg(any(

@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Shared crypto primitives for Airbender host and guest programs"
+readme = "README.md"
 
 [dependencies]
 common_constants = { workspace = true }

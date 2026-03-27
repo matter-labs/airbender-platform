@@ -1,4 +1,4 @@
-//! Build and package guest artifacts into a `dist/` directory.
+#![doc = include_str!("../README.md")]
 
 mod config;
 mod constants;

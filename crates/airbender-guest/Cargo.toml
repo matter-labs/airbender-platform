@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Guest-side APIs for reading inputs, committing outputs, and profiling"
+readme = "README.md"
 
 [dependencies]
 airbender-core = { path = "../airbender-core", default-features = false }

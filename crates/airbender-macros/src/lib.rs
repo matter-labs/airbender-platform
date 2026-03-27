@@ -1,4 +1,4 @@
-//! Procedural macros for Airbender guest programs.
+#![doc = include_str!("../README.md")]
 
 use proc_macro::TokenStream;
 use quote::quote;

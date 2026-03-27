@@ -1,6 +1,5 @@
+#![doc = include_str!("../README.md")]
 #![no_std]
-
-//! Public SDK re-exports for Airbender guest programs.
 
 extern crate alloc;
 
