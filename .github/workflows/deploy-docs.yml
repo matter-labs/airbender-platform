@@ -31,7 +31,7 @@ jobs:
       contents: write
     env:
       CARGO_TERM_COLOR: always
-      REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
+      REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_type == 'tag' && github.ref_name || 'latest' }}
       PUBLISH_API: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
       RUST_TOOLCHAIN: nightly-2026-02-10
       ZKSYNC_USE_CUDA_STUBS: "true"
@@ -55,9 +55,16 @@ jobs:
           set -euo pipefail
           cargo doc --workspace --no-deps --locked
 
+      - name: Generate workspace API landing page
+        if: env.PUBLISH_API == 'true'
+        run: |
+          python3 scripts/generate_api_index.py \
+            --workspace-root . \
+            --template scripts/templates/api-index.html.template \
+            --output target/doc/index.html
+
       - name: Deploy docs
-        # TODO: Replace `main` with the merged `deploy-mdbooks` revision that supports `additional-paths`.
-        uses: matter-labs/deploy-mdbooks@main
+        uses: matter-labs/deploy-mdbooks@e83f04651a9d422adefd17b2cba888e0df886fc6
         with:
           version: ${{ env.REQUESTED_VERSION }}
           docs-dir: docs
