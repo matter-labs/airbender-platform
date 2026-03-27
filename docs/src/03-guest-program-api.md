@@ -85,10 +85,17 @@ fn main() -> u32 {
 **2. Call `commit` directly.** Useful for early exits or complex control flow:
 
 ```rust
-use airbender::guest::{commit, exit_error};
+use airbender::guest::commit;
 
-commit(123u32);  // write output and exit success
-exit_error();    // exit with error status
+commit(123u32);  // write output and exit success (never returns)
+```
+
+**3. Exit with error.** Signal that the guest program failed:
+
+```rust
+use airbender::guest::exit_error;
+
+exit_error();  // exit with error status (never returns)
 ```
 
 Built-in `Commit` implementations: `()`, `u32`, `u64`, `i64`, `bool`, `[u32; 8]`.
