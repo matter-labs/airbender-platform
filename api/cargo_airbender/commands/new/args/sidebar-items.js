@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["ensure_empty_dir","ensure_interactive_terminal","infer_project_name","is_current_dir_path","map_prompt_error","normalize_name","prompt_allocator","prompt_enable_std","prompt_project_name","prompt_prover_backend","resolve_new_args"],"struct":["ResolvedNewArgs"]};

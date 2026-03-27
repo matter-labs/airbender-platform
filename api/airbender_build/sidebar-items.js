@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CODEC_VERSION_V0","DEFAULT_GUEST_TARGET","DEFAULT_GUEST_TOOLCHAIN","MANIFEST_VERSION_V1"],"enum":["BuildError","Profile"],"fn":["build_dist","clean_reproducible_volumes"],"struct":["ArtifactEntry","BuildConfig","BuildMetadata","DistArtifacts","Manifest"],"type":["Result"]};
