@@ -21,7 +21,6 @@ const HOST_TOOLCHAIN_TEMPLATE: &str =
 const CUSTOM_ALLOCATOR_MODULE_TEMPLATE: &str =
     include_str!("../../../templates/snippets/custom_allocator_module.rs.template");
 
-/// Templates registered with the engine. Each entry maps an output path to its source.
 const TEMPLATES: &[(&str, &str)] = &[
     (".gitignore", GITIGNORE_TEMPLATE),
     ("README.md", ROOT_README_TEMPLATE),
@@ -33,7 +32,6 @@ const TEMPLATES: &[(&str, &str)] = &[
     ("host/rust-toolchain.toml", HOST_TOOLCHAIN_TEMPLATE),
 ];
 
-/// Data passed into every template. Field names map directly to `{field_name}` placeholders.
 #[derive(Serialize)]
 struct TemplateData {
     project_name: String,
