@@ -36,8 +36,8 @@ pub struct Manifest {
     pub manifest: String,
     /// Host/guest codec version used to encode runtime payloads.
     pub codec: String,
-    /// Optional target triple used for the build.
-    pub target: Option<String>,
+    /// Target triple used for the build.
+    pub target: String,
     /// Binary image consumed by runtime and proving flows.
     pub bin: ArtifactEntry,
     /// ELF image used for symbol/debug workflows.
@@ -131,7 +131,7 @@ mod tests {
             bin_name: None,
             manifest: MANIFEST_VERSION_V1.to_string(),
             codec: CODEC_VERSION_V0.to_string(),
-            target: None,
+            target: "riscv32im-risc0-zkvm-elf".to_string(),
             bin: ArtifactEntry {
                 path: "app.bin".to_string(),
                 sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -178,7 +178,7 @@ mod tests {
             bin_name: None,
             manifest: MANIFEST_VERSION_V1.to_string(),
             codec: CODEC_VERSION_V0.to_string(),
-            target: None,
+            target: "riscv32im-risc0-zkvm-elf".to_string(),
             bin: ArtifactEntry {
                 path: "app.bin".to_string(),
                 sha256: "abc".to_string(),
@@ -210,7 +210,7 @@ mod tests {
             bin_name: None,
             manifest: MANIFEST_VERSION_V1.to_string(),
             codec: CODEC_VERSION_V0.to_string(),
-            target: None,
+            target: "riscv32im-risc0-zkvm-elf".to_string(),
             bin: ArtifactEntry {
                 path: "app.bin".to_string(),
                 sha256: "abc".to_string(),
@@ -244,7 +244,7 @@ mod tests {
             bin_name: None,
             manifest: MANIFEST_VERSION_V1.to_string(),
             codec: CODEC_VERSION_V0.to_string(),
-            target: None,
+            target: "riscv32im-risc0-zkvm-elf".to_string(),
             bin: ArtifactEntry {
                 path: "app.bin".to_string(),
                 sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -280,7 +280,7 @@ mod tests {
             bin_name: Some("worker".to_string()),
             manifest: MANIFEST_VERSION_V1.to_string(),
             codec: CODEC_VERSION_V0.to_string(),
-            target: None,
+            target: "riscv32im-risc0-zkvm-elf".to_string(),
             bin: ArtifactEntry {
                 path: "app.bin".to_string(),
                 sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -318,7 +318,7 @@ mod tests {
             bin_name: None,
             manifest: MANIFEST_VERSION_V1.to_string(),
             codec: CODEC_VERSION_V0.to_string(),
-            target: None,
+            target: "riscv32im-risc0-zkvm-elf".to_string(),
             bin: ArtifactEntry {
                 path: "app.bin".to_string(),
                 sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

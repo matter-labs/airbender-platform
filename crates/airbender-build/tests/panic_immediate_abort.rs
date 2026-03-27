@@ -122,7 +122,7 @@ fn panic_immediate_abort_strips_format_string_from_binary() {
     config.dist_dir = Some(dist_dir.clone());
     let artifacts_without = build_dist(&config).expect("build without panic_immediate_abort");
 
-    let bin_without = fs::read(&artifacts_without.app_bin).expect("read app.bin");
+    let bin_without = fs::read(&artifacts_without.app_bin.path).expect("read app.bin");
     assert!(
         contains_bytes(&bin_without, b"PROBE_"),
         "format string must be present in default binary ({} bytes)",
@@ -136,7 +136,7 @@ fn panic_immediate_abort_strips_format_string_from_binary() {
     config.dist_dir = Some(dist_dir.clone());
     let artifacts_with = build_dist(&config).expect("build with panic_immediate_abort");
 
-    let bin_with = fs::read(&artifacts_with.app_bin).expect("read app.bin");
+    let bin_with = fs::read(&artifacts_with.app_bin.path).expect("read app.bin");
     assert!(
         !contains_bytes(&bin_with, b"PROBE_"),
         "format string must be absent from panic_immediate_abort binary ({} bytes)",

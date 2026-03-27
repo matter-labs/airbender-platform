@@ -9,32 +9,32 @@ use std::path::Path;
 
 /// Combined cargo and airbender metadata for a guest project, loaded in a single
 /// `cargo metadata` invocation.
-pub struct ProjectManifest {
+pub(crate) struct CargoMetadata {
     /// Cargo package name.
-    pub package_name: String,
+    pub(crate) package_name: String,
     /// Binary target names declared by the package.
-    pub bin_targets: Vec<String>,
+    pub(crate) bin_targets: Vec<String>,
     /// Cargo workspace root reported by `cargo metadata`.
-    pub workspace_root: std::path::PathBuf,
+    pub(crate) workspace_root: std::path::PathBuf,
     /// Typed `[package.metadata.airbender]` settings, defaulting to empty if absent.
-    pub airbender: AirbenderConfig,
+    pub(crate) airbender: AirbenderConfig,
 }
 
 /// Contents of `[package.metadata.airbender]` in the guest `Cargo.toml`.
 #[derive(Deserialize, Default)]
-pub struct AirbenderConfig {
+pub(crate) struct AirbenderConfig {
     /// Per-profile build settings, keyed by profile name (`"debug"`, `"release"`).
     #[serde(default)]
-    pub profile: HashMap<String, AirbenderProfileConfig>,
+    profile: HashMap<String, AirbenderProfileConfig>,
 }
 
 /// Per-profile airbender build settings under
 /// `[package.metadata.airbender.profile.<name>]`.
 #[derive(Deserialize, Default)]
-pub struct AirbenderProfileConfig {
+struct AirbenderProfileConfig {
     /// Enable `panic_immediate_abort` build-std feature for this profile.
     #[serde(default, rename = "panic-immediate-abort")]
-    pub panic_immediate_abort: bool,
+    panic_immediate_abort: bool,
 }
 
 fn load_metadata(manifest_path: &Path) -> Result<Metadata> {
@@ -68,12 +68,12 @@ fn find_package<'a>(metadata: &'a Metadata, manifest_path: &Path) -> Result<&'a 
         .ok_or(BuildError::MissingField("package.name"))
 }
 
-impl ProjectManifest {
+impl CargoMetadata {
     /// Loads the guest project manifest from the `Cargo.toml` at `manifest_path`.
     ///
     /// Calls `cargo metadata` once and deserializes both cargo fields and
     /// `[package.metadata.airbender]` settings. Unknown airbender keys are ignored.
-    pub fn load(manifest_path: &Path) -> Result<Self> {
+    pub(crate) fn load(manifest_path: &Path) -> Result<Self> {
         let metadata = load_metadata(manifest_path)?;
         let package = find_package(&metadata, manifest_path)?;
         let bin_targets = package
@@ -97,7 +97,7 @@ impl ProjectManifest {
     ///
     /// Reads `package.metadata.airbender.profile.<profile>.panic-immediate-abort`.
     /// Defaults to `false` if the key is absent.
-    pub fn panic_immediate_abort(&self, profile: Profile) -> bool {
+    pub(crate) fn panic_immediate_abort(&self, profile: Profile) -> bool {
         self.airbender
             .profile
             .get(profile.as_str())
@@ -118,8 +118,8 @@ mod tests {
         package_name: &str,
         bin_targets: &[&str],
         airbender: AirbenderConfig,
-    ) -> ProjectManifest {
-        ProjectManifest {
+    ) -> CargoMetadata {
+        CargoMetadata {
             package_name: package_name.to_string(),
             bin_targets: bin_targets.iter().map(|s| s.to_string()).collect(),
             workspace_root: std::path::PathBuf::new(),
@@ -201,7 +201,7 @@ mod tests {
             .parent()
             .unwrap()
             .join("examples/fibonacci/guest/Cargo.toml");
-        let manifest = ProjectManifest::load(&manifest_path).expect("load fibonacci manifest");
+        let manifest = CargoMetadata::load(&manifest_path).expect("load fibonacci manifest");
         assert_eq!(manifest.package_name, "airbender-fibonacci");
         assert_eq!(manifest.bin_targets, vec!["airbender-fibonacci"]);
     }
@@ -217,7 +217,7 @@ mod tests {
         std::fs::create_dir(temp_dir.path().join("src")).expect("create src");
         std::fs::write(temp_dir.path().join("src/main.rs"), "fn main() {}").expect("write main.rs");
         let manifest =
-            ProjectManifest::load(&temp_dir.path().join("Cargo.toml")).expect("load manifest");
+            CargoMetadata::load(&temp_dir.path().join("Cargo.toml")).expect("load manifest");
         assert!(!manifest.panic_immediate_abort(Profile::Release));
         assert!(!manifest.panic_immediate_abort(Profile::Debug));
     }
@@ -230,7 +230,7 @@ mod tests {
             .parent()
             .unwrap()
             .join("examples/fibonacci/guest/Cargo.toml");
-        let manifest = ProjectManifest::load(&manifest_path).expect("load fibonacci manifest");
+        let manifest = CargoMetadata::load(&manifest_path).expect("load fibonacci manifest");
         assert!(!manifest.panic_immediate_abort(Profile::Release));
         assert!(!manifest.panic_immediate_abort(Profile::Debug));
     }
