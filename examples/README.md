@@ -35,3 +35,4 @@ cargo run --release -- --prove
 - `fibonacci`
 - `u256-add` (no_std + `ruint`)
 - `std-btreemap` (std + `BTreeMap`)
+- `revm-witness-replay` (`revm` transaction inside Airbender — see its README for known limitations)
