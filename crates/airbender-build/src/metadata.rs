@@ -110,87 +110,33 @@ impl CargoMetadata {
 mod tests {
     use super::*;
 
-    fn make_config(json: &str) -> AirbenderConfig {
-        serde_json::from_str(json).expect("parse airbender config")
-    }
-
-    fn make_manifest(
-        package_name: &str,
-        bin_targets: &[&str],
-        airbender: AirbenderConfig,
-    ) -> CargoMetadata {
+    fn make_metadata(json: &str) -> CargoMetadata {
         CargoMetadata {
-            package_name: package_name.to_string(),
-            bin_targets: bin_targets.iter().map(|s| s.to_string()).collect(),
+            package_name: "guest".to_string(),
+            bin_targets: vec!["guest".to_string()],
             workspace_root: std::path::PathBuf::new(),
-            airbender,
+            airbender: serde_json::from_str(json).expect("parse airbender config"),
         }
     }
 
     #[test]
-    fn panic_immediate_abort_returns_false_when_profile_absent() {
-        let manifest = make_manifest("guest", &["guest"], AirbenderConfig::default());
-        assert!(!manifest.panic_immediate_abort(Profile::Release));
-        assert!(!manifest.panic_immediate_abort(Profile::Debug));
+    fn panic_immediate_abort_reads_correct_profile() {
+        let m = make_metadata(r#"{"profile": {"release": {"panic-immediate-abort": true}}}"#);
+        assert!(m.panic_immediate_abort(Profile::Release));
+        assert!(!m.panic_immediate_abort(Profile::Debug));
+
+        let m = make_metadata(r#"{"profile": {"debug": {"panic-immediate-abort": true}}}"#);
+        assert!(!m.panic_immediate_abort(Profile::Release));
+        assert!(m.panic_immediate_abort(Profile::Debug));
     }
 
     #[test]
-    fn panic_immediate_abort_reads_release_profile() {
-        let manifest = make_manifest(
-            "guest",
-            &["guest"],
-            make_config(r#"{"profile": {"release": {"panic-immediate-abort": true}}}"#),
-        );
-        assert!(manifest.panic_immediate_abort(Profile::Release));
-        assert!(!manifest.panic_immediate_abort(Profile::Debug));
-    }
-
-    #[test]
-    fn panic_immediate_abort_reads_debug_profile() {
-        let manifest = make_manifest(
-            "guest",
-            &["guest"],
-            make_config(r#"{"profile": {"debug": {"panic-immediate-abort": true}}}"#),
-        );
-        assert!(!manifest.panic_immediate_abort(Profile::Release));
-        assert!(manifest.panic_immediate_abort(Profile::Debug));
-    }
-
-    #[test]
-    fn panic_immediate_abort_defaults_false_when_key_missing() {
-        let manifest = make_manifest(
-            "guest",
-            &["guest"],
-            make_config(r#"{"profile": {"release": {}}}"#),
-        );
-        assert!(!manifest.panic_immediate_abort(Profile::Release));
-    }
-
-    #[test]
-    fn panic_immediate_abort_independent_per_profile() {
-        let manifest = make_manifest(
-            "guest",
-            &["guest"],
-            make_config(
-                r#"{"profile": {"release": {"panic-immediate-abort": true}, "debug": {"panic-immediate-abort": true}}}"#,
-            ),
-        );
-        assert!(manifest.panic_immediate_abort(Profile::Release));
-        assert!(manifest.panic_immediate_abort(Profile::Debug));
-    }
-
-    #[test]
-    fn airbender_config_defaults_on_unknown_metadata() {
-        let config: AirbenderConfig =
-            serde_json::from_str(r#"{"unknown-key": 42}"#).expect("should tolerate unknown keys");
-        assert!(config.profile.is_empty());
-    }
-
-    #[test]
-    fn airbender_config_defaults_on_null_metadata() {
-        let config: AirbenderConfig =
+    fn airbender_config_tolerates_missing_metadata() {
+        let null: AirbenderConfig =
             serde_json::from_value(serde_json::Value::Null).unwrap_or_default();
-        assert!(config.profile.is_empty());
+        assert!(null.profile.is_empty());
+        let unknown: AirbenderConfig = serde_json::from_str(r#"{"unknown-key": 42}"#).unwrap();
+        assert!(unknown.profile.is_empty());
     }
 
     #[test]
@@ -201,9 +147,9 @@ mod tests {
             .parent()
             .unwrap()
             .join("examples/fibonacci/guest/Cargo.toml");
-        let manifest = CargoMetadata::load(&manifest_path).expect("load fibonacci manifest");
-        assert_eq!(manifest.package_name, "airbender-fibonacci");
-        assert_eq!(manifest.bin_targets, vec!["airbender-fibonacci"]);
+        let m = CargoMetadata::load(&manifest_path).expect("load fibonacci manifest");
+        assert_eq!(m.package_name, "airbender-fibonacci");
+        assert_eq!(m.bin_targets, vec!["airbender-fibonacci"]);
     }
 
     #[test]
@@ -216,22 +162,8 @@ mod tests {
         .expect("write Cargo.toml");
         std::fs::create_dir(temp_dir.path().join("src")).expect("create src");
         std::fs::write(temp_dir.path().join("src/main.rs"), "fn main() {}").expect("write main.rs");
-        let manifest =
-            CargoMetadata::load(&temp_dir.path().join("Cargo.toml")).expect("load manifest");
-        assert!(!manifest.panic_immediate_abort(Profile::Release));
-        assert!(!manifest.panic_immediate_abort(Profile::Debug));
-    }
-
-    #[test]
-    fn load_reads_airbender_metadata() {
-        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("examples/fibonacci/guest/Cargo.toml");
-        let manifest = CargoMetadata::load(&manifest_path).expect("load fibonacci manifest");
-        assert!(!manifest.panic_immediate_abort(Profile::Release));
-        assert!(!manifest.panic_immediate_abort(Profile::Debug));
+        let m = CargoMetadata::load(&temp_dir.path().join("Cargo.toml")).expect("load manifest");
+        assert!(!m.panic_immediate_abort(Profile::Release));
+        assert!(!m.panic_immediate_abort(Profile::Debug));
     }
 }

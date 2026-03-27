@@ -453,7 +453,7 @@ mod tests {
 
     // --- resolve_bin_name ---
 
-    fn make_manifest(package_name: &str, bin_targets: &[&str]) -> CargoMetadata {
+    fn make_metadata(package_name: &str, bin_targets: &[&str]) -> CargoMetadata {
         CargoMetadata {
             package_name: package_name.to_string(),
             bin_targets: bin_targets.iter().map(|s| s.to_string()).collect(),
@@ -466,7 +466,7 @@ mod tests {
     fn resolve_bin_name_uses_single_candidate_without_explicit_override() {
         let config = BuildConfig::new(".");
         let resolved =
-            ResolvedBuildParams::resolve_bin_name(&config, &make_manifest("guest", &["guest"]))
+            ResolvedBuildParams::resolve_bin_name(&config, &make_metadata("guest", &["guest"]))
                 .expect("single binary should resolve");
         assert_eq!(resolved, "guest");
     }
@@ -476,7 +476,7 @@ mod tests {
         let config = BuildConfig::new(".");
         let err = ResolvedBuildParams::resolve_bin_name(
             &config,
-            &make_manifest("guest", &["alpha", "beta"]),
+            &make_metadata("guest", &["alpha", "beta"]),
         )
         .expect_err("multi-bin package should require --bin");
         assert_eq!(
@@ -491,7 +491,7 @@ mod tests {
         config.bin_name = Some("gamma".to_string());
         let err = ResolvedBuildParams::resolve_bin_name(
             &config,
-            &make_manifest("guest", &["alpha", "beta"]),
+            &make_metadata("guest", &["alpha", "beta"]),
         )
         .expect_err("unknown explicit bin must fail fast");
         assert_eq!(
@@ -506,7 +506,7 @@ mod tests {
         config.bin_name = Some("beta".to_string());
         let resolved = ResolvedBuildParams::resolve_bin_name(
             &config,
-            &make_manifest("guest", &["alpha", "beta"]),
+            &make_metadata("guest", &["alpha", "beta"]),
         )
         .expect("known explicit bin should resolve");
         assert_eq!(resolved, "beta");
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn resolve_bin_name_rejects_packages_without_binaries() {
         let config = BuildConfig::new(".");
-        let err = ResolvedBuildParams::resolve_bin_name(&config, &make_manifest("guest", &[]))
+        let err = ResolvedBuildParams::resolve_bin_name(&config, &make_metadata("guest", &[]))
             .expect_err("package without binaries should fail");
         assert_eq!(
             err.to_string(),
