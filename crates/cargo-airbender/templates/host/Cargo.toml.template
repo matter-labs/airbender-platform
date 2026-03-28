@@ -1,10 +1,10 @@
 [package]
-name = "__AIRBENDER_PROJECT_NAME__-host"
+name = "{project_name}-host"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-airbender-host = { __AIRBENDER_HOST_DEP____AIRBENDER_HOST_DEP_FEATURES__ }
+airbender-host = \{ {host_dep}{host_dep_features} \}
 
 # This is required to avoid having to specify `RUST_MIN_STACK` for compilation.
 # The reason why this is needed is because these packages are highly optimized, but the optimizations

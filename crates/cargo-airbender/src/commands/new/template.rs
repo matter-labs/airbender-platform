@@ -2,9 +2,10 @@ use super::profiles::ProverBackendProfile;
 use crate::cli::NewAllocatorArg;
 use crate::error::{CliError, Result};
 use airbender_build::{DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN};
-use std::collections::BTreeMap;
+use serde::Serialize;
 use std::fs;
 use std::path::Path;
+use tinytemplate::TinyTemplate;
 
 const GITIGNORE_TEMPLATE: &str = include_str!("../../../templates/.gitignore.template");
 const ROOT_README_TEMPLATE: &str = include_str!("../../../templates/README.md.template");
@@ -20,10 +21,31 @@ const HOST_TOOLCHAIN_TEMPLATE: &str =
 const CUSTOM_ALLOCATOR_MODULE_TEMPLATE: &str =
     include_str!("../../../templates/snippets/custom_allocator_module.rs.template");
 
-#[derive(Clone, Copy)]
-struct TemplateFile<'a> {
-    relative_path: &'static str,
-    source: &'a str,
+const TEMPLATES: &[(&str, &str)] = &[
+    (".gitignore", GITIGNORE_TEMPLATE),
+    ("README.md", ROOT_README_TEMPLATE),
+    ("guest/Cargo.toml", GUEST_CARGO_TEMPLATE),
+    ("guest/src/main.rs", GUEST_MAIN_TEMPLATE),
+    ("guest/rust-toolchain.toml", GUEST_TOOLCHAIN_TEMPLATE),
+    ("guest/.cargo/config.toml", GUEST_CARGO_CONFIG_TEMPLATE),
+    ("host/Cargo.toml", HOST_CARGO_TEMPLATE),
+    ("host/rust-toolchain.toml", HOST_TOOLCHAIN_TEMPLATE),
+];
+
+#[derive(Serialize)]
+struct TemplateData {
+    project_name: String,
+    sdk_dep: String,
+    sdk_default_features: String,
+    sdk_features: String,
+    host_dep: String,
+    host_dep_features: String,
+    prover_backend_doc: String,
+    guest_attributes: String,
+    main_attr_args: String,
+    custom_allocator_module: String,
+    rust_toolchain_channel: String,
+    guest_target: String,
 }
 
 pub(super) struct TemplateContext<'a> {
@@ -57,48 +79,21 @@ impl<'a> TemplateContext<'a> {
         }
     }
 
-    fn replacements(self) -> [(&'static str, String); 12] {
-        [
-            ("__AIRBENDER_PROJECT_NAME__", self.project_name.to_string()),
-            ("__AIRBENDER_SDK_DEP__", self.sdk_dependency.to_string()),
-            (
-                "__AIRBENDER_SDK_DEFAULT_FEATURES__",
-                sdk_default_features(self.allocator).to_string(),
-            ),
-            (
-                "__AIRBENDER_SDK_FEATURES__",
-                sdk_features(self.enable_std, self.allocator),
-            ),
-            ("__AIRBENDER_HOST_DEP__", self.host_dependency.to_string()),
-            (
-                "__AIRBENDER_HOST_DEP_FEATURES__",
-                self.host_dependency_features.to_string(),
-            ),
-            (
-                "__AIRBENDER_PROVER_BACKEND_DOC__",
-                self.readme_prover_backend_doc.to_string(),
-            ),
-            (
-                "__AIRBENDER_GUEST_ATTRIBUTES__",
-                guest_attributes(self.enable_std).to_string(),
-            ),
-            (
-                "__AIRBENDER_MAIN_ATTR_ARGS__",
-                main_attr_args(self.allocator).to_string(),
-            ),
-            (
-                "__AIRBENDER_CUSTOM_ALLOCATOR_MODULE__",
-                custom_allocator_module(self.allocator).to_string(),
-            ),
-            (
-                "__AIRBENDER_RUST_TOOLCHAIN_CHANNEL__",
-                DEFAULT_GUEST_TOOLCHAIN.to_string(),
-            ),
-            (
-                "__AIRBENDER_GUEST_TARGET__",
-                DEFAULT_GUEST_TARGET.to_string(),
-            ),
-        ]
+    fn into_template_data(self) -> TemplateData {
+        TemplateData {
+            project_name: self.project_name.to_string(),
+            sdk_dep: self.sdk_dependency.to_string(),
+            sdk_default_features: sdk_default_features(self.allocator).to_string(),
+            sdk_features: sdk_features(self.enable_std, self.allocator),
+            host_dep: self.host_dependency.to_string(),
+            host_dep_features: self.host_dependency_features.to_string(),
+            prover_backend_doc: self.readme_prover_backend_doc.to_string(),
+            guest_attributes: guest_attributes(self.enable_std).to_string(),
+            main_attr_args: main_attr_args(self.allocator).to_string(),
+            custom_allocator_module: custom_allocator_module(self.allocator).to_string(),
+            rust_toolchain_channel: DEFAULT_GUEST_TOOLCHAIN.to_string(),
+            guest_target: DEFAULT_GUEST_TARGET.to_string(),
+        }
     }
 }
 
@@ -107,12 +102,19 @@ pub(super) fn write_templates(
     context: TemplateContext<'_>,
     profile: ProverBackendProfile,
 ) -> Result<()> {
-    let replacements = context.replacements();
-    let mut replacement_usage: BTreeMap<&'static str, usize> =
-        replacements.iter().map(|(key, _)| (*key, 0usize)).collect();
+    let data = context.into_template_data();
 
-    for template in template_files(profile) {
-        let destination_path = destination_root.join(template.relative_path);
+    let mut tt = TinyTemplate::new();
+    tt.set_default_formatter(&tinytemplate::format_unescaped);
+
+    for (name, source) in TEMPLATES {
+        tt.add_template(name, source).map_err(|err| {
+            CliError::with_source(format!("failed to parse template `{name}`"), err)
+        })?;
+    }
+
+    for (name, _) in TEMPLATES {
+        let destination_path = destination_root.join(name);
         if let Some(parent) = destination_path.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 CliError::with_source(
@@ -122,12 +124,9 @@ pub(super) fn write_templates(
             })?;
         }
 
-        let rendered = render_template(
-            template.source,
-            template.relative_path,
-            &replacements,
-            &mut replacement_usage,
-        )?;
+        let rendered = tt.render(name, &data).map_err(|err| {
+            CliError::with_source(format!("failed to render template `{name}`"), err)
+        })?;
 
         fs::write(&destination_path, rendered).map_err(|err| {
             CliError::with_source(
@@ -137,86 +136,25 @@ pub(super) fn write_templates(
         })?;
     }
 
-    let unused_replacements: Vec<_> = replacement_usage
-        .into_iter()
-        .filter_map(|(key, used)| (used == 0).then_some(key))
-        .collect();
-    if !unused_replacements.is_empty() {
-        return Err(CliError::new(format!(
-            "template replacement keys were not used: {}",
-            unused_replacements.join(", ")
-        ))
-        .with_hint("remove stale placeholders or update template replacement mappings"));
+    // The host main template is profile-specific and has no placeholders,
+    // so it is written directly without rendering.
+    let host_main_path = destination_root.join("host/src/main.rs");
+    if let Some(parent) = host_main_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            CliError::with_source(
+                format!("failed to create directory `{}`", parent.display()),
+                err,
+            )
+        })?;
     }
+    fs::write(&host_main_path, profile.host_main_template).map_err(|err| {
+        CliError::with_source(
+            format!("failed to write `{}`", host_main_path.display()),
+            err,
+        )
+    })?;
 
     Ok(())
-}
-
-fn template_files(profile: ProverBackendProfile) -> [TemplateFile<'static>; 9] {
-    [
-        TemplateFile {
-            relative_path: ".gitignore",
-            source: GITIGNORE_TEMPLATE,
-        },
-        TemplateFile {
-            relative_path: "README.md",
-            source: ROOT_README_TEMPLATE,
-        },
-        TemplateFile {
-            relative_path: "guest/Cargo.toml",
-            source: GUEST_CARGO_TEMPLATE,
-        },
-        TemplateFile {
-            relative_path: "guest/src/main.rs",
-            source: GUEST_MAIN_TEMPLATE,
-        },
-        TemplateFile {
-            relative_path: "guest/rust-toolchain.toml",
-            source: GUEST_TOOLCHAIN_TEMPLATE,
-        },
-        TemplateFile {
-            relative_path: "guest/.cargo/config.toml",
-            source: GUEST_CARGO_CONFIG_TEMPLATE,
-        },
-        TemplateFile {
-            relative_path: "host/Cargo.toml",
-            source: HOST_CARGO_TEMPLATE,
-        },
-        TemplateFile {
-            relative_path: "host/src/main.rs",
-            source: profile.host_main_template,
-        },
-        TemplateFile {
-            relative_path: "host/rust-toolchain.toml",
-            source: HOST_TOOLCHAIN_TEMPLATE,
-        },
-    ]
-}
-
-fn render_template(
-    source: &str,
-    relative_path: &str,
-    replacements: &[(&'static str, String)],
-    usage: &mut BTreeMap<&'static str, usize>,
-) -> Result<String> {
-    let mut rendered = source.to_string();
-    for (from, to) in replacements {
-        if rendered.contains(from) {
-            if let Some(value) = usage.get_mut(from) {
-                *value += 1;
-            }
-            rendered = rendered.replace(from, to);
-        }
-    }
-
-    if rendered.contains("__AIRBENDER_") {
-        return Err(CliError::new(format!(
-            "failed to render template `{relative_path}` because unresolved placeholders remain"
-        ))
-        .with_hint("ensure every __AIRBENDER_*__ token has a replacement mapping"));
-    }
-
-    Ok(rendered)
 }
 
 fn guest_attributes(enable_std: bool) -> &'static str {
@@ -276,19 +214,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_unresolved_placeholder() {
-        let mut usage = BTreeMap::new();
-        usage.insert("__AIRBENDER_PROJECT_NAME__", 0);
-        let replacements = [("__AIRBENDER_PROJECT_NAME__", "demo".to_string())];
+    fn rejects_unknown_placeholder() {
+        let mut tt = TinyTemplate::new();
+        tt.set_default_formatter(&tinytemplate::format_unescaped);
+        tt.add_template("test", "{project_name} {unknown}").unwrap();
 
-        let err = render_template(
-            "__AIRBENDER_PROJECT_NAME__ __AIRBENDER_UNKNOWN__",
-            "dummy",
-            &replacements,
-            &mut usage,
-        )
-        .expect_err("must fail when unresolved placeholders remain");
+        let data = TemplateData {
+            project_name: "demo".to_string(),
+            sdk_dep: String::new(),
+            sdk_default_features: String::new(),
+            sdk_features: String::new(),
+            host_dep: String::new(),
+            host_dep_features: String::new(),
+            prover_backend_doc: String::new(),
+            guest_attributes: String::new(),
+            main_attr_args: String::new(),
+            custom_allocator_module: String::new(),
+            rust_toolchain_channel: String::new(),
+            guest_target: String::new(),
+        };
 
-        assert!(err.to_string().contains("unresolved placeholders"));
+        let err = tt
+            .render("test", &data)
+            .expect_err("must fail on unknown placeholder");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown"),
+            "error should mention the unknown field, got: {msg}"
+        );
     }
 }
