@@ -217,8 +217,7 @@ mod tests {
     fn rejects_unknown_placeholder() {
         let mut tt = TinyTemplate::new();
         tt.set_default_formatter(&tinytemplate::format_unescaped);
-        tt.add_template("test", "{project_name} {unknown}")
-            .unwrap();
+        tt.add_template("test", "{project_name} {unknown}").unwrap();
 
         let data = TemplateData {
             project_name: "demo".to_string(),
