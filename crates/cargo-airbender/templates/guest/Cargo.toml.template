@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-airbender = \{ package = "airbender-sdk", {sdk_dep}{sdk_default_features}{sdk_features} \}
+airbender = \{ package = "airbender-sdk", {sdk_dep}{sdk_default_features}{sdk_features} }

@@ -8,4 +8,4 @@ use airbender::guest::read;
 fn main() -> u32 \{
     let value: u32 = read().expect("failed to read input");
     value + 1
-\}
+}
