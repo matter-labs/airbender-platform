@@ -1,10 +1,11 @@
 use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
-use risc_v_simulator::abstractions::non_determinism::QuasiUARTSource;
+use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::{
     rom::ROM_SECOND_WORD_BITS, INITIAL_TIMESTAMP, TIMESTAMP_STEP,
 };
+use riscv_transpiler::cycle::CycleMarkerHooks;
 use riscv_transpiler::ir::{preprocess_bytecode, FullUnsignedMachineDecoderConfig};
 #[cfg(target_arch = "x86_64")]
 use riscv_transpiler::jit::JittedCode;
@@ -148,6 +149,7 @@ impl TranspilerRunner {
             receipt: Receipt::from_registers(state.registers),
             cycles_executed,
             reached_end: true,
+            cycle_markers: None,
         })
     }
 
@@ -196,9 +198,13 @@ impl TranspilerRunner {
         let mut state = State::initial_with_counters(DelegationsCounters::default());
         let mut non_determinism_source = QuasiUARTSource::new_with_reads(input_words.to_vec());
 
-        let reached_end = match profiler {
+        let (reached_end, cycle_markers) = CycleMarkerHooks::with(|| match profiler {
             Some(profiler) => {
-                VM::<DelegationsCounters>::run_basic_unrolled_with_flamegraph::<_, _, _>(
+                VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled_with_flamegraph::<
+                    _,
+                    _,
+                    _,
+                >(
                     &mut state,
                     &mut ram,
                     &mut (),
@@ -209,17 +215,20 @@ impl TranspilerRunner {
                 )
                 .map_err(|err| {
                     HostError::Transpiler(format!("failed to generate flamegraph: {err}"))
-                })?
+                })
             }
-            None => VM::<DelegationsCounters>::run_basic_unrolled::<_, _, _>(
-                &mut state,
-                &mut ram,
-                &mut (),
-                &instruction_tape,
-                self.cycles,
-                &mut non_determinism_source,
+            None => Ok(
+                VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled::<_, _, _>(
+                    &mut state,
+                    &mut ram,
+                    &mut (),
+                    &instruction_tape,
+                    self.cycles,
+                    &mut non_determinism_source,
+                ),
             ),
-        };
+        });
+        let reached_end = reached_end?;
 
         let cycles_executed = ((state.timestamp - INITIAL_TIMESTAMP) / TIMESTAMP_STEP) as usize;
         let registers = state.registers.map(|register| register.value);
@@ -228,6 +237,7 @@ impl TranspilerRunner {
             receipt: Receipt::from_registers(registers),
             cycles_executed,
             reached_end,
+            cycle_markers: Some(cycle_markers.into()),
         })
     }
 }
@@ -297,4 +307,69 @@ fn read_u32_words(path: &Path) -> Result<Vec<u32>> {
         words.push(u32::from_le_bytes(*chunk));
     }
     Ok(words)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TranspilerRunnerBuilder;
+    use crate::runner::Runner;
+    use std::path::Path;
+
+    const MARKER_OPCODE: u32 = 0x7ff01073; // csrrw x0, 2047, x0
+    const ADDI_OPCODE: u32 = 0x00100093; // addi x1, x0, 1
+    const LOOP_OPCODE: u32 = 0x0000006f; // jal x0, 0
+
+    // TODO: Evaluate how low-level do we want tests to be
+    #[test]
+    fn collects_cycle_markers_for_interpreter_runs() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let bin_path = dir.path().join("app.bin");
+        let text_path = dir.path().join("app.text");
+        let program = [MARKER_OPCODE, ADDI_OPCODE, MARKER_OPCODE, LOOP_OPCODE];
+        write_program(&bin_path, &program);
+        write_program(&text_path, &program);
+
+        let runner = TranspilerRunnerBuilder::new(&bin_path)
+            .with_text_path(&text_path)
+            .with_cycles(program.len())
+            .build()
+            .expect("build runner");
+        let execution = runner.run(&[]).expect("run program");
+        let markers = execution.cycle_markers.expect("cycle markers");
+
+        assert!(execution.reached_end);
+        assert_eq!(execution.receipt.registers[1], 1);
+        assert_eq!(markers.markers.len(), 2);
+        assert!(markers.delegation_counter.is_empty());
+        let diff = markers.markers[1].diff(&markers.markers[0]);
+        assert_eq!(diff.cycles, 1);
+        assert!(diff.delegations.is_empty());
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn jit_runs_do_not_collect_cycle_markers() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let bin_path = dir.path().join("app.bin");
+        let text_path = dir.path().join("app.text");
+        let program = [ADDI_OPCODE, LOOP_OPCODE];
+        write_program(&bin_path, &program);
+        write_program(&text_path, &program);
+
+        let runner = TranspilerRunnerBuilder::new(&bin_path)
+            .with_text_path(&text_path)
+            .with_cycles(program.len())
+            .with_jit()
+            .build()
+            .expect("build runner");
+        let execution = runner.run(&[]).expect("run program");
+
+        assert_eq!(execution.receipt.registers[1], 1);
+        assert!(execution.cycle_markers.is_none());
+    }
+
+    fn write_program(path: &Path, program: &[u32]) {
+        let bytes: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();
+        std::fs::write(path, bytes).expect("write test program");
+    }
 }

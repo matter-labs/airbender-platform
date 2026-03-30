@@ -31,12 +31,10 @@ pub enum Commands {
     Build(BuildArgs),
     /// Create a new host + guest project from templates.
     New(NewArgs),
-    /// Run app.bin with the simulator.
+    /// Run app.bin via the transpiler.
     Run(RunArgs),
     /// Run app.bin with transpiler profiling and emit flamegraph SVG.
     Flamegraph(FlamegraphArgs),
-    /// Run app.bin via the transpiler.
-    RunTranspiler(RunTranspilerArgs),
     /// Generate a proof and write it as bincode.
     Prove(ProveArgs),
     /// Generate verification keys and write them as bincode.
@@ -44,6 +42,8 @@ pub enum Commands {
     GenerateVk(GenerateVkArgs),
     /// Verify a proof against verification keys.
     VerifyProof(VerifyProofArgs),
+    /// Remove Docker resources created by reproducible builds.
+    Clean,
 }
 
 #[derive(Args, Debug)]
@@ -66,6 +66,16 @@ pub struct BuildArgs {
     pub release: bool,
     #[arg(last = true, value_name = "CARGO_ARGS")]
     pub cargo_args: Vec<String>,
+    /// Build inside a pinned Docker container for bit-for-bit reproducible output.
+    /// Automatically passes `--locked` to cargo; the project must have a committed `Cargo.lock`.
+    #[arg(long)]
+    pub reproducible: bool,
+    /// Override the directory bind-mounted as /src inside the reproducible build container.
+    /// Only needed when the guest has path dependencies pointing outside its own cargo workspace
+    /// root, e.g. in a monorepo where the guest shares crates with the host via relative paths.
+    /// Has no effect without --reproducible.
+    #[arg(long, requires = "reproducible")]
+    pub workspace_root: Option<PathBuf>,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -114,15 +124,6 @@ pub enum NewProverBackendArg {
 }
 
 #[derive(Args, Debug)]
-pub struct RunArgs {
-    pub app_bin: PathBuf,
-    #[arg(short, long)]
-    pub input: PathBuf,
-    #[arg(short, long)]
-    pub cycles: Option<usize>,
-}
-
-#[derive(Args, Debug)]
 pub struct FlamegraphArgs {
     pub app_bin: PathBuf,
     #[arg(short, long)]
@@ -140,7 +141,7 @@ pub struct FlamegraphArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct RunTranspilerArgs {
+pub struct RunArgs {
     pub app_bin: PathBuf,
     #[arg(short, long)]
     pub input: PathBuf,
@@ -220,29 +221,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_run_command() {
-        let cli = Cli::parse_from(["cargo-airbender", "run", "app.bin", "--input", "input.hex"]);
-        match cli.command {
-            Commands::Run(args) => {
-                assert_eq!(args.app_bin, PathBuf::from("app.bin"));
-                assert_eq!(args.input, PathBuf::from("input.hex"));
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_run_transpiler_jit_flag() {
+    fn parse_run_jit_flag() {
         let cli = Cli::parse_from([
             "cargo-airbender",
-            "run-transpiler",
+            "run",
             "app.bin",
             "--input",
             "input.hex",
             "--jit",
         ]);
         match cli.command {
-            Commands::RunTranspiler(args) => {
+            Commands::Run(args) => {
                 assert_eq!(args.app_bin, PathBuf::from("app.bin"));
                 assert_eq!(args.input, PathBuf::from("input.hex"));
                 assert!(args.jit);
@@ -283,6 +272,43 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_build_reproducible_flag() {
+        let cli = Cli::parse_from(["cargo-airbender", "build", "--reproducible"]);
+        match cli.command {
+            Commands::Build(args) => {
+                assert!(args.reproducible);
+                assert_eq!(args.app_name, "app");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_workspace_root_with_reproducible() {
+        let cli = Cli::parse_from([
+            "cargo-airbender",
+            "build",
+            "--reproducible",
+            "--workspace-root",
+            "/repo",
+        ]);
+        match cli.command {
+            Commands::Build(args) => {
+                assert!(args.reproducible);
+                assert_eq!(args.workspace_root, Some(PathBuf::from("/repo")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_build_workspace_root_requires_reproducible() {
+        let err = Cli::try_parse_from(["cargo-airbender", "build", "--workspace-root", "/repo"])
+            .expect_err("--workspace-root without --reproducible should fail");
+        assert!(err.to_string().contains("--reproducible"));
     }
 
     #[test]

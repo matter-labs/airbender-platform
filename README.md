@@ -6,23 +6,25 @@ This project provides:
 
 - `cargo airbender`: an utility to manage airbender projects and interact with the built RISC-V programs:
     - Create host+guest projects with `cargo airbender new`
-    - Build projects with `cargo airbender build`
-    - Run RISC-V programs with `cargo airbender run` and `cargo airbender run-transpiler`
+    - Build projects with `cargo airbender build` (add `--reproducible` for bit-for-bit identical output across machines via a pinned Docker container)
+    - Run RISC-V programs with `cargo airbender run`
     - Benchmark programs with `cargo airbender flamegraph`
     - Prove and verify proofs from CLI via `cargo airbender prove` & `cargo airbender verify-proof`.
 - Guest SDK: a set of utilities to make building guest programs convenient:
     - Project scaffolding: entrypoint, `std` bindings, allocator.
     - Reading input from host.
     - Committing values.
+    - Emitting cycle markers for transpiler profiling.
     - Passing debug logs.
     - Accessing prover-accelerated crypto primitives.
 - Host SDK: a set of utilities to interact with your program:
     - Load and run RISC-V projects from Rust.
+    - Collect cycle-marker snapshots from transpiler runs.
     - Generate verification keys, prove execution, verify proofs.
 
 ## Documentation
 
-Read the **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/)** for the full user guide.
+Read the **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/latest)** for the full user guide.
 
 The book source lives in [`docs/`](./docs/). To build locally:
 

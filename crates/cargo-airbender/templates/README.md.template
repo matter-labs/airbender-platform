@@ -20,13 +20,13 @@ Run host execution:
 
 ```sh
 cd ../host
-cargo run
+cargo run --release
 ```
 
 Run host execution + proof:
 
 ```sh
-cargo run -- --prove
+cargo run --release -- --prove
 ```
 
 ## Prover Backend
