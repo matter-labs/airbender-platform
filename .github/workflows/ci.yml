@@ -56,7 +56,7 @@ jobs:
       - name: Install cargo-binutils
         run: cargo install cargo-binutils --locked
       - name: Install cargo-airbender
-        run: cargo install --path crates/cargo-airbender --locked --force --debug
+        run: cargo install --path crates/cargo-airbender --locked --force
       - name: Run cargo-airbender integration flow
         run: |
           # TODO: this is a mess, but it's better than nothing -- to be properly refactored.
@@ -73,3 +73,34 @@ jobs:
 
           # Intentionally only verify command success and proof artifact presence for now.
           test -f "$tmp_dir/proof.bin"
+
+  examples:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/examples
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rust-src,llvm-tools-preview
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --locked
+      - name: Install cargo-airbender
+        run: cargo install --path crates/cargo-airbender --locked --force
+      - name: Build and run cycle markers example
+        run: |
+          cargo airbender build --project examples/cycle-markers/guest -- --locked
+          cargo run --release --manifest-path examples/cycle-markers/host/Cargo.toml --locked
+      - name: Build and prove fibonacci example with dev prover
+        run: |
+          cargo airbender build --project examples/fibonacci/guest -- --locked
+          cargo run --release --manifest-path examples/fibonacci/host/Cargo.toml --locked -- --prove
+      - name: Build and prove std-btreemap example with dev prover
+        run: |
+          cargo airbender build --project examples/std-btreemap/guest -- --locked
+          cargo run --release --manifest-path examples/std-btreemap/host/Cargo.toml --locked -- --prove
+      - name: Build and prove u256-add example with dev prover
+        run: |
+          cargo airbender build --project examples/u256-add/guest -- --locked
+          cargo run --release --manifest-path examples/u256-add/host/Cargo.toml --locked -- --prove

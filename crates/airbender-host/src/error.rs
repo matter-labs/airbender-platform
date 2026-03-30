@@ -8,8 +8,6 @@ pub enum HostError {
     Wire(airbender_core::wire::WireError),
     #[error("invalid manifest: {0}")]
     InvalidManifest(String),
-    #[error("simulator error: {0}")]
-    Simulator(String),
     #[error("transpiler error: {0}")]
     Transpiler(String),
     #[error("runner error: {0}")]

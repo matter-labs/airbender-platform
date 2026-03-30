@@ -1,11 +1,10 @@
+use crate::cycle_marker::CycleMarker;
 use crate::error::{HostError, Result};
 use crate::receipt::Receipt;
 use std::path::PathBuf;
 
-mod simulator_runner;
 mod transpiler_runner;
 
-pub use self::simulator_runner::{SimulatorRunner, SimulatorRunnerBuilder};
 pub use self::transpiler_runner::{TranspilerRunner, TranspilerRunnerBuilder};
 
 /// Flamegraph collection options for execution runners.
@@ -24,12 +23,13 @@ pub trait Runner {
     fn run(&self, input_words: &[u32]) -> Result<ExecutionResult>;
 }
 
-/// Execution outcome for simulator/transpiler based runners.
-#[derive(Clone, Debug)]
+/// Execution outcome for transpiler based runners.
+#[derive(Debug)]
 pub struct ExecutionResult {
     pub receipt: Receipt,
     pub cycles_executed: usize,
     pub reached_end: bool,
+    pub cycle_markers: Option<CycleMarker>,
 }
 
 /// Resolve the cycle budget from an explicit override or default.

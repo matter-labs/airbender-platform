@@ -52,6 +52,16 @@ impl RealProof {
         self.level
     }
 
+    /// Returns the wrapped unrolled proof.
+    ///
+    /// Using the raw proof directly is not recommended and is not covered by
+    /// the stable `airbender-host` public API. This is exposed for rare cases,
+    /// for example when a project depends on both `airbender-host` and direct
+    /// Airbender crates at the same time.
+    pub fn into_inner(self) -> execution_utils::unrolled::UnrolledProgramProof {
+        self.inner
+    }
+
     pub(crate) fn inner(&self) -> &execution_utils::unrolled::UnrolledProgramProof {
         &self.inner
     }

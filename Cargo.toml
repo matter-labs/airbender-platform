@@ -12,6 +12,8 @@ members = [
     "crates/cargo-airbender",
 ]
 exclude = [
+    "examples/cycle-markers/guest",
+    "examples/cycle-markers/host",
     "examples/fibonacci/guest",
     "examples/fibonacci/host",
     "examples/u256-add/guest",
@@ -52,6 +54,7 @@ toml = "0.8"
 cargo_metadata = "0.18"
 thiserror = "2"
 talc = { version = "4.4.3", default-features = false }
+tempfile = "3"
 
 # Dependencies for airbender-crypto
 common_constants = { git = "https://github.com/matter-labs/zksync-airbender", branch = "dev", default-features = false }
@@ -84,7 +87,6 @@ rand_core = { version = "0.6.4", default-features = false }
 
 # Airbender dependencies
 riscv_common = { git = "https://github.com/matter-labs/zksync-airbender", branch = "dev" }
-risc_v_simulator = { git = "https://github.com/matter-labs/zksync-airbender", branch = "dev" }
 execution_utils = { git = "https://github.com/matter-labs/zksync-airbender", branch = "dev" }
 gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender", branch = "dev" }
 riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender", branch = "dev" }

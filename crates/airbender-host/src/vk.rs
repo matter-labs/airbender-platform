@@ -7,7 +7,7 @@ use execution_utils::unrolled::{
     compute_setup_for_machine_configuration, get_unrolled_circuits_artifacts_for_machine_type,
     verify_unrolled_layer_proof, UnrolledProgramProof, UnrolledProgramSetup,
 };
-use risc_v_simulator::cycle::{
+use riscv_transpiler::cycle::{
     IMStandardIsaConfigWithUnsignedMulDiv, IWithoutByteAccessIsaConfigWithDelegation,
 };
 use sha3::Digest;

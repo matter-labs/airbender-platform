@@ -16,6 +16,8 @@ GPU support is enabled by default. To keep a dev-only host binary, disable defau
 airbender-host = { path = "../../crates/airbender-host", default-features = false }
 ```
 
+Prefer `cargo build --release` / `cargo run --release` for host binaries.
+
 ## Core Workflow with `Program`
 
 `Program` is the highest-level API.
@@ -33,8 +35,8 @@ fn run() -> Result<()> {
     let mut inputs = Inputs::new();
     inputs.push(&10u32)?;
 
-    let simulator = program.simulator_runner().build()?;
-    let execution = simulator.run(inputs.words())?;
+    let runner = program.transpiler_runner().build()?;
+    let execution = runner.run(inputs.words())?;
     println!("output x10={}", execution.receipt.output[0]);
 
     let prover = program.dev_prover().build()?;
@@ -66,7 +68,6 @@ Guest-side `read::<T>()` calls consume values in the same order they were pushed
 
 High-level:
 
-- `Program::simulator_runner()`
 - `Program::transpiler_runner()`
 - `Program::dev_prover()`
 - `Program::gpu_prover()`
@@ -78,10 +79,10 @@ High-level:
 - `Verifier::generate_vk()`
 - `Verifier::verify(&proof, &vk, request)`
 - `VerificationRequest::dev(...)` / `VerificationRequest::real(...)`
+- `Mark::diff(...)` to derive the work between two collected cycle markers
 
 Lower-level:
 
-- `SimulatorRunnerBuilder::new(app_bin).with_...().build()`
 - `TranspilerRunnerBuilder::new(app_bin).with_...().with_jit().build()` (`with_jit()` is optional and x86_64-only)
 - `DevProverBuilder::new(app_bin).with_...().build()`
 - `GpuProverBuilder::new(app_bin).with_...().build()`
@@ -102,6 +103,9 @@ Verification APIs can enforce expected public outputs (`x10..x17`) in addition t
 
 `#[airbender::main]` return values and `guest::commit(...)` map to `receipt.output`.
 
+For non-JIT transpiler runs, `ExecutionResult::cycle_markers` contains the
+captured marker snapshots. JIT runs return `None`.
+
 ## Prover Construction
 
 - `DevProverBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, then `build()`.
@@ -113,12 +117,12 @@ Verification APIs can enforce expected public outputs (`x10..x17`) in addition t
 
 ## Runner Construction
 
-- `SimulatorRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, then `build()`.
-- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, then `build()`.
+- `TranspilerRunnerBuilder::new(...)` accepts path and supports `with_cycles(...)`, `with_text_path(...)`, `with_flamegraph(...)`, `with_jit()`, then `build()`.
+- Cycle markers are collected automatically for non-JIT transpiler runs.
 
 ## Cycle Budget
 
-For simulator execution, you can:
+For transpiler execution, you can:
 
 - pass an explicit cycle limit
 
@@ -128,6 +132,7 @@ If no explicit cycle limit is set through your flow, a default high value will b
 
 See full host-side usage in:
 
+- [`examples/cycle-markers/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers/host)
 - [`examples/fibonacci/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/host)
 - [`examples/u256-add/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/host)
 - [`examples/std-btreemap/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/host)

@@ -234,15 +234,12 @@ mod tests {
 
     #[test]
     fn falls_back_when_git_metadata_is_unavailable() {
-        let dir = unique_temp_dir_path("git-metadata-fallback");
-        std::fs::create_dir_all(&dir).expect("create temp directory");
+        let dir = tempfile::tempdir().expect("create temp directory");
 
-        let metadata = resolve_git_metadata(&dir);
+        let metadata = resolve_git_metadata(dir.path());
         assert_eq!(metadata.branch, "N/A");
         assert_eq!(metadata.commit, "N/A");
         assert!(metadata.is_dirty);
-
-        std::fs::remove_dir_all(&dir).expect("remove temp directory");
     }
 
     #[test]
@@ -292,16 +289,5 @@ mod tests {
             err.to_string(),
             "invalid config: package `guest` has no binary targets"
         );
-    }
-
-    fn unique_temp_dir_path(label: &str) -> std::path::PathBuf {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time must be after unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "airbender-build-utils-{label}-{}-{now}",
-            std::process::id()
-        ))
     }
 }

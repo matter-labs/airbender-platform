@@ -7,6 +7,7 @@ This chapter gets you from a fresh machine to your first Airbender guest build, 
 - Rust nightly toolchain from [`rust-toolchain.toml`](https://github.com/matter-labs/airbender-platform/blob/main/rust-toolchain.toml)
 - `clang` available in `PATH`
 - `cargo-binutils` for `cargo objcopy`
+- Docker (required only for `cargo airbender build --reproducible`)
 
 Install `cargo-binutils`:
 
@@ -130,7 +131,7 @@ Create an input file (`u32` words encoded as hex, 8 hex chars per word):
 printf '00000001\n29000000\n' > input.hex
 ```
 
-Run in the simulator:
+Run the program:
 
 ```sh
 cargo airbender run ./dist/app/app.bin --input ./input.hex
@@ -159,13 +160,14 @@ You can also run the generated host flow:
 
 ```sh
 cd ../host
-cargo run
-cargo run -- --prove
+cargo run --release
+cargo run --release -- --prove
 ```
 
 By default, proving uses the dev backend and does not require CUDA.
 `airbender-host` exposes GPU proving by default; if you disabled default features in your host
 dependency, re-enable `gpu-prover` to call GPU APIs.
+Prefer `--release` when building or running host binaries.
 
 ## Prefer Full End-to-End Examples
 

@@ -21,6 +21,28 @@ pub enum BuildError {
     /// Signals invalid user inputs or metadata content.
     #[error("invalid config: {0}")]
     InvalidConfig(String),
+
+    /// Docker CLI was not found on PATH.
+    #[error("docker not found: install Docker and ensure it is on PATH")]
+    DockerNotFound,
+
+    /// Docker daemon is not running or not reachable.
+    #[error("docker daemon is not running: start Docker Desktop or the docker service")]
+    DockerNotRunning,
+
+    /// `docker build` failed while building the reproducible build image.
+    #[error("failed to build Docker image for reproducible build")]
+    DockerBuildFailed,
+
+    /// Guest project is missing a Cargo.lock or it was not generated with the container toolchain.
+    #[error(
+        "Cargo.lock not found in `{project}` or not generated with the container toolchain ({toolchain})\n\
+         fix: cargo +{toolchain} generate-lockfile --manifest-path {project}/Cargo.toml"
+    )]
+    LockfileNotReady {
+        project: String,
+        toolchain: &'static str,
+    },
 }
 
 impl From<ManifestError> for BuildError {

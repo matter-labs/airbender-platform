@@ -14,8 +14,8 @@ fn main() -> Result<()> {
     let mut inputs = Inputs::new();
     inputs.push(&base)?;
 
-    let simulator = program.simulator_runner().build()?;
-    let execution = simulator.run(inputs.words())?;
+    let runner = program.transpiler_runner().build()?;
+    let execution = runner.run(inputs.words())?;
     let exec_output = execution.receipt.output[0];
     println!(
         "Execution finished: cycles={}, reached_end={}, output={}",
