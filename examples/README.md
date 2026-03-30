@@ -18,11 +18,7 @@ From the corresponding host directory:
 cargo run --release
 ```
 
-To generate and verify a proof:
-
-```sh
-cargo run --release -- --prove
-```
+See each example's own README for usage details and available options.
 
 ## Examples
 

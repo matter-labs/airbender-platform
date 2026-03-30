@@ -142,7 +142,7 @@ cargo airbender flamegraph ./dist/app/app.bin --input ./input.hex --output flame
 | Option | Description |
 |--------|-------------|
 | `--input <file>` | Input file (required) |
-| `--output <file>` | Output SVG path (required) |
+| `--output <file>` | Output SVG path (default: `flamegraph.svg`) |
 | `--cycles <n>` | Cycle limit |
 | `--sampling-rate <n>` | Sampling rate |
 | `--inverse` | Inverse flamegraph |

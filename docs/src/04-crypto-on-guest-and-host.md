@@ -1,17 +1,17 @@
 # Using Crypto on Guest and Host
 
-`airbender-crypto` provides cryptographic primitives that work on both host and guest. On the guest, supported primitives automatically use prover-accelerated delegation backends. Same API, dramatically lower proving cost.
+`airbender-crypto` provides cryptographic primitives that work on both host and guest. When using `airbender-sdk` with the `crypto` feature, delegation backends are enabled automatically. If you depend on `airbender-crypto` directly, you need to enable the `proving` feature for delegated implementations — otherwise primitives fall back to their naive software versions.
 
 ## Add Dependency
 
-Standalone:
+The recommended approach is through the SDK:
 
 ```toml
 [dependencies]
-airbender-crypto = { path = "../../crates/airbender-crypto" }
+airbender = { package = "airbender-sdk", features = ["std", "crypto"] }
 ```
 
-For guest builds with delegation enabled:
+For direct usage with more fine-grained control over features:
 
 ```toml
 [dependencies]
