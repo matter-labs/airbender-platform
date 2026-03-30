@@ -125,8 +125,8 @@ async fn main() -> Result<()> {
     inputs.push(&chain_config_json)?;
     inputs.push(&public_keys)?;
 
-    let simulator = program.simulator_runner().build()?;
-    let execution = simulator.run(inputs.words())?;
+    let runner = program.transpiler_runner().build()?;
+    let execution = runner.run(inputs.words())?;
 
     println!(
         "Guest execution: cycles={}, reached_end={}",

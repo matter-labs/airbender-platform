@@ -26,12 +26,10 @@ bash generate-blocks.sh
 Build the guest and run the host:
 
 ```sh
-cd guest
-cargo airbender build
+cargo airbender build --project examples/reth-block-replay/guest
 
-cd ../host
-BLOCK_NUM=2 cargo run             # simulate only
-BLOCK_NUM=2 cargo run -- --prove  # simulate + prove + verify (~35 min)
+BLOCK_NUM=2 cargo run --release --manifest-path examples/reth-block-replay/host/Cargo.toml             # simulate only
+BLOCK_NUM=2 cargo run --release --manifest-path examples/reth-block-replay/host/Cargo.toml -- --prove  # simulate + prove + verify (~35 min)
 ```
 
 Expected output (with `--prove`):
