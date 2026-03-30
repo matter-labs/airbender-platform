@@ -21,7 +21,7 @@ pub struct ResolvedBuildParams {
     pub bin_name: String,
     /// Binary name written to `manifest.toml`; `None` when it equals `package_name`.
     pub manifest_bin_name: Option<String>,
-    /// Target triple; defaults to [`DEFAULT_GUEST_TARGET`] when not explicitly set.
+    /// Target triple resolved from CLI override, Cargo config, or [`DEFAULT_GUEST_TARGET`].
     pub target: String,
     /// Absolute paths to the dist app.
     pub dist_app: DistApp,
@@ -43,10 +43,7 @@ impl ResolvedBuildParams {
 
         let project_dir = Self::resolve_project_dir(build_config, cwd);
         let dist_dir = Self::resolve_dist_dir(build_config, &project_dir, cwd);
-        let target = build_config
-            .target
-            .clone()
-            .unwrap_or(DEFAULT_GUEST_TARGET.to_string());
+        let target = Self::resolve_target(build_config, &project_dir)?;
         let project_metadata = CargoMetadata::load(&project_dir.join("Cargo.toml"))?;
         let bin_name = Self::resolve_bin_name(build_config, &project_metadata)?;
         let mount_root = Self::resolve_mount_root(build_config, &project_metadata, cwd);
@@ -96,6 +93,87 @@ impl ResolvedBuildParams {
             },
         );
         dist_root.join(&build_config.app_name)
+    }
+
+    /// Resolves the effective build target written to the manifest and passed to Cargo.
+    ///
+    /// The CLI override wins. Otherwise, use the target resolved by Cargo from the
+    /// project's `.cargo/config.toml`/`.cargo/config` chain when present so the
+    /// manifest records the same target the build uses. Fall back to
+    /// [`DEFAULT_GUEST_TARGET`] when the project does not configure one.
+    fn resolve_target(build_config: &BuildConfig, project_dir: &Path) -> Result<String> {
+        if let Some(target) = build_config.target.as_deref() {
+            Self::validate_target(target)?;
+            return Ok(target.to_string());
+        }
+
+        let cargo_target = Self::has_cargo_config(project_dir)
+            .then(|| Self::load_cargo_config_target(project_dir))
+            .transpose()?
+            .flatten();
+
+        if let Some(target) = cargo_target {
+            Self::validate_target(&target)?;
+            return Ok(target);
+        }
+
+        Ok(DEFAULT_GUEST_TARGET.to_string())
+    }
+
+    fn validate_target(target: &str) -> Result<()> {
+        if target.trim().is_empty() {
+            return Err(BuildError::InvalidConfig(
+                "target triple must not be empty".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn has_cargo_config(project_dir: &Path) -> bool {
+        project_dir.ancestors().any(|dir| {
+            dir.join(".cargo/config.toml").is_file() || dir.join(".cargo/config").is_file()
+        })
+    }
+
+    fn load_cargo_config_target(project_dir: &Path) -> Result<Option<String>> {
+        let output = Command::new("cargo")
+            .args([
+                "-Z",
+                "unstable-options",
+                "config",
+                "get",
+                "build.target",
+                "--format",
+                "json-value",
+            ])
+            .current_dir(project_dir)
+            .output()?;
+        if output.status.success() {
+            let target = serde_json::from_slice::<String>(&output.stdout).map_err(|err| {
+                BuildError::InvalidConfig(format!(
+                    "failed to parse `cargo config get build.target` output: {err}"
+                ))
+            })?;
+            return Ok(Some(target));
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("config value `build.target` is not set") {
+            return Ok(None);
+        }
+
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            return Err(BuildError::ProcessFailed {
+                cmd: "cargo config get build.target".to_string(),
+                status: output.status,
+            });
+        }
+
+        Err(BuildError::InvalidConfig(format!(
+            "failed to resolve cargo build.target: {stderr}"
+        )))
     }
 
     /// Resolves the directory to bind-mounted as `/src` inside the reproducible build container.
@@ -278,6 +356,17 @@ mod tests {
         std::fs::write(dir.join("src/main.rs"), "fn main() {}").expect("write main.rs");
     }
 
+    fn write_rust_toolchain(dir: &Path) {
+        std::fs::write(
+            dir.join("rust-toolchain.toml"),
+            format!(
+                "[toolchain]\nchannel = \"{}\"\n",
+                crate::DEFAULT_GUEST_TOOLCHAIN
+            ),
+        )
+        .expect("write rust-toolchain");
+    }
+
     #[test]
     fn resolve_defaults() {
         let dir = tempfile::tempdir().expect("create temp dir");
@@ -343,6 +432,24 @@ mod tests {
         config.target = Some("riscv32im-risc0-custom-elf".to_string());
         let params = ResolvedBuildParams::resolve(&config, dir.path()).expect("resolve");
         assert_eq!(params.target, "riscv32im-risc0-custom-elf");
+    }
+
+    #[test]
+    fn resolve_reads_target_from_project_cargo_config() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        write_minimal_project(dir.path());
+        write_rust_toolchain(dir.path());
+        std::fs::create_dir(dir.path().join(".cargo")).expect("create .cargo");
+        std::fs::write(
+            dir.path().join(".cargo/config.toml"),
+            "[build]\ntarget = \"x86_64-unknown-linux-gnu\"\n",
+        )
+        .expect("write cargo config");
+
+        let config = BuildConfig::new(dir.path());
+        let params = ResolvedBuildParams::resolve(&config, dir.path()).expect("resolve");
+
+        assert_eq!(params.target, "x86_64-unknown-linux-gnu");
     }
 
     #[test]

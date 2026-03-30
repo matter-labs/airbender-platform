@@ -162,6 +162,7 @@ mod tests {
             .expect("manifest must have at least one line");
         assert_eq!(first_line, "package = \"demo\"");
         assert!(!toml.contains("bin_name"));
+        assert!(toml.contains("target = \"riscv32im-risc0-zkvm-elf\""));
         assert!(toml.contains("[bin]"));
         assert!(toml.contains("[elf]"));
         assert!(toml.contains("[text]"));

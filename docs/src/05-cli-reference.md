@@ -85,6 +85,8 @@ git add <guest>/Cargo.lock && git commit -m "chore: regenerate Cargo.lock for re
 When `--reproducible` is used, `manifest.toml` records:
 
 ```toml
+target = "riscv32im-risc0-zkvm-elf"
+
 [build]
 profile = "release"
 reproducible = true
