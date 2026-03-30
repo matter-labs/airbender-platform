@@ -1,0 +1,9 @@
+[package]
+name = "airbender-revm-witness-replay"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", path = "../../../crates/airbender-sdk", features = ["std"] }
+revm = { version = "19.5", default-features = false, features = ["std", "portable"] }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }

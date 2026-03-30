@@ -35,3 +35,5 @@ cargo run --release -- --prove
 - `fibonacci`
 - `u256-add` (no_std + `ruint`)
 - `std-btreemap` (std + `BTreeMap`)
+- `revm-witness-replay` (`revm` EVM execution inside Airbender with calldata, memory ops, and ZK-proven output)
+- `reth-block-replay` (fetch a block from reth, re-execute with `paradigmxyz/stateless`, and prove in ZK)

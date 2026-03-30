@@ -136,3 +136,4 @@ See full host-side usage in:
 - [`examples/fibonacci/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci/host)
 - [`examples/u256-add/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add/host)
 - [`examples/std-btreemap/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/host)
+- [`examples/revm-witness-replay/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/revm-witness-replay/host)
