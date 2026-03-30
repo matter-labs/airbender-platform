@@ -1,10 +1,5 @@
-#[path = "../../revm_runner.rs"]
-mod revm_runner;
-#[path = "../../shared.rs"]
-mod shared;
-
 use airbender_host::{Inputs, Program, Prover, Runner, VerificationRequest, Verifier};
-use shared::WitnessInput;
+use revm_basic_shared::WitnessInput;
 use std::path::PathBuf;
 
 const CALLER: [u8; 20] = [0x11; 20];
@@ -20,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gas_limit: GAS_LIMIT,
     };
 
-    let expected_gas = revm_runner::run_witness(&witness)?;
+    let expected_gas = revm_basic_shared::run_witness(&witness)?;
     let expected = expected_gas as u32;
     println!("Native revm: gas_used={expected_gas}");
 
@@ -30,8 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs = Inputs::new();
     inputs.push(&witness)?;
 
-    let simulator = program.simulator_runner().build()?;
-    let execution = simulator.run(inputs.words())?;
+    let runner = program.transpiler_runner().build()?;
+    let execution = runner.run(inputs.words())?;
     let guest_output = execution.receipt.output[0];
     println!(
         "Guest execution: cycles={}, reached_end={}, gas_used={}",

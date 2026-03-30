@@ -1,21 +1,17 @@
 [package]
-name = "airbender-revm-witness-replay-host"
+name = "airbender-revm-basic-host"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 airbender-host = { path = "../../../crates/airbender-host", default-features = false }
-revm = { version = "19.5", default-features = false, features = ["std", "portable"] }
-serde = { version = "1", features = ["derive"] }
+revm-basic-shared = { path = "../shared" }
 
 [profile.dev.package.keccak_special5]
 debug = 0
-
 [profile.dev.package.setups]
 debug = 0
-
 [profile.release.package.keccak_special5]
 debug = 0
-
 [profile.release.package.setups]
 debug = 0

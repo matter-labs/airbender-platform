@@ -1,0 +1,8 @@
+[package]
+name = "revm-basic-shared"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+revm = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never", default-features = false, features = ["std", "portable"] }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
