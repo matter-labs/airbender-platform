@@ -5,6 +5,9 @@
 > [!WARNING]
 > airbender-platform project is under active development and is in alpha state. Use at your own risk.
 
+> [!NOTE]
+> **Support crate.** For guest programs, enable the `crypto` feature on [`airbender-sdk`](https://matter-labs.github.io/airbender-platform/api/airbender_sdk/) to access crypto through `airbender::crypto`. For host programs, this crate can be used directly.
+
 `airbender-crypto` provides shared crypto primitives for Airbender host and guest programs. The same Rust API can be used on both sides, while guest builds can opt into delegated backends for proving-oriented workloads.
 
 ## What It Provides

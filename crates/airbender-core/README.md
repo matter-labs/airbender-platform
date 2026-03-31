@@ -5,6 +5,9 @@
 > [!WARNING]
 > airbender-platform project is under active development and is in alpha state. Use at your own risk.
 
+> [!NOTE]
+> **Support crate.** For guest programs, use [`airbender-sdk`](https://matter-labs.github.io/airbender-platform/api/airbender_sdk/). For host programs, use [`airbender-host`](https://matter-labs.github.io/airbender-platform/api/airbender_host/), which re-exports the necessary types. Depend on this crate directly only when building tooling that bridges the host/guest boundary.
+
 `airbender-core` contains the shared data model that other Airbender crates build on. It keeps the host and guest boundary explicit: commit layouts, framed input words, and the manifest schema for packaged guest artifacts.
 
 ## What It Provides

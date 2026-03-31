@@ -14,6 +14,8 @@
         --line: rgba(28, 26, 23, 0.12);
         --accent: #ab3f1f;
         --accent-ink: #7a2c14;
+        --accent-bg: rgba(171, 63, 31, 0.08);
+        --support-line: rgba(28, 26, 23, 0.08);
         --shadow: 0 24px 60px rgba(70, 45, 20, 0.12);
       }
 
@@ -26,6 +28,8 @@
           --line: rgba(245, 239, 231, 0.12);
           --accent: #ff8a5b;
           --accent-ink: #ffb191;
+          --accent-bg: rgba(255, 138, 91, 0.1);
+          --support-line: rgba(245, 239, 231, 0.06);
           --shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
         }
       }
@@ -81,13 +85,32 @@
         font-size: 1.05rem;
       }
 
+      .section-heading {
+        margin: 36px 0 4px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .section-heading--main {
+        color: var(--accent);
+      }
+
+      .section-desc {
+        margin: 0 0 16px;
+        font-size: 0.92rem;
+        color: var(--muted);
+      }
+
       .crate-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         gap: 16px;
         list-style: none;
         padding: 0;
-        margin: 32px 0 0;
+        margin: 0;
       }
 
       .crate-card {
@@ -101,6 +124,21 @@
         .crate-card {
           background: rgba(255, 255, 255, 0.03);
         }
+      }
+
+      .crate-card--main {
+        border-color: var(--accent);
+        background: var(--accent-bg);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .crate-card--main {
+          background: var(--accent-bg);
+        }
+      }
+
+      .crate-card--support {
+        border-color: var(--support-line);
       }
 
       .crate-link {
@@ -126,6 +164,34 @@
         font-size: 0.95rem;
       }
 
+      .crate-badge {
+        display: inline-block;
+        padding: 0.05rem 0.45rem;
+        border-radius: 0.9rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        vertical-align: middle;
+        font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+      }
+
+      .crate-badge--main {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .crate-badge--main {
+          color: #1e1b18;
+        }
+      }
+
+      .crate-badge--support {
+        background: rgba(127, 107, 84, 0.15);
+        color: var(--muted);
+      }
+
       code {
         padding: 0.08rem 0.32rem;
         border-radius: 0.35rem;
@@ -143,8 +209,17 @@
         Rustdoc generates each workspace crate as its own entry point. This page
         keeps the published API docs navigable from a single stable URL.
       </p>
+
+      <p class="section-heading section-heading--main">Main crates</p>
+      <p class="section-desc">Start here. These crates are the primary entry points and re-export everything you need.</p>
       <ul class="crate-grid">
-        {{ crate_cards }}
+        {{ main_crate_cards }}
+      </ul>
+
+      <p class="section-heading">Support crates</p>
+      <p class="section-desc">Lower-level building blocks consumed by the main crates. Depend on these directly only when you need fine-grained control.</p>
+      <ul class="crate-grid">
+        {{ support_crate_cards }}
       </ul>
     </main>
   </body>
