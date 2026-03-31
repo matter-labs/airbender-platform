@@ -5,6 +5,9 @@
 > [!WARNING]
 > airbender-platform project is under active development and is in alpha state. Use at your own risk.
 
+> [!NOTE]
+> **Support crate.** Most guest applications should depend on [`airbender-sdk`](https://matter-labs.github.io/airbender-platform/api/airbender_sdk/) instead, which re-exports `#[airbender::main]` and all guest APIs through a single dependency.
+
 `airbender-macros` implements the procedural macros used by Airbender guest programs. In practice, most projects reach this crate through `airbender-sdk`, which re-exports `#[airbender::main]`.
 
 ## What It Provides
