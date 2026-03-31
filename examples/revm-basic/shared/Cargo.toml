@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# TODO: switch back to upstream revm once the `memory_gas` `#[inline(never)]` fix lands
 revm = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never", default-features = false, features = ["std", "portable"] }
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }

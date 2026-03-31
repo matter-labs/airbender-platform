@@ -1,5 +1,5 @@
 use airbender_host::{Inputs, Program, Prover, Runner, VerificationRequest, Verifier};
-use revm_basic_shared::WitnessInput;
+use revm_basic_shared::RunInput;
 use std::path::PathBuf;
 
 const CALLER: [u8; 20] = [0x11; 20];
@@ -9,13 +9,13 @@ const GAS_LIMIT: u64 = 100_000;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prove = std::env::args().skip(1).any(|arg| arg == "--prove");
 
-    let witness = WitnessInput {
+    let input = RunInput {
         caller: CALLER,
         tx_to: CONTRACT,
         gas_limit: GAS_LIMIT,
     };
 
-    let expected_gas = revm_basic_shared::run_witness(&witness)?;
+    let expected_gas = revm_basic_shared::run(&input)?;
     let expected = expected_gas as u32;
     println!("Native revm: gas_used={expected_gas}");
 
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::load(&dist_dir)?;
 
     let mut inputs = Inputs::new();
-    inputs.push(&witness)?;
+    inputs.push(&input)?;
 
     let runner = program.transpiler_runner().build()?;
     let execution = runner.run(inputs.words())?;

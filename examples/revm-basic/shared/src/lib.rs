@@ -11,13 +11,13 @@ use revm::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WitnessInput {
+pub struct RunInput {
     pub caller: [u8; 20],
     pub tx_to: [u8; 20],
     pub gas_limit: u64,
 }
 
-pub fn run_witness(input: &WitnessInput) -> Result<u64, String> {
+pub fn run(input: &RunInput) -> Result<u64, String> {
     let caller = Address::from(input.caller);
     let contract_addr = Address::from(input.tx_to);
 
@@ -65,12 +65,7 @@ pub fn run_witness(input: &WitnessInput) -> Result<u64, String> {
     }
 }
 
-/// Contract that stores a value to memory and returns it.
-///
-/// Exercises the memory-expansion gas path (MSTORE + RETURN), which was
-/// previously blocked by a `mulh` instruction emitted on rv32 targets.
-///
-/// Bytecode: PUSH1 0x42, PUSH1 0x00, MSTORE, PUSH1 0x20, PUSH1 0x00, RETURN
+/// Stores 0x42 to memory and returns it (MSTORE + RETURN).
 fn contract_bytecode() -> &'static [u8] {
     &[
         0x60, 0x42, // PUSH1 0x42
