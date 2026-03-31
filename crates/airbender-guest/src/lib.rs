@@ -1,6 +1,5 @@
+#![doc = include_str!("../README.md")]
 #![no_std]
-
-//! Guest-side APIs for reading inputs and committing outputs.
 
 extern crate alloc;
 

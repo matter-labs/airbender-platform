@@ -57,16 +57,16 @@ pub fn run(args: BuildArgs) -> Result<()> {
         ui::info("reproducible build (Docker)");
         ui::field("toolchain", DEFAULT_GUEST_TOOLCHAIN);
     }
-    ui::field("dist", artifacts.dist_dir.display());
-    ui::field("app.bin", artifacts.app_bin.display());
-    ui::field("app.elf", artifacts.app_elf.display());
-    ui::field("app.text", artifacts.app_text.display());
-    ui::field("manifest", artifacts.manifest.display());
+    ui::field("dist", artifacts.dir.display());
+    ui::field("app.bin", artifacts.app_bin.path.display());
+    ui::field("app.elf", artifacts.app_elf.path.display());
+    ui::field("app.text", artifacts.app_text.path.display());
+    ui::field("manifest", artifacts.manifest_path.display());
     ui::blank_line();
     ui::info("next step");
     ui::command(format!(
         "cargo airbender run \"{}\" --input <input.hex>",
-        artifacts.app_bin.display()
+        artifacts.app_bin.path.display()
     ));
 
     Ok(())

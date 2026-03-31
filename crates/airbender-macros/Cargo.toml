@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Procedural macros for Airbender guest programs"
+readme = "README.md"
 
 [lib]
 proc-macro = true

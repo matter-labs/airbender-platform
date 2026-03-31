@@ -1,6 +1,8 @@
 target/
 /dist
 **/dist/
+__pycache__/
+*.py[cod]
 
 # Local development artifacts of the main repository developer.
 SESSION.md

@@ -37,13 +37,15 @@
 //! the shared registry cache and any stopped `airbender-build` containers left by
 //! interrupted builds.
 
-use crate::constants::{DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN};
+use crate::build::DistApp;
+use crate::constants::DEFAULT_GUEST_TOOLCHAIN;
 use crate::errors::{BuildError, Result};
+use crate::resolver::ResolvedBuildParams;
 use crate::utils::run_command;
 use airbender_core::host::manifest::Profile;
 use std::io::Write;
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// Returns the Dockerfile for the reproducible build image.
@@ -167,59 +169,74 @@ fn container_name() -> String {
 fn build_container_cmd(
     bin_name: &str,
     target: &str,
-    profile_flag: &str,
+    dist_app: &DistApp,
+    profile: Profile,
     cargo_args: &[String],
+    extra_config: Option<&str>,
 ) -> String {
+    let profile_flag = if profile == Profile::Release {
+        "--release"
+    } else {
+        ""
+    };
+
     let mut cargo_flags: Vec<&str> = Vec::new();
     if !profile_flag.is_empty() {
         cargo_flags.push(profile_flag);
     }
     cargo_flags.extend(["--bin", bin_name, "--target", target, "--locked"]);
+    // Single-quote the config value so shell special characters ([, ", ,) are preserved.
+    let extra_config_flag = extra_config.map(|v| format!("--config '{v}'"));
     let user_flags = cargo_args.join(" ");
-    let cargo_flags = if user_flags.is_empty() {
-        cargo_flags.join(" ")
-    } else {
-        format!("{} {user_flags}", cargo_flags.join(" "))
+    let cargo_flags = {
+        let base = cargo_flags.join(" ");
+        let with_extra = match extra_config_flag.as_deref() {
+            Some(f) => format!("{base} {f}"),
+            None => base,
+        };
+        if user_flags.is_empty() {
+            with_extra
+        } else {
+            format!("{with_extra} {user_flags}")
+        }
     };
 
+    fn file_name(p: &Path) -> &str {
+        p.file_name()
+            .expect("must be valid")
+            .to_str()
+            .expect("must be valid")
+    }
+
     let build = format!("cargo build {cargo_flags}");
-    let obj_bin = format!("cargo objcopy {cargo_flags} -- -O binary /dist/app.bin");
-    let obj_elf = format!("cargo objcopy {cargo_flags} -- -R .text /dist/app.elf");
-    let obj_text =
-        format!("cargo objcopy {cargo_flags} -- -O binary --only-section=.text /dist/app.text");
+    let obj_bin = format!(
+        "cargo objcopy {cargo_flags} -- -O binary /dist/{}",
+        file_name(dist_app.bin())
+    );
+    let obj_elf = format!(
+        "cargo objcopy {cargo_flags} -- -R .text /dist/{}",
+        file_name(dist_app.elf())
+    );
+    let obj_text = format!(
+        "cargo objcopy {cargo_flags} -- -O binary --only-section=.text /dist/{}",
+        file_name(dist_app.text())
+    );
 
     format!("mkdir -p /dist && {build} && {obj_bin} && {obj_elf} && {obj_text}")
 }
 
-/// A resolved, ready-to-run reproducible build.
-///
-/// `new` performs all pre-flight checks (Cargo.lock, Docker availability, image)
-/// and resolves workspace layout. `run` executes the container and extracts artifacts.
+/// Executes a guest build inside a pinned Docker container for reproducible output.
 #[derive(Debug)]
-pub(crate) struct ReproducibleBuild {
-    tag: String,
-    workspace_root: PathBuf,
-    workdir: String,
-    build_cmd: String,
-    project_display: String,
+pub(crate) struct ReproducibleBuild<'a> {
+    params: &'a ResolvedBuildParams,
 }
 
-impl ReproducibleBuild {
-    /// Validates pre-conditions and resolves build parameters.
-    ///
-    /// Fails fast with [`BuildError::LockfileNotReady`] if `Cargo.lock` is absent,
-    /// or with Docker errors if the daemon is unreachable or the image cannot be built.
-    pub(crate) fn new(
-        project_dir: &Path,
-        workspace_root: &Path,
-        bin_name: &str,
-        target: Option<&str>,
-        profile: Profile,
-        cargo_args: &[String],
-    ) -> Result<Self> {
-        if !project_dir.join("Cargo.lock").exists() {
+impl<'a> ReproducibleBuild<'a> {
+    /// Validates pre-conditions and returns a ready-to-run build.
+    pub(crate) fn new(params: &'a ResolvedBuildParams) -> Result<Self> {
+        if !params.project_dir.join("Cargo.lock").exists() {
             return Err(BuildError::LockfileNotReady {
-                project: project_dir.display().to_string(),
+                project: params.project_dir.display().to_string(),
                 toolchain: DEFAULT_GUEST_TOOLCHAIN,
             });
         }
@@ -227,40 +244,50 @@ impl ReproducibleBuild {
         ensure_docker_available()?;
         ensure_image_built()?;
 
-        let target = target.unwrap_or(DEFAULT_GUEST_TARGET);
-        let profile_flag = if profile == Profile::Release {
-            "--release"
-        } else {
-            ""
-        };
-
-        let project_abs = project_dir
-            .canonicalize()
-            .unwrap_or_else(|_| project_dir.to_path_buf());
-        let project_rel = project_abs
-            .strip_prefix(workspace_root)
-            .unwrap_or(Path::new(""));
-
-        Ok(Self {
-            tag: docker_image_tag(),
-            workdir: format!("/src/{}", project_rel.display()),
-            build_cmd: build_container_cmd(bin_name, target, profile_flag, cargo_args),
-            project_display: project_dir.display().to_string(),
-            workspace_root: workspace_root.to_path_buf(),
-        })
+        Ok(Self { params })
     }
 
     /// Runs the build container and copies `app.bin`, `app.elf`, `app.text` into `dist_dir`.
-    pub(crate) fn run(&self, dist_dir: &Path) -> Result<()> {
+    pub(crate) fn run(
+        &self,
+        profile: Profile,
+        cargo_args: &[String],
+        extra_config: Option<&str>,
+    ) -> Result<()> {
         // Guard registered before any Docker call — no orphan window.
         let name = container_name();
         let _guard = TempContainer(name.clone());
-        self.run_container(&name)?;
-        self.cp_artifacts(&name, dist_dir)
+        self.run_container(profile, cargo_args, extra_config, &name)?;
+        self.cp_artifacts(&name)
     }
 
     /// Starts the container and waits for it to exit, capturing stderr for error remapping.
-    fn run_container(&self, name: &str) -> Result<()> {
+    fn run_container(
+        &self,
+        profile: Profile,
+        cargo_args: &[String],
+        extra_config: Option<&str>,
+        name: &str,
+    ) -> Result<()> {
+        let tag = docker_image_tag();
+        let project_abs = self
+            .params
+            .project_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.params.project_dir.to_path_buf());
+        let project_rel = project_abs
+            .strip_prefix(&self.params.mount_root)
+            .unwrap_or(Path::new(""));
+        let workdir = format!("/src/{}", project_rel.display());
+        let build_cmd = build_container_cmd(
+            &self.params.bin_name,
+            &self.params.target,
+            &self.params.dist_app,
+            profile,
+            cargo_args,
+            extra_config,
+        );
+
         let mut cmd = Command::new("docker");
         cmd.args([
             "run",
@@ -269,17 +296,17 @@ impl ReproducibleBuild {
             "--platform",
             "linux/amd64",
             "--workdir",
-            &self.workdir,
+            &workdir,
             "-e",
             "CARGO_TARGET_DIR=/cargo-target",
             "-v",
-            &format!("{}:/src:ro", self.workspace_root.display()),
+            &format!("{}:/src:ro", self.params.mount_root.display()),
             "-v",
             "airbender-cargo-registry:/usr/local/cargo/registry",
-            &self.tag,
+            &tag,
             "sh",
             "-c",
-            &self.build_cmd,
+            &build_cmd,
         ]);
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::piped());
@@ -296,7 +323,7 @@ impl ReproducibleBuild {
         if !status.success() {
             if build_stderr.contains("cannot update the lock file") {
                 return Err(BuildError::LockfileNotReady {
-                    project: self.project_display.clone(),
+                    project: self.params.project_dir.display().to_string(),
                     toolchain: DEFAULT_GUEST_TOOLCHAIN,
                 });
             }
@@ -308,13 +335,13 @@ impl ReproducibleBuild {
         Ok(())
     }
 
-    /// Copies artifacts from `/dist` inside the container to `dist_dir` on the host.
-    fn cp_artifacts(&self, name: &str, dist_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(dist_dir)?;
+    /// Copies all artifacts from `/dist` inside the container to `dist_app` in one call.
+    fn cp_artifacts(&self, name: &str) -> Result<()> {
+        std::fs::create_dir_all(self.params.dist_app.dir())?;
         let src = format!("{name}:/dist/.");
         let mut cmd = Command::new("docker");
-        cmd.args(["cp", &src, dist_dir.to_str().unwrap()]);
-        run_command(cmd, "docker cp (artifacts out)")
+        cmd.args(["cp", &src, self.params.dist_app.dir().to_str().unwrap()]);
+        run_command(cmd, "docker cp")
     }
 }
 
@@ -362,6 +389,7 @@ pub fn clean_reproducible_volumes() -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::DEFAULT_GUEST_TARGET;
     use crate::errors::BuildError;
 
     #[test]
@@ -388,14 +416,18 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"guest\"\n").unwrap();
 
-        let result = ReproducibleBuild::new(
-            &tmp,
-            &tmp,
-            "guest",
-            None,
-            airbender_core::host::manifest::Profile::Release,
-            &[],
-        );
+        let params = crate::resolver::ResolvedBuildParams {
+            project_dir: tmp.clone(),
+            package_name: "guest".to_string(),
+            bin_name: "guest".to_string(),
+            manifest_bin_name: None,
+            target: DEFAULT_GUEST_TARGET.to_string(),
+            dist_app: crate::build::DistApp::new(tmp.join("dist")),
+            mount_root: tmp.clone(),
+            panic_immediate_abort: false,
+            git: crate::resolver::GitMetadata::default(),
+        };
+        let result = ReproducibleBuild::new(&params);
 
         std::fs::remove_dir_all(&tmp).ok();
 

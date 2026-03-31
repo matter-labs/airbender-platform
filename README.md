@@ -1,30 +1,33 @@
 # Airbender Platform
 
-Airbender Platform is a workspace for building zk-provable programs with guest and host tooling.
+Airbender Platform is a Rust toolkit for writing RISC-V zk-provable programs.
 
-This project provides:
+You write a **guest** program (the code you want to prove) and a **host** program (the native Rust code that feeds inputs, runs the guest, and generates/verifies proofs). The platform handles compilation, execution, proving, and verification.
 
-- `cargo airbender`: an utility to manage airbender projects and interact with the built RISC-V programs:
-    - Create host+guest projects with `cargo airbender new`
-    - Build projects with `cargo airbender build` (add `--reproducible` for bit-for-bit identical output across machines via a pinned Docker container)
-    - Run RISC-V programs with `cargo airbender run`
-    - Benchmark programs with `cargo airbender flamegraph`
-    - Prove and verify proofs from CLI via `cargo airbender prove` & `cargo airbender verify-proof`.
-- Guest SDK: a set of utilities to make building guest programs convenient:
-    - Project scaffolding: entrypoint, `std` bindings, allocator.
-    - Reading input from host.
-    - Committing values.
-    - Emitting cycle markers for transpiler profiling.
-    - Passing debug logs.
-    - Accessing prover-accelerated crypto primitives.
-- Host SDK: a set of utilities to interact with your program:
-    - Load and run RISC-V projects from Rust.
-    - Collect cycle-marker snapshots from transpiler runs.
-    - Generate verification keys, prove execution, verify proofs.
+## What's Inside
+
+**`cargo airbender`** - CLI for the full development lifecycle:
+- `new` - scaffold a host+guest project
+- `build` - compile guest artifacts (`--reproducible` for deterministic Docker builds)
+- `run` - execute a guest binary
+- `flamegraph` - profile guest execution
+- `prove` / `verify-proof` - generate and verify proofs from the command line
+
+**Guest SDK** (`airbender-sdk`) - everything your guest program needs:
+- Entry point macro, `std` support, allocator selection
+- Typed input from host, output commitment
+- Cycle markers for profiling
+- Prover-accelerated crypto primitives
+
+**Host SDK** (`airbender-host`) - drive guest programs from native Rust:
+- Load and run RISC-V binaries
+- Generate verification keys, prove execution, verify proofs
+- Collect cycle-marker snapshots from transpiler runs
 
 ## Documentation
 
 Read the **[Airbender Platform Book](https://matter-labs.github.io/airbender-platform/latest)** for the full user guide.
+Browse the **[workspace API docs](https://matter-labs.github.io/airbender-platform/api/)** for the current `main` branch rustdocs.
 
 The book source lives in [`docs/`](./docs/). To build locally:
 

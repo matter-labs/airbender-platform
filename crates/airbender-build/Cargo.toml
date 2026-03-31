@@ -8,11 +8,15 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Build and package Airbender guest artifacts into distributable bundles"
+readme = "README.md"
 
 [dependencies]
 airbender-codec = { path = "../airbender-codec" }
 airbender-core = { path = "../airbender-core" }
 cargo_metadata = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 

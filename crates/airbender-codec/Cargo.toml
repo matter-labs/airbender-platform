@@ -8,6 +8,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+description = "Versioned serialization for Airbender host and guest communication"
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true, default-features = false, features = ["alloc", "derive"] }
