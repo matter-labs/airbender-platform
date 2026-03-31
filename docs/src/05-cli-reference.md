@@ -1,40 +1,40 @@
 # CLI Reference
 
-`cargo airbender` is the main user CLI for project scaffolding, guest builds, execution, proving, and verification.
-
-## Top-Level Commands
+All commands are invoked as `cargo airbender <command>`.
 
 ```text
-build
-new
-run
-flamegraph
-prove
-generate-vk
-verify-proof
-clean
+build          Build guest artifacts
+new            Scaffold a host+guest project
+run            Execute a guest binary
+flamegraph     Profile guest execution
+prove          Generate a proof
+generate-vk    Generate verification keys
+verify-proof   Verify a proof
+clean          Remove Docker build resources
 ```
 
-## `cargo airbender build`
+---
 
-Builds guest artifacts into a dist app directory.
+## `build`
+
+Compiles guest code and packages artifacts into a dist directory.
 
 ```sh
-cargo airbender build --app-name app
+cargo airbender build
 ```
 
-When `--project` is omitted, the command searches the current directory and its parents for the nearest guest `Cargo.toml`.
+The command auto-discovers the nearest guest `Cargo.toml` from the current directory. Use `--project` to specify it explicitly.
 
-Key options:
-
-- `--app-name <name>`: output namespace under dist root (default: `app`)
-- `--bin <name>`: explicit Cargo binary target
-- `--target <triple>`: explicit target triple override (otherwise Cargo config defaults are used)
-- `--dist <path>`: dist root directory (app folder is created under this root; relative paths are resolved from command invocation cwd)
-- `--project <path>`: guest project directory
-- `--profile <debug|release>`, `--debug`, `--release`
-- `--reproducible`: build inside a pinned Docker container for bit-for-bit identical output across machines and toolchain versions; automatically passes `--locked` to cargo
-- `--workspace-root <path>`: override the directory bind-mounted as `/src` inside the container; only needed with `--reproducible` when the guest has path dependencies pointing outside its own cargo workspace root (see [Monorepo path dependencies](#monorepo-path-dependencies) below); requires `--reproducible`
+| Option | Description |
+|--------|-------------|
+| `--app-name <name>` | Output folder name under dist (default: `app`) |
+| `--bin <name>` | Explicit Cargo binary target |
+| `--target <triple>` | Override target triple |
+| `--dist <path>` | Override dist root directory |
+| `--project <path>` | Guest project directory |
+| `--profile <debug\|release>` | Build profile (or use `--debug` / `--release`) |
+| `--reproducible` | Deterministic build via pinned Docker container |
+| `--workspace-root <path>` | Mount root for `--reproducible` (see below) |
 
 ### `panic-immediate-abort`
 
@@ -51,47 +51,30 @@ Supported profile keys are `"release"` and `"debug"`.
 Forward extra Cargo flags after `--`:
 
 ```sh
-cargo airbender build --app-name with_extra_feature -- --features my_extra_feature
+cargo airbender build -- --features my_extra_feature
 ```
 
-Reproducible build:
+### Reproducible builds
 
-```sh
-cargo airbender build --reproducible
-```
-
-This bind-mounts the workspace read-only into a temporary Docker container, compiles the guest inside a pinned image (`debian:bullseye-slim` at a fixed digest, Rust nightly pinned to the same date as `DEFAULT_GUEST_TOOLCHAIN`), copies the artifacts back to the host with `docker cp`, and removes the container. Two builds of the same source on any machine will produce identical `app.bin`/`app.elf`/`app.text` bytes and identical SHA-256 hashes in `manifest.toml`. Requires Docker.
+`--reproducible` compiles inside a pinned Docker image (`debian:bullseye-slim`, fixed nightly toolchain). Two builds of the same source on any machine produce identical artifacts and SHA-256 hashes. Requires Docker.
 
 ### Monorepo path dependencies
 
-The `--reproducible` flag bind-mounts the guest project's cargo workspace root as `/src` inside the container. For most projects this is the guest directory itself. If the guest's `Cargo.toml` contains `path = "../../.."` dependencies pointing to crates outside that directory (typical in platform monorepos where the guest shares crates with the host via local paths), those crates will not be present inside the container and the build will fail.
-
-Pass `--workspace-root` to expand the mount to a directory that contains all referenced crates:
+If your guest has `path = "../../..."` dependencies pointing outside its cargo workspace root, the Docker container won't see them. Pass `--workspace-root` to widen the mount:
 
 ```sh
 cargo airbender build --reproducible --workspace-root . --project examples/fibonacci/guest
 ```
 
-This is a developer-only scenario. End users whose guest depends on published crates (crates.io or git) never need this flag.
+End users depending on published crates (crates.io or git) don't need this.
 
-**Cargo.lock prerequisite:** the guest project must have a `Cargo.lock` committed and generated with the same nightly toolchain used inside the container. If your lock file was created with a different toolchain, regenerate it once before the first reproducible build:
+**Cargo.lock note:** the guest must have a `Cargo.lock` generated with the same nightly toolchain used inside the container. Regenerate if needed:
 
 ```sh
-rustup toolchain install nightly-2026-02-10
 cargo +nightly-2026-02-10 generate-lockfile --manifest-path <guest>/Cargo.toml
-git add <guest>/Cargo.lock && git commit -m "chore: regenerate Cargo.lock for reproducible builds"
 ```
 
-When `--reproducible` is used, `manifest.toml` records:
-
-```toml
-[build]
-profile = "release"
-reproducible = true
-...
-```
-
-Default artifact layout:
+### Output layout
 
 ```text
 dist/<app-name>/app.bin
@@ -100,195 +83,153 @@ dist/<app-name>/app.text
 dist/<app-name>/manifest.toml
 ```
 
-## `cargo airbender new`
+---
 
-Creates a new host+guest project template.
+## `new`
+
+Scaffolds a host+guest project.
 
 ```sh
 cargo airbender new [path]
 ```
 
-By default, this command runs in interactive mode and asks:
+Runs interactively by default, asking for project name, `std` support, allocator, and prover backend. Pass `--yes` to skip prompts.
 
-- project name
-- whether to enable `std`
-- allocator mode (`talc`, `bump`, `custom`)
-- prover backend (`dev`, `gpu`)
+| Option | Description |
+|--------|-------------|
+| `--name <name>` | Project name |
+| `--enable-std` | Enable std in the guest |
+| `--allocator <talc\|bump\|custom>` | Allocator selection |
+| `--prover-backend <dev\|gpu>` | Default prover backend |
+| `--yes` | Non-interactive mode |
+| `--sdk-path <path>` | Local SDK path |
+| `--sdk-version <version>` | Published SDK version |
 
-If `[path]` is omitted, the project is initialized in the current directory.
-The destination directory must be empty.
+Prover backends:
 
-Use `--yes` to skip prompts and run non-interactively.
+- **`dev`** - mock proof envelope, no GPU needed. Use for development.
+- **`gpu`** - real proving, requires NVIDIA GPU at runtime. Compile with `ZKSYNC_USE_CUDA_STUBS=true` if you don't have CUDA locally.
 
-Options:
+When `custom` allocator is selected, the guest includes an `allocator_init` hook and a sample allocator module you can replace.
 
-- `--name <name>`: default project name for interactive mode (or value used with `--yes`)
-- `--enable-std`: default `std` answer for interactive mode (or value used with `--yes`)
-- `--allocator <talc|bump|custom>`: default allocator answer for interactive mode (or value used with `--yes`)
-- `--prover-backend <dev|gpu>`: default prover backend answer for interactive mode (or value used with `--yes`)
-- `--yes`: skip prompts and accept values from flags/defaults
-- `--sdk-path <path>`: use local SDK path (workspace root, `crates/`, or crate path)
-- `--sdk-version <version>`: use versioned SDK dependency
+---
 
-Prover backend choices:
+## `run`
 
-- `dev`: transpiler-backed development flow that emits a mock proof envelope instead of running cryptographic proving
-- `gpu`: real proving backend; requires a CUDA-capable NVIDIA GPU at runtime. You can compile with `ZKSYNC_USE_CUDA_STUBS=true`, but invoking proving without CUDA setup panics.
-
-If `custom` allocator is chosen, the guest code will have `#[airbender::main(allocator_init = ...)]` and an explicit allocator
-module you can replace. The `allocator_init` hook is required for `allocator-custom`.
-
-Default behavior (when neither `--sdk-path` nor `--sdk-version` is provided):
-
-- generated project depends on `airbender-sdk` from
-  `https://github.com/matter-labs/airbender-platform` (branch `main`)
-
-Generated layout:
-
-```text
-<project>/
-  .gitignore
-  README.md
-  guest/
-    .cargo/config.toml
-    Cargo.toml
-    rust-toolchain.toml
-    src/main.rs
-  host/
-    Cargo.toml
-    rust-toolchain.toml
-    src/main.rs
-```
-
-## `cargo airbender run`
-
-Runs `app.bin` via transpiler execution.
+Executes a guest binary via the transpiler.
 
 ```sh
 cargo airbender run ./dist/app/app.bin --input ./input.hex
 ```
 
-Options:
+| Option | Description |
+|--------|-------------|
+| `--input <file>` | Input file (required) |
+| `--cycles <n>` | Cycle limit |
+| `--text-path <file>` | Path to `.text` section (default: sibling of app.bin) |
+| `--jit` | Enable transpiler JIT (x86_64 only) |
 
-- `--input <file>` (required)
-- `--cycles <n>` (optional cycle limit)
-- `--text-path <file>` (optional path to `.text` file; defaults to sibling of `app.bin`)
-- `--jit`: enable transpiler JIT on x86_64 (without this flag, transpiler runs in non-JIT mode)
+---
 
-## `cargo airbender flamegraph`
+## `flamegraph`
 
-Runs transpiler execution with profiling and writes flamegraph output.
+Profiles guest execution and writes a flamegraph SVG.
 
 ```sh
 cargo airbender flamegraph ./dist/app/app.bin --input ./input.hex --output flamegraph.svg
 ```
 
-Options include:
+| Option | Description |
+|--------|-------------|
+| `--input <file>` | Input file (required) |
+| `--output <file>` | Output SVG path (default: `flamegraph.svg`) |
+| `--cycles <n>` | Cycle limit |
+| `--sampling-rate <n>` | Sampling rate |
+| `--inverse` | Inverse flamegraph |
+| `--elf-path <file>` | Custom symbol source |
 
-- `--sampling-rate <n>`
-- `--inverse`
-- `--elf-path <file>` (optional custom symbol source)
+---
 
-## `cargo airbender prove`
+## `prove`
 
-Generates a bincode-encoded proof.
+Generates a proof.
 
 ```sh
 cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
 ```
 
-Key options:
+| Option | Description |
+|--------|-------------|
+| `--backend <dev\|cpu\|gpu>` | Prover backend (default: `dev`) |
+| `--level <base\|recursion-unrolled\|recursion-unified>` | Prover level (default: `recursion-unified`) |
+| `--threads <n>` | Worker threads |
+| `--output <file>` | Output proof file (required) |
+| `--cycles <n>` | Cycle limit (dev and CPU backends) |
+| `--ram-bound <bytes>` | RAM bound (CPU only) |
 
-- `--backend <dev|cpu|gpu>` (default: `dev`)
-- `--threads <n>`
-- `--cycles <n>`
-- `--ram-bound <bytes>`
-- `--level <base|recursion-unrolled|recursion-unified>` (default: `recursion-unified`)
+**Important:** `verify-proof` only accepts real proofs (CPU/GPU). Dev proofs are rejected with a clear error message.
 
-Notes:
+The `cpu` backend is for debugging circuits. It can only prove the base layer and is slow. Use `gpu` for real end-to-end proving.
 
-- `dev` backend runs transpiler execution and emits a dev proof envelope.
-- `cpu` backend can only generate proofs for the base layer, and is not meant to be used outside of the debugging of the airbender itself.
-- `gpu` backend requires GPU support in `cargo-airbender` (enabled by default).
-- `--cycles` and `--ram-bound` are ignored on `gpu`/`dev` backends.
-- `verify-proof` accepts only real proofs, so use `--backend cpu` or `--backend gpu` when preparing proofs for CLI verification.
+---
 
-## `cargo airbender generate-vk`
+## `generate-vk`
 
-Generates verification keys and writes them as bincode.
+Generates verification keys. Requires GPU support in `cargo-airbender` (enabled by default).
 
 ```sh
 cargo airbender generate-vk ./dist/app/app.bin --output vk.bin
 ```
 
-Options:
+| Option | Description |
+|--------|-------------|
+| `--output <file>` | Output path (default: `vk.bin`) |
+| `--level <base\|recursion-unrolled\|recursion-unified>` | VK level |
 
-- `--output <file>` (default: `vk.bin`)
-- `--level <base|recursion-unrolled|recursion-unified>`
+---
 
-Notes:
+## `verify-proof`
 
-- `generate-vk` requires GPU support in `cargo-airbender` (enabled by default).
-- If you installed with `--no-default-features`, the command fails before VK computation.
-- Local install example with GPU support disabled: `cargo install --path crates/cargo-airbender --no-default-features --force`.
-
-## `cargo airbender verify-proof`
-
-Verifies a real proof against a real verification key file.
+Verifies a real proof against a verification key.
 
 ```sh
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin
 ```
 
-Options:
+| Option | Description |
+|--------|-------------|
+| `--vk <file>` | Verification key file (required) |
+| `--expected-output <words>` | Expected public output (comma-separated, decimal or `0x` hex) |
 
-- `--vk <file>` (required)
-- `--expected-output <words>` (optional): comma-separated public output words for `x10..x17` (decimal or `0x` hex)
-
-Notes:
-
-- dev proofs are rejected by this command with a dedicated error message.
-- if `--expected-output` is omitted, CLI prints a warning and verifies proof/VK validity only.
-- when `--expected-output` has fewer than 8 words, remaining words are zero-padded.
-
-Examples:
+When `--expected-output` is omitted, only proof/VK validity is checked (with a warning). Fewer than 8 words are zero-padded.
 
 ```sh
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42
-cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42,0,0,0
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 0x2a
 ```
 
-## `cargo airbender clean`
+---
 
-Removes Docker resources created by reproducible builds to reclaim disk space.
+## `clean`
+
+Removes Docker resources from reproducible builds.
 
 ```sh
 cargo airbender clean
 ```
 
-Removes the shared `airbender-cargo-registry` volume and any stopped `airbender-build`
-containers left by interrupted builds.
+Deletes the shared `airbender-cargo-registry` volume and any orphaned `airbender-build` containers. Only needed to reclaim disk space; containers are normally cleaned up automatically.
 
-Notes:
+---
 
-- Each build run uses an isolated temporary container that is removed automatically on
-  success or failure. `clean` is only needed to reclaim the crate download cache or remove
-  containers orphaned by a hard kill (`SIGKILL`/OOM).
-- After `cargo airbender clean`, the next `--reproducible` build re-downloads all crate
-  sources from crates.io before compiling.
+## Input File Format
 
-## Input File Format (`--input`)
+Commands that accept `--input` expect hex-encoded `u32` words:
 
-Runtime/prover commands that accept `--input` expect hex-encoded `u32` words:
-
-- optional `0x` prefix is allowed
-- whitespace is ignored
-- total hex length must be a multiple of 8
-- each 8-hex chunk is parsed as one `u32`
-- words must match guest input expectations (for `read::<T>()`, this means Airbender input wire-framed payload words)
-
-Recommended: construct inputs with `airbender_host::Inputs` (`push`, `push_bytes`) and write files with `write_hex_file(...)`. See [`docs/02-host-program-api.md`](./02-host-program-api.md).
+- Optional `0x` prefix
+- Whitespace is ignored
+- Total hex length must be a multiple of 8
+- Each 8-hex chunk is one `u32`
 
 Example file:
 
@@ -297,9 +238,9 @@ Example file:
 29000000
 ```
 
-## Logging
+Best practice: use `Inputs::push(...)` and `write_hex_file(...)` from the host to generate these files. See [Host Program API](./02-host-program-api.md).
 
-Set `RUST_LOG` to control verbosity:
+## Logging
 
 ```sh
 RUST_LOG=debug cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
