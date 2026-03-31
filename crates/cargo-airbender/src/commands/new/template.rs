@@ -114,32 +114,26 @@ pub(super) fn write_templates(
     }
 
     for (name, _) in TEMPLATES {
-        let destination_path = destination_root.join(name);
-        if let Some(parent) = destination_path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                CliError::with_source(
-                    format!("failed to create directory `{}`", parent.display()),
-                    err,
-                )
-            })?;
-        }
-
         let rendered = tt.render(name, &data).map_err(|err| {
             CliError::with_source(format!("failed to render template `{name}`"), err)
         })?;
-
-        fs::write(&destination_path, rendered).map_err(|err| {
-            CliError::with_source(
-                format!("failed to write `{}`", destination_path.display()),
-                err,
-            )
-        })?;
+        write_file(destination_root, name, &rendered)?;
     }
 
-    // The host main template is profile-specific and has no placeholders,
-    // so it is written directly without rendering.
-    let host_main_path = destination_root.join("host/src/main.rs");
-    if let Some(parent) = host_main_path.parent() {
+    // The host main templates contain raw Rust braces that tinytemplate would
+    // try to parse as placeholders, so they are written directly.
+    write_file(
+        destination_root,
+        "host/src/main.rs",
+        profile.host_main_template,
+    )?;
+
+    Ok(())
+}
+
+fn write_file(destination_root: &Path, name: &str, contents: &str) -> Result<()> {
+    let path = destination_root.join(name);
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             CliError::with_source(
                 format!("failed to create directory `{}`", parent.display()),
@@ -147,13 +141,9 @@ pub(super) fn write_templates(
             )
         })?;
     }
-    fs::write(&host_main_path, profile.host_main_template).map_err(|err| {
-        CliError::with_source(
-            format!("failed to write `{}`", host_main_path.display()),
-            err,
-        )
+    fs::write(&path, contents).map_err(|err| {
+        CliError::with_source(format!("failed to write `{}`", path.display()), err)
     })?;
-
     Ok(())
 }
 
