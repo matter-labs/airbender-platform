@@ -5,6 +5,9 @@
 > [!WARNING]
 > airbender-platform project is under active development and is in alpha state. Use at your own risk.
 
+> [!NOTE]
+> **Support crate.** For normal build and project workflows, use [`cargo-airbender`](https://matter-labs.github.io/airbender-platform/api/cargo_airbender/) instead. Depend on this crate directly only when embedding the build and packaging flow in custom Rust tooling.
+
 `airbender-build` compiles guest crates and packages the resulting `dist/` bundle used by the rest of the platform. It is the library behind `cargo airbender build`, and is useful when you want to embed the same build and packaging flow in Rust tooling.
 
 ## What It Provides

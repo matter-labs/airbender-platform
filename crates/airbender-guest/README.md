@@ -5,6 +5,9 @@
 > [!WARNING]
 > airbender-platform project is under active development and is in alpha state. Use at your own risk.
 
+> [!NOTE]
+> **Support crate.** Most guest applications should depend on [`airbender-sdk`](https://matter-labs.github.io/airbender-platform/api/airbender_sdk/) instead, which re-exports `airbender-guest` and provides the complete guest API through a single dependency.
+
 `airbender-guest` contains the lower-level guest-side APIs that power `airbender-sdk`. Most applications should depend on the SDK and use `airbender::guest`, but this crate is available directly when you want a thinner guest dependency surface.
 
 ## What It Provides
