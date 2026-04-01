@@ -1,0 +1,95 @@
+---
+source: crates/cargo-airbender/src/commands/new/mod.rs
+expression: rendered
+---
+=== guest/Cargo.toml ===
+[package]
+name = "hello-airbender-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", version = "0.1.0", default-features = false, features = ["allocator-custom"] }
+=== guest/src/main.rs ===
+#![no_std]
+#![no_main]
+
+use airbender::guest::read;
+
+mod custom_allocator {
+    use core::alloc::{GlobalAlloc, Layout};
+    use core::cell::UnsafeCell;
+    use core::ptr::null_mut;
+
+    struct CustomBumpAllocator {
+        state: UnsafeCell<State>,
+    }
+
+    struct State {
+        start: usize,
+        end: usize,
+        current: usize,
+        initialized: bool,
+    }
+
+    unsafe impl Sync for CustomBumpAllocator {}
+
+    impl CustomBumpAllocator {
+        const fn uninit() -> Self {
+            Self {
+                state: UnsafeCell::new(State {
+                    start: 0,
+                    end: 0,
+                    current: 0,
+                    initialized: false,
+                }),
+            }
+        }
+
+        unsafe fn init(&self, start: *mut usize, end: *mut usize) {
+            let state = &mut *self.state.get();
+            state.start = start as usize;
+            state.end = end as usize;
+            state.current = state.start;
+            state.initialized = true;
+        }
+
+        unsafe fn alloc_inner(&self, layout: Layout) -> *mut u8 {
+            let state = &mut *self.state.get();
+            if !state.initialized {
+                return null_mut();
+            }
+
+            let aligned = (state.current + layout.align() - 1) & !(layout.align() - 1);
+            let next = aligned.saturating_add(layout.size());
+            if next > state.end {
+                return null_mut();
+            }
+
+            state.current = next;
+            aligned as *mut u8
+        }
+    }
+
+    unsafe impl GlobalAlloc for CustomBumpAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            self.alloc_inner(layout)
+        }
+
+        unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+    }
+
+    #[global_allocator]
+    static GLOBAL_ALLOCATOR: CustomBumpAllocator = CustomBumpAllocator::uninit();
+
+    pub fn init(start: *mut usize, end: *mut usize) {
+        unsafe { GLOBAL_ALLOCATOR.init(start, end) };
+    }
+}
+
+
+#[airbender::main(allocator_init = crate::custom_allocator::init)]
+fn main() -> u32 {
+    let value: u32 = read().expect("failed to read input");
+    value + 1
+}

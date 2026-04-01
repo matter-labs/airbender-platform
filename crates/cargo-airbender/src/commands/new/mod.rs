@@ -79,9 +79,20 @@ fn create_directory(path: &Path, description: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::cli::{NewAllocatorArg, NewProverBackendArg};
-    use airbender_build::DEFAULT_GUEST_TOOLCHAIN;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    const ALL_SCAFFOLD_FILES: &[&str] = &[
+        ".gitignore",
+        "README.md",
+        "guest/.cargo/config.toml",
+        "guest/Cargo.toml",
+        "guest/rust-toolchain.toml",
+        "guest/src/main.rs",
+        "host/Cargo.toml",
+        "host/rust-toolchain.toml",
+        "host/src/main.rs",
+    ];
 
     #[test]
     fn defaults_to_sdk_git_repository() {
@@ -200,50 +211,11 @@ mod tests {
         })
         .expect("create scaffold");
 
-        let root_readme =
-            fs::read_to_string(destination.join("README.md")).expect("read project root README");
-        let root_gitignore = fs::read_to_string(destination.join(".gitignore"))
-            .expect("read project root .gitignore");
-        let guest_cargo =
-            fs::read_to_string(destination.join("guest/Cargo.toml")).expect("read guest Cargo");
-        let guest_main =
-            fs::read_to_string(destination.join("guest/src/main.rs")).expect("read guest main");
-        let guest_toolchain = fs::read_to_string(destination.join("guest/rust-toolchain.toml"))
-            .expect("read guest rust-toolchain");
-        let guest_cargo_config = fs::read_to_string(destination.join("guest/.cargo/config.toml"))
-            .expect("read guest cargo config");
-        let host_cargo =
-            fs::read_to_string(destination.join("host/Cargo.toml")).expect("read host Cargo");
-        let host_main =
-            fs::read_to_string(destination.join("host/src/main.rs")).expect("read host main");
-        let host_toolchain = fs::read_to_string(destination.join("host/rust-toolchain.toml"))
-            .expect("read host rust-toolchain");
-
-        assert!(root_readme.contains("Default prover backend: `dev`"));
-        assert!(root_readme.contains("mock proof envelope"));
-        assert!(root_gitignore.contains("target/"));
-        assert!(guest_cargo.contains("name = \"hello-airbender-guest\""));
-        assert!(guest_cargo.contains("airbender-sdk"));
-        assert!(guest_main.contains("#![no_std]"));
-        assert!(guest_toolchain.contains(&format!("channel = \"{}\"", DEFAULT_GUEST_TOOLCHAIN)));
-        assert!(guest_toolchain
-            .contains("components = [\"clippy\", \"rust-src\", \"llvm-tools-preview\"]"));
-        assert!(guest_cargo_config.contains("target = \"riscv32im-risc0-zkvm-elf\""));
-        assert!(guest_cargo_config
-            .contains("build-std = [\"alloc\", \"core\", \"panic_abort\", \"compiler_builtins\", \"std\", \"proc_macro\"]"));
-        assert!(host_cargo.contains("name = \"hello-airbender-host\""));
-        assert!(host_cargo.contains("airbender-host"));
-        assert!(host_cargo.contains("default-features = false"));
-        assert!(host_cargo.contains("[profile.dev.package.keccak_special5]"));
-        assert!(host_cargo.contains("[profile.release.package.setups]"));
-        assert!(host_cargo.contains("avoid having to specify `RUST_MIN_STACK`"));
-        assert!(host_main.contains("Program::load"));
-        assert!(host_main.contains("program.dev_prover()"));
-        assert!(host_main.contains("program.dev_verifier()"));
-        assert!(host_toolchain.contains(&format!("channel = \"{}\"", DEFAULT_GUEST_TOOLCHAIN)));
-        assert!(!host_toolchain.contains("components"));
-        assert!(root_readme.contains("cargo run --release"));
-        assert!(root_readme.contains("cargo run --release -- --prove"));
+        assert_rendered_files_snapshot(
+            "new_scaffolds_host_and_guest",
+            &destination,
+            ALL_SCAFFOLD_FILES,
+        );
 
         fs::remove_dir_all(&root).expect("remove test directories");
     }
@@ -265,13 +237,11 @@ mod tests {
         })
         .expect("create std scaffold");
 
-        let guest_cargo =
-            fs::read_to_string(destination.join("guest/Cargo.toml")).expect("read guest Cargo");
-        let guest_main =
-            fs::read_to_string(destination.join("guest/src/main.rs")).expect("read guest main");
-
-        assert!(guest_cargo.contains("features = [\"std\"]"));
-        assert!(!guest_main.contains("#![no_std]"));
+        assert_rendered_files_snapshot(
+            "new_enable_std_updates_guest_template",
+            &destination,
+            &["guest/Cargo.toml", "guest/src/main.rs"],
+        );
 
         fs::remove_dir_all(&root).expect("remove test directories");
     }
@@ -293,11 +263,11 @@ mod tests {
         })
         .expect("create bump allocator scaffold");
 
-        let guest_cargo =
-            fs::read_to_string(destination.join("guest/Cargo.toml")).expect("read guest Cargo");
-
-        assert!(guest_cargo.contains("default-features = false"));
-        assert!(guest_cargo.contains("features = [\"allocator-bump\"]"));
+        assert_rendered_files_snapshot(
+            "new_bump_allocator_disables_sdk_default_features",
+            &destination,
+            &["guest/Cargo.toml"],
+        );
 
         fs::remove_dir_all(&root).expect("remove test directories");
     }
@@ -319,16 +289,11 @@ mod tests {
         })
         .expect("create custom allocator scaffold");
 
-        let guest_cargo =
-            fs::read_to_string(destination.join("guest/Cargo.toml")).expect("read guest Cargo");
-        let guest_main =
-            fs::read_to_string(destination.join("guest/src/main.rs")).expect("read guest main");
-
-        assert!(guest_cargo.contains("default-features = false"));
-        assert!(guest_cargo.contains("features = [\"allocator-custom\"]"));
-        assert!(guest_main
-            .contains("#[airbender::main(allocator_init = crate::custom_allocator::init)]"));
-        assert!(guest_main.contains("mod custom_allocator"));
+        assert_rendered_files_snapshot(
+            "new_custom_allocator_adds_allocator_hook",
+            &destination,
+            &["guest/Cargo.toml", "guest/src/main.rs"],
+        );
 
         fs::remove_dir_all(&root).expect("remove test directories");
     }
@@ -350,23 +315,29 @@ mod tests {
         })
         .expect("create gpu scaffold");
 
-        let root_readme =
-            fs::read_to_string(destination.join("README.md")).expect("read project root README");
-        let host_cargo =
-            fs::read_to_string(destination.join("host/Cargo.toml")).expect("read host Cargo");
-        let host_main =
-            fs::read_to_string(destination.join("host/src/main.rs")).expect("read host main");
-
-        assert!(root_readme.contains("Default prover backend: `gpu`"));
-        assert!(root_readme.contains("CUDA-capable NVIDIA GPU"));
-        assert!(root_readme.contains("ZKSYNC_USE_CUDA_STUBS=true"));
-        assert!(!host_cargo.contains("default-features = false"));
-        assert!(host_cargo.contains("[profile.dev.package.keccak_special5]"));
-        assert!(host_main.contains(".gpu_prover()"));
-        assert!(host_main.contains("program.real_verifier(ProverLevel::RecursionUnified)"));
-        assert!(host_main.contains("VerificationRequest::real(&expected_output)"));
+        assert_rendered_files_snapshot(
+            "new_gpu_backend_generates_real_prover_setup",
+            &destination,
+            &["README.md", "host/Cargo.toml", "host/src/main.rs"],
+        );
 
         fs::remove_dir_all(&root).expect("remove test directories");
+    }
+
+    fn assert_rendered_files_snapshot(snapshot_name: &str, root: &Path, relative_paths: &[&str]) {
+        let mut rendered = String::new();
+
+        for relative_path in relative_paths {
+            let contents = fs::read_to_string(root.join(relative_path))
+                .unwrap_or_else(|err| panic!("read rendered file `{relative_path}`: {err}"));
+            rendered.push_str(&format!("=== {relative_path} ===\n"));
+            rendered.push_str(&contents);
+            if !contents.ends_with('\n') {
+                rendered.push('\n');
+            }
+        }
+
+        insta::assert_snapshot!(snapshot_name, rendered);
     }
 
     fn test_workspace_dir(suffix: &str) -> PathBuf {

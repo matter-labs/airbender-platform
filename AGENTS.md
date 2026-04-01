@@ -40,6 +40,7 @@ This file defines project-specific guidance for coding agents working in `airben
 
 - Run targeted tests for touched crates/files before broad test sweeps.
 - Prefer behavior-focused tests; avoid fragile implementation-coupled assertions.
+- `insta` is allowed for snapshot testing where it makes sense for stable rendered output.
 
 ## Dependencies and Tooling
 
