@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 airbender = { package = "airbender-sdk", path = "../../../crates/airbender-sdk", features = ["std", "crypto"] }
-revm-precompile = { version = "32.1", default-features = false }
+revm-precompile = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never", default-features = false }
 stateless = { git = "https://github.com/paradigmxyz/stateless.git", rev = "ed189a5", default-features = false }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0", default-features = false }
 reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0", default-features = false }
@@ -25,4 +25,16 @@ lto = true
 codegen-units = 1
 
 [patch.crates-io]
-revm-interpreter = { path = "vendor/revm-interpreter" }
+# TODO: switch back to upstream revm once the `memory_gas` `#[inline(never)]` fix lands
+revm = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-bytecode = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-context = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-context-interface = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-database = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-database-interface = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-handler = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-inspector = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-interpreter = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-precompile = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-primitives = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-state = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }

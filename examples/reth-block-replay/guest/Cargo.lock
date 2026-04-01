@@ -2845,7 +2845,7 @@ dependencies = [
  "op-alloy-consensus",
  "reth-codecs",
  "revm-bytecode",
- "revm-primitives",
+ "revm-primitives 22.1.0",
  "revm-state",
  "secp256k1",
  "serde",
@@ -2969,8 +2969,7 @@ dependencies = [
 [[package]]
 name = "revm"
 version = "34.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2aabdebaa535b3575231a88d72b642897ae8106cf6b0d12eafc6bfdf50abfc7"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "revm-bytecode",
  "revm-context",
@@ -2981,27 +2980,25 @@ dependencies = [
  "revm-inspector",
  "revm-interpreter",
  "revm-precompile",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
 ]
 
 [[package]]
 name = "revm-bytecode"
 version = "8.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d1e5c1eaa44d39d537f668bc5c3409dc01e5c8be954da6c83370bbdf006457"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "bitvec",
  "phf",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "serde",
 ]
 
 [[package]]
 name = "revm-context"
 version = "13.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "892ff3e6a566cf8d72ffb627fdced3becebbd9ba64089c25975b9b028af326a5"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "bitvec",
  "cfg-if",
@@ -3009,46 +3006,43 @@ dependencies = [
  "revm-bytecode",
  "revm-context-interface",
  "revm-database-interface",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
 ]
 
 [[package]]
 name = "revm-context-interface"
 version = "14.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57f61cc6d23678c4840af895b19f8acfbbd546142ec8028b6526c53cc1c16c98"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "alloy-eip2930",
  "alloy-eip7702",
  "auto_impl",
  "either",
  "revm-database-interface",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
 ]
 
 [[package]]
 name = "revm-database"
 version = "10.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "529528d0b05fe646be86223032c3e77aa8b05caa2a35447d538c55965956a511"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "revm-bytecode",
  "revm-database-interface",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
 ]
 
 [[package]]
 name = "revm-database-interface"
 version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7bf93ac5b91347c057610c0d96e923db8c62807e03f036762d03e981feddc1d"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "auto_impl",
  "either",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
  "thiserror",
 ]
@@ -3056,8 +3050,7 @@ dependencies = [
 [[package]]
 name = "revm-handler"
 version = "15.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cd0e43e815a85eded249df886c4badec869195e70cdd808a13cfca2794622d2"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "auto_impl",
  "derive-where",
@@ -3067,15 +3060,14 @@ dependencies = [
  "revm-database-interface",
  "revm-interpreter",
  "revm-precompile",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
 ]
 
 [[package]]
 name = "revm-inspector"
 version = "15.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3ccad59db91ef93696536a0dbaf2f6f17cfe20d4d8843ae118edb7e97947ef"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "auto_impl",
  "either",
@@ -3083,25 +3075,25 @@ dependencies = [
  "revm-database-interface",
  "revm-handler",
  "revm-interpreter",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
 ]
 
 [[package]]
 name = "revm-interpreter"
 version = "32.0.0"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "revm-bytecode",
  "revm-context-interface",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "revm-state",
 ]
 
 [[package]]
 name = "revm-precompile"
-version = "32.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2ec11f45deec71e4945e1809736bb20d454285f9167ab53c5159dae1deb603f"
+version = "32.0.0"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -3113,9 +3105,20 @@ dependencies = [
  "cfg-if",
  "k256",
  "p256",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "ripemd",
  "sha2",
+]
+
+[[package]]
+name = "revm-primitives"
+version = "22.0.0"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
+dependencies = [
+ "alloy-primitives",
+ "num_enum",
+ "once_cell",
+ "serde",
 ]
 
 [[package]]
@@ -3133,13 +3136,12 @@ dependencies = [
 [[package]]
 name = "revm-state"
 version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "311720d4f0f239b041375e7ddafdbd20032a33b7bae718562ea188e188ed9fd3"
+source = "git+https://github.com/Jrigada/revm?branch=fix%2Fmemory-gas-inline-never#85a509bc4fc064f4d659344ac0a10439ed5a9d17"
 dependencies = [
  "alloy-eip7928",
  "bitflags",
  "revm-bytecode",
- "revm-primitives",
+ "revm-primitives 22.0.0",
  "serde",
 ]
 

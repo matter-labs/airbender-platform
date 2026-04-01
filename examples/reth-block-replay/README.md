@@ -117,9 +117,10 @@ The Airbender prover uses `FullUnsignedMachineDecoderConfig` which does not supp
 multiply/divide instructions (`mulh`, `div`, `rem`). LLVM emits `mulh` when it optimizes
 certain integer division patterns on rv32.
 
-This example vendors `revm-interpreter` 32.0.0 under `guest/vendor/revm-interpreter` and adds
-`#[inline(never)]` to `memory_gas` (`src/gas.rs`). That prevents LLVM from combining the memory
-gas math into a `mulh`-producing pattern while keeping the example self-contained and reproducible.
+This example uses the same temporary
+[`Jrigada/revm`](https://github.com/Jrigada/revm/tree/fix/memory-gas-inline-never) fork as
+`examples/revm-basic`. The fork carries the `#[inline(never)]` fix on `memory_gas`, which prevents
+LLVM from combining the memory gas math into a `mulh`-producing pattern.
 
 The guest is compiled with `opt-level = "s"`, LTO, and `codegen-units = 1` to fit within
 the 4MB ROM limit (the crypto precomputed tables add significant `.rodata`). Note that
