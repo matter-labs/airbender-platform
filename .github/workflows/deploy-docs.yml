@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   deploy-docs:
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner-high-performance
     permissions:
       contents: write
     env:
