@@ -1,0 +1,22 @@
+---
+source: crates/cargo-airbender/src/commands/new/mod.rs
+expression: rendered
+---
+=== guest/Cargo.toml ===
+[package]
+name = "hello-airbender-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", version = "0.1.0", features = ["std"] }
+=== guest/src/main.rs ===
+#![no_main]
+
+use airbender::guest::read;
+
+#[airbender::main]
+fn main() -> u32 {
+    let value: u32 = read().expect("failed to read input");
+    value + 1
+}

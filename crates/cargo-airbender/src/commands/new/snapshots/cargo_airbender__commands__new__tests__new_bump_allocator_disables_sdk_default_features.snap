@@ -1,0 +1,12 @@
+---
+source: crates/cargo-airbender/src/commands/new/mod.rs
+expression: rendered
+---
+=== guest/Cargo.toml ===
+[package]
+name = "hello-airbender-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", version = "0.1.0", default-features = false, features = ["allocator-bump"] }

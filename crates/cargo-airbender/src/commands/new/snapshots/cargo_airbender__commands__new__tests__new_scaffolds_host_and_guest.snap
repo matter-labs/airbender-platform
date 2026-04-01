@@ -1,0 +1,161 @@
+---
+source: crates/cargo-airbender/src/commands/new/mod.rs
+expression: rendered
+---
+=== .gitignore ===
+target/
+=== README.md ===
+# hello-airbender
+
+This template contains:
+
+- `.gitignore`: ignores local build artifacts
+- `guest/`: Airbender guest program
+- `host/`: host-side runner/prover application
+- `guest/.cargo/config.toml`: guest target and build flags for local tooling
+
+## Quick Start
+
+Build guest artifacts:
+
+```sh
+cd guest
+cargo airbender build
+```
+
+Run host execution:
+
+```sh
+cd ../host
+cargo run --release
+```
+
+Run host execution + proof:
+
+```sh
+cargo run --release -- --prove
+```
+
+## Prover Backend
+
+Default prover backend: `dev`.
+
+`dev` mode does not run cryptographic proving; it emits a mock proof envelope and is ideal for development.
+
+=== guest/.cargo/config.toml ===
+[build]
+target = "riscv32im-risc0-zkvm-elf"
+rustflags = [
+  "-C", "target-feature=+m,-unaligned-scalar-mem,+relax",
+  "-C", "link-arg=-Tmemory.x",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=--save-temps",
+  "-C", "force-frame-pointers",
+  "-C", "passes=lower-atomic",
+  "--cfg", "getrandom_backend=\"custom\"",
+]
+
+[env]
+CC = "clang"
+
+[unstable]
+build-std = ["alloc", "core", "panic_abort", "compiler_builtins", "std", "proc_macro"]
+build-std-features = ["compiler-builtins-mem"]
+=== guest/Cargo.toml ===
+[package]
+name = "hello-airbender-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", version = "0.1.0" }
+=== guest/rust-toolchain.toml ===
+[toolchain]
+channel = "nightly-2026-02-10"
+components = ["clippy", "rust-src", "llvm-tools-preview"]
+=== guest/src/main.rs ===
+#![no_std]
+#![no_main]
+
+use airbender::guest::read;
+
+#[airbender::main]
+fn main() -> u32 {
+    let value: u32 = read().expect("failed to read input");
+    value + 1
+}
+=== host/Cargo.toml ===
+[package]
+name = "hello-airbender-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender-host = { version = "0.1.0", default-features = false }
+
+# This is required to avoid having to specify `RUST_MIN_STACK` for compilation.
+# The reason why this is needed is because these packages are highly optimized, but the optimizations
+# make debug information generation more heavy and cause the default stack size to overflow.
+# This issue is expected to be resolved later.
+[profile.dev.package.keccak_special5]
+debug = 0
+[profile.dev.package.setups]
+debug = 0
+[profile.release.package.keccak_special5]
+debug = 0
+[profile.release.package.setups]
+debug = 0
+=== host/rust-toolchain.toml ===
+[toolchain]
+channel = "nightly-2026-02-10"
+=== host/src/main.rs ===
+use airbender_host::{Inputs, Program, Prover, Result, Runner, VerificationRequest, Verifier};
+use std::path::PathBuf;
+
+fn main() -> Result<()> {
+    let prove = std::env::args().skip(1).any(|arg| arg == "--prove");
+    // We assume that the guest program is located in `../guest/dist/app`,
+    // which is the default behavior of `cargo airbender build`.
+    let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../guest/dist/app");
+    let program = Program::load(&dist_dir)?;
+
+    let mut inputs = Inputs::new();
+    inputs.push(&41u32)?;
+
+    let runner = program.transpiler_runner().build()?;
+    let execution = runner.run(inputs.words())?;
+    let exec_output = execution.receipt.output[0];
+    println!(
+        "Execution finished: cycles={}, reached_end={}, output={}",
+        execution.cycles_executed, execution.reached_end, exec_output
+    );
+
+    if !prove {
+        println!("Skipping proof generation (pass `--prove` to generate and verify proof).");
+        return Ok(());
+    }
+
+    let prover = program.dev_prover().build()?;
+    let prove_result = prover.prove(inputs.words())?;
+    let proof_output = prove_result.receipt.output[0];
+    println!(
+        "Proof generated: cycles={}, output={}",
+        prove_result.cycles, proof_output
+    );
+    assert_eq!(
+        exec_output, proof_output,
+        "execution and proof output mismatch"
+    );
+
+    let expected_output = 42u32;
+    let verifier = program.dev_verifier().build()?;
+    let vk = verifier.generate_vk()?;
+    verifier.verify(
+        &prove_result.proof,
+        &vk,
+        VerificationRequest::dev(inputs.words(), &expected_output),
+    )?;
+    println!("Proof verified.");
+
+    Ok(())
+}

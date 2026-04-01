@@ -1,4 +1,4 @@
-# __AIRBENDER_PROJECT_NAME__
+# {{ project_name }}
 
 This template contains:
 
@@ -31,4 +31,4 @@ cargo run --release -- --prove
 
 ## Prover Backend
 
-__AIRBENDER_PROVER_BACKEND_DOC__
+{{ prover_backend_doc }}

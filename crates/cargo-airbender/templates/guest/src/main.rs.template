@@ -1,10 +1,8 @@
-__AIRBENDER_GUEST_ATTRIBUTES__
+{{ guest_attributes }}
 
-use airbender::guest::read;
+use airbender::guest::read;{{ custom_allocator_block }}
 
-__AIRBENDER_CUSTOM_ALLOCATOR_MODULE__
-
-#[airbender::main__AIRBENDER_MAIN_ATTR_ARGS__]
+#[airbender::main{{ main_attr_args }}]
 fn main() -> u32 {
     let value: u32 = read().expect("failed to read input");
     value + 1
