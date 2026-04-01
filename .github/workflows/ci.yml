@@ -129,3 +129,7 @@ jobs:
         run: |
           cargo airbender build --project examples/u256-add/guest -- --locked
           cargo run --release --manifest-path examples/u256-add/host/Cargo.toml --locked -- --prove
+      - name: Build and run revm-basic example
+        run: |
+          cargo airbender build --project examples/revm-basic/guest -- --locked
+          cargo run --release --manifest-path examples/revm-basic/host/Cargo.toml --locked

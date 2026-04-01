@@ -26,3 +26,4 @@ Complete guest + host examples live in the repository under [`examples/`](https:
 - [`u256-add`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add) - no_std with `ruint` for big integers
 - [`std-btreemap`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap) - std-enabled guest with `BTreeMap`
 - [`cycle-markers`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers) - transpiler profiling with delegation snapshots
+- [`revm-basic`](https://github.com/matter-labs/airbender-platform/tree/main/examples/revm-basic) - revm transaction inside Airbender
