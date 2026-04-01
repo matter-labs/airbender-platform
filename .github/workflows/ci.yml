@@ -17,7 +17,7 @@ env:
 
 jobs:
   lints:
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner-high-performance
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -31,7 +31,7 @@ jobs:
 
   docs-check:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner-high-performance
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -53,7 +53,7 @@ jobs:
             --output target/doc/index.html
 
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner-high-performance
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -71,7 +71,7 @@ jobs:
         run: cargo nextest run --workspace
 
   cli-integration:
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner-high-performance
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -100,7 +100,7 @@ jobs:
           test -f "$tmp_dir/proof.bin"
 
   examples:
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner-high-performance
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/examples
     steps:
