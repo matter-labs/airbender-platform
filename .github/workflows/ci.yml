@@ -133,3 +133,41 @@ jobs:
         run: |
           cargo airbender build --project examples/revm-basic/guest -- --locked
           cargo run --release --manifest-path examples/revm-basic/host/Cargo.toml --locked
+
+  reth-block-replay:
+    runs-on: matterlabs-ci-runner-high-performance
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/reth-block-replay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rust-src,llvm-tools-preview
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --locked
+      - name: Install cargo-airbender
+        run: cargo install --path crates/cargo-airbender --locked --force
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Build reth-block-replay guest
+        run: cargo airbender build --project examples/reth-block-replay/guest -- --locked
+      - name: Generate witness-backed block
+        working-directory: examples/reth-block-replay
+        run: |
+          set -euo pipefail
+          log_file="$(mktemp)"
+          trap 'rm -f "$log_file"' EXIT
+          bash docker/generate-blocks.sh | tee "$log_file"
+          block_num="$(awk -F= '/^BLOCK_NUM=/{print $2}' "$log_file" | tail -n 1)"
+          test -n "$block_num"
+          printf 'BLOCK_NUM=%s\n' "$block_num" >> "$GITHUB_ENV"
+      - name: Replay block inside Airbender
+        run: cargo run --release --manifest-path examples/reth-block-replay/host/Cargo.toml --locked
+      - name: Stop reth dev node
+        if: always()
+        working-directory: examples/reth-block-replay
+        run: docker compose -f docker/docker-compose.yml down -v
