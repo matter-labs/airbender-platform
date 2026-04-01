@@ -1,24 +1,16 @@
-# Fibonacci Example
+# Fibonacci
 
-This example has a no_std guest that computes the nth Fibonacci number and a host that runs,
-proves, and verifies the guest program.
+A no_std guest that computes the nth Fibonacci number. The host feeds `n`, runs the guest, and can generate and verify a proof of the computation.
 
-## Build the guest
+Good starting point if you're new to Airbender.
+
+## Build and run
 
 ```sh
 cd examples/fibonacci/guest
 cargo airbender build
-```
 
-## Run the host
-
-```sh
-cd examples/fibonacci/host
-cargo run --release
-```
-
-The default host run executes the guest only. To generate and verify a proof:
-
-```sh
-cargo run --release -- --prove
+cd ../host
+cargo run --release              # execute only
+cargo run --release -- --prove   # execute + prove + verify
 ```

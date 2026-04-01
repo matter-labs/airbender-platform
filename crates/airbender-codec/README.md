@@ -5,6 +5,9 @@
 > [!WARNING]
 > airbender-platform project is under active development and is in alpha state. Use at your own risk.
 
+> [!NOTE]
+> **Support crate.** For guest programs, use [`airbender-sdk`](https://matter-labs.github.io/airbender-platform/api/airbender_sdk/), which re-exports this crate's codec helpers via `airbender::codec`. For host programs, [`airbender-host`](https://matter-labs.github.io/airbender-platform/api/airbender_host/) exposes the codec through its `Inputs` API. Depend on this crate directly only when you need explicit control over encoded payloads.
+
 `airbender-codec` defines the stable, versioned serialization layer used between host inputs and guest reads. It is `no_std`-compatible and currently exposes `AirbenderCodecV0`, built on `bincode` v2 with a fixed configuration.
 
 ## What It Provides

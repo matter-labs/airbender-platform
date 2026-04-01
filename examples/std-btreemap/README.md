@@ -1,24 +1,14 @@
-# BTreeMap (std) Example
+# BTreeMap (std)
 
-This example enables `std` in the guest and uses `std::collections::BTreeMap` to compute a
-simple sum derived from the input. The host runs, proves, and verifies the program.
+A guest with `std` enabled, using `std::collections::BTreeMap` to compute a sum from structured input. Shows that standard library types work on the guest.
 
-## Build the guest
+## Build and run
 
 ```sh
 cd examples/std-btreemap/guest
 cargo airbender build
-```
 
-## Run the host
-
-```sh
-cd examples/std-btreemap/host
-cargo run --release
-```
-
-The default host run executes the guest only. To generate and verify a proof:
-
-```sh
-cargo run --release -- --prove
+cd ../host
+cargo run --release              # execute only
+cargo run --release -- --prove   # execute + prove + verify
 ```

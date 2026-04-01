@@ -48,6 +48,15 @@ impl Commit for [u32; 8] {
     }
 }
 
+impl<T: Commit, E: core::fmt::Debug> Commit for Result<T, E> {
+    fn commit_words(&self) -> [u32; 8] {
+        match self {
+            Ok(val) => val.commit_words(),
+            Err(e) => panic!("committed a Result::Err: {:?}", e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,5 +76,20 @@ mod tests {
         assert_eq!(words[0], 1);
         let words = <bool as Commit>::commit_words(&false);
         assert_eq!(words[0], 0);
+    }
+
+    #[test]
+    fn commit_words_result_ok() {
+        let result: Result<u32, &str> = Ok(42);
+        let words = result.commit_words();
+        assert_eq!(words[0], 42);
+        assert_eq!(words[1], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "committed a Result::Err")]
+    fn commit_words_result_err_panics() {
+        let result: Result<u32, &str> = Err("something went wrong");
+        result.commit_words();
     }
 }

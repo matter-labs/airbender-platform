@@ -1,13 +1,8 @@
 # Airbender Examples
 
-Each example contains two crates:
+Each example has a `guest/` (RISC-V program) and `host/` (native runner/prover) crate.
 
-- `guest/`: guest program built with the Airbender toolchain.
-- `host/`: native runner that executes, proves, and verifies the guest program.
-
-## Toolchain
-
-Each guest directory contains a `rust-toolchain.toml` that pins the nightly toolchain to the same version used inside the reproducible build container (`DEFAULT_GUEST_TOOLCHAIN` in `crates/airbender-build/src/constants.rs`). `rustup` picks this up automatically — no `+toolchain` override is needed when running `cargo` commands from a guest directory.
+Each guest pins its Rust toolchain via `rust-toolchain.toml`. `rustup` picks it up automatically.
 
 ## Build and Run
 
@@ -23,15 +18,12 @@ From the corresponding host directory:
 cargo run --release
 ```
 
-To generate and verify a proof:
-
-```sh
-cargo run --release -- --prove
-```
+See each example's own README for usage details and available options.
 
 ## Examples
 
-- `cycle-markers` (transpiler cycle profiling + delegation snapshots)
-- `fibonacci`
-- `u256-add` (no_std + `ruint`)
-- `std-btreemap` (std + `BTreeMap`)
+- **fibonacci** - basic no_std computation (nth Fibonacci number)
+- **u256-add** - no_std with `ruint` for 256-bit integer arithmetic
+- **std-btreemap** - std-enabled guest using `BTreeMap`
+- **cycle-markers** - transpiler profiling with cycle markers and delegation snapshots
+- **revm-basic** - revm transaction inside Airbender

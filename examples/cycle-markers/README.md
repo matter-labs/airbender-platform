@@ -1,26 +1,17 @@
-# Cycle Markers Example
+# Cycle Markers
 
-This example demonstrates the guest-side cycle marker API and host-side marker
-collection through `airbender-host`.
+Demonstrates guest-side cycle markers and host-side marker collection. The guest uses `record_cycles(...)` around a delegated Keccak invocation; the host collects the snapshots and computes cycle counts and delegation usage for the profiled region.
 
-The guest uses `record_cycles(...)` to place two markers around a delegated
-Keccak invocation. The host collects the marker snapshots and computes the
-cycles and delegation counts for the profiled region.
+Cycle markers are for transpiler profiling only. Binaries with markers must not be sent through real CPU/GPU proving.
 
-Cycle markers are intended for transpiler profiling only. Programs that contain
-them are development artifacts and must not be sent through the real CPU/GPU
-proving flow.
-
-## Build the guest
+## Build and run
 
 ```sh
 cd examples/cycle-markers/guest
 cargo airbender build
-```
 
-## Run the host
-
-```sh
-cd examples/cycle-markers/host
+cd ../host
 cargo run --release
 ```
+
+Note: this example does not support `--prove` since cycle markers are incompatible with real proving.

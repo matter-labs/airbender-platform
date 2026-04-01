@@ -5,6 +5,9 @@
 > [!WARNING]
 > airbender-platform project is under active development and is in alpha state. Use at your own risk.
 
+> [!NOTE]
+> **Support crate.** Most guest applications should depend on [`airbender-sdk`](https://matter-labs.github.io/airbender-platform/api/airbender_sdk/) instead, which re-exports the runtime, guest API, and codec helpers behind a single dependency.
+
 `airbender-rt` is the low-level runtime support crate for Airbender guest programs. It handles bootstrapping, allocator setup, syscalls, and UART helpers used by the guest-facing APIs.
 
 ## What It Provides

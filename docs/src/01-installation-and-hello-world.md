@@ -1,40 +1,19 @@
 # Installation & Hello World
 
-This chapter gets you from a fresh machine to your first Airbender guest build, run, and proof.
+Before diving into the APIs, let's make sure everything works. We'll install the toolchain, scaffold a project, and prove a simple program end to end.
 
 ## Prerequisites
 
 - Rust nightly toolchain from [`rust-toolchain.toml`](https://github.com/matter-labs/airbender-platform/blob/main/rust-toolchain.toml)
 - `clang` available in `PATH`
 - `cargo-binutils` for `cargo objcopy`
-- Docker (required only for `cargo airbender build --reproducible`)
+- Docker (only needed for `cargo airbender build --reproducible`)
 
 Install `cargo-binutils`:
 
 ```sh
 cargo install cargo-binutils --locked
 ```
-
-### Proving Hardware (optional)
-
-The hardware requirements for  `airbender` depend on the proving backend. No specialized hardware
-is required for any other `airbender` commands except `airbender prove`.
-
-The following proving backends are supported via `airbender prove --backend [BACKEND]`:
-
-#### `dev`
-This backend is used for development purposes to test programs. Useful in scenarios where no cryptographic 
-proving is required, e.g. local program testing. Requires no specialized hardware.
-
-#### `cpu`
-This backend is mostly used for debugging circuits, as it can only prove the base layer and is usually slow. 
-Useful in special scenarios, e.g. identifying constraint failures without running the full end-to-end proving cycle. 
-Requires hardware with a powerful CPU and significant RAM (at least 64GB).
-
-### `gpu`
-This backend is used for full end-to-end GPU proving. Requires hardware with at least **32GB of VRAM** (e.g. 
-NVIDIA RTX 5090 or better) and atleast **64GB of RAM** per GPU with a high-end CPU to avoid bottlenecks.
-
 
 ## Install `cargo airbender`
 
@@ -44,68 +23,37 @@ From a local clone:
 cargo install --path crates/cargo-airbender --force
 ```
 
-You can also install from the public repository:
+Or directly from the repository:
 
 ```sh
 cargo install --git https://github.com/matter-labs/airbender-platform --branch main cargo-airbender --force
 ```
 
-By default, GPU support is enabled in `cargo-airbender`, so `prove --backend gpu` and `generate-vk`
-work out of the box.
-
-If you want to disable GPU support in the CLI binary, install with:
+GPU support is enabled by default, so `prove --backend gpu` and `generate-vk` work out of the box. To install without GPU support:
 
 ```sh
 cargo install --path crates/cargo-airbender --no-default-features --force
 ```
 
-You can still build (but not run) the project without having Nvidia GPU or CUDA installed by setting
-`ZKSYNC_USE_CUDA_STUBS=true` in your environment.
+You can compile (but not run) GPU-dependent code without NVIDIA hardware by setting `ZKSYNC_USE_CUDA_STUBS=true`.
 
-## Hello World (Template Project)
+## Create Your First Project
 
-Create a new host+guest template project.
-
-When called without a path, the project is initialized in the current directory:
-
-```sh
-cargo airbender new
-```
-
-The destination directory must be empty.
-
-When called with a path, the project is initialized there:
+Scaffold a new host+guest project:
 
 ```sh
 cargo airbender new ./hello-airbender
 ```
 
-`cargo airbender new` asks interactive questions for:
+The command asks for a project name, whether to enable `std`, which allocator to use, and which prover backend (dev or gpu). For now, accept the defaults.
 
-- project name
-- `std` enablement
-- allocator (`talc`, `bump`, `custom`)
+> For CI or scripted usage, pass `--yes` to skip prompts:
+> `cargo airbender new ./hello-airbender --yes --name hello-airbender`
 
-Flags like `--name`, `--enable-std`, and `--allocator` prefill prompt defaults. For CI/non-interactive usage, add `--yes`:
+The generated project has two crates:
 
-```sh
-cargo airbender new ./hello-airbender --yes --name hello-airbender --enable-std --allocator talc
-```
-
-By default, generated projects depend on `airbender-sdk` from this repository (`main` branch). You can override this with:
-
-- `--sdk-path <path>` for a local checkout (workspace root, `crates/`, or crate path)
-- `--sdk-version <version>` once published versions are available
-
-The template includes:
-
-- `.gitignore` at project root (ignores `target/`)
-- `guest/`: guest program (default: `no_std`; or `std` with `--enable-std`)
-- `host/`: host app that runs and optionally proves guest execution
-- `guest/.cargo/config.toml` with guest target/build flags used by both `cargo airbender build` and regular `cargo` tooling
-- `rust-toolchain.toml` in both crates to pin the compiler channel
-
-The generated guest reads a `u32` input and returns `value + 1`.
+- `guest/` - a RISC-V program that reads a `u32` input and returns `value + 1`
+- `host/` - a native Rust program that feeds inputs and runs the guest
 
 Build the guest:
 
@@ -114,41 +62,67 @@ cd hello-airbender/guest
 cargo airbender build
 ```
 
-The generated `guest/.cargo/config.toml` also makes plain `cargo build` and `cargo check` use the same guest target and flags.
+This produces artifacts in `dist/app/`:
 
-This produces artifacts in `dist/app/` by default:
+```text
+dist/app/app.bin
+dist/app/app.elf
+dist/app/app.text
+dist/app/manifest.toml
+```
 
-- `dist/app/app.bin`
-- `dist/app/app.elf`
-- `dist/app/app.text`
-- `dist/app/manifest.toml`
+Now run it from the host:
 
-Create an input file (`u32` words encoded as hex, 8 hex chars per word):
+```sh
+cd ../host
+cargo run --release
+```
 
-> Note: this is a manual codec-v0 payload for `u32 = 41` (used by the template's `read::<u32>()`).
+You should see the execution output. The host feeds `41` as input, the guest returns `42`.
+
+## Prove Your First Program
+
+Generate and verify a dev proof:
+
+```sh
+cargo run --release -- --prove
+```
+
+That's it. The host runs the guest, generates a proof, and verifies it. The dev backend doesn't require a GPU and is meant for local development.
+
+For real GPU proving, see [Proving Hardware](#proving-hardware) below and the [CLI Reference](./05-cli-reference.md).
+
+## What Just Happened?
+
+The generated `guest/.cargo/config.toml` configures the RISC-V target and build flags. This means plain `cargo build` and `cargo check` also work for the guest. `cargo airbender build` adds artifact packaging on top (binary, ELF, text sections, manifest with SHA-256 hashes).
+
+The host uses `airbender-host` to load the guest binary, serialize inputs with `Inputs::push(...)`, and call the runner/prover APIs. See [Host Program API](./02-host-program-api.md) for the full API.
+
+## CLI-Only Workflow
+
+You can also run and prove guest programs directly from the CLI without writing a host program.
+
+Create an input file (hex-encoded `u32` words, 8 hex chars per word):
+
+> This is a codec-v0 payload for `u32 = 41`.
 
 ```sh
 printf '00000001\n29000000\n' > input.hex
 ```
 
-Run the program:
+Run:
 
 ```sh
 cargo airbender run ./dist/app/app.bin --input ./input.hex
 ```
 
-This input represents a codec-v0 encoded `u32 = 41`, so the template guest should produce `42` in output register `x10`.
+Prove with the dev backend:
 
-For non-trivial input files, generate words from host-side values via `Inputs` methods (see [`docs/02-host-program-api.md`](./02-host-program-api.md)).
-
-Generate and verify a proof:
-
-via the `dev` prover:
 ```sh
 cargo airbender prove ./dist/app/app.bin --input ./input.hex --output ./proof.bin --backend dev
 ```
 
-Or via the `gpu` prover, if you have the [required](#proving-hardware-optional) hardware:
+Or with the GPU backend (requires [compatible hardware](#proving-hardware)):
 
 ```sh
 cargo airbender prove ./dist/app/app.bin --input ./input.hex --output ./proof.bin --backend gpu --level base
@@ -156,23 +130,20 @@ cargo airbender generate-vk ./dist/app/app.bin --output ./vk.bin --level base
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin
 ```
 
-You can also run the generated host flow:
+For non-trivial inputs, use the host-side `Inputs::push(...)` API and `write_hex_file(...)` to generate input files. See [Host Program API](./02-host-program-api.md).
 
-```sh
-cd ../host
-cargo run --release
-cargo run --release -- --prove
-```
+## Proving Hardware
 
-By default, proving uses the dev backend and does not require CUDA.
-`airbender-host` exposes GPU proving by default; if you disabled default features in your host
-dependency, re-enable `gpu-prover` to call GPU APIs.
-Prefer `--release` when building or running host binaries.
+No specialized hardware is needed for development. The proving backends have different requirements:
 
-## Prefer Full End-to-End Examples
+| Backend | Use case | Hardware |
+|---------|----------|----------|
+| `dev` | Local testing, no real proving | Any machine |
+| `cpu` | Debugging circuits (base layer only, slow) | Powerful CPU, 64GB+ RAM |
+| `gpu` | Full end-to-end proving | NVIDIA GPU with 32GB+ VRAM, 64GB+ RAM |
 
-For complete guest + host applications, start with:
+## Next Steps
 
-- [`examples/fibonacci`](https://github.com/matter-labs/airbender-platform/tree/main/examples/fibonacci)
-- [`examples/u256-add`](https://github.com/matter-labs/airbender-platform/tree/main/examples/u256-add)
-- [`examples/std-btreemap`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap)
+- Read the [Guest Program API](./03-guest-program-api.md) to learn how to write real guest programs.
+- Read the [Host Program API](./02-host-program-api.md) to learn how to feed inputs and verify proofs.
+- Browse the [examples](https://github.com/matter-labs/airbender-platform/tree/main/examples) for complete working projects.
