@@ -2,9 +2,10 @@ use super::profiles::ProverBackendProfile;
 use crate::cli::NewAllocatorArg;
 use crate::error::{CliError, Result};
 use airbender_build::{DEFAULT_GUEST_TARGET, DEFAULT_GUEST_TOOLCHAIN};
-use std::collections::BTreeMap;
+use serde::Serialize;
 use std::fs;
 use std::path::Path;
+use tera::{Context, Tera};
 
 const GITIGNORE_TEMPLATE: &str = include_str!("../../../templates/.gitignore.template");
 const ROOT_README_TEMPLATE: &str = include_str!("../../../templates/README.md.template");
@@ -36,6 +37,22 @@ pub(super) struct TemplateContext<'a> {
     readme_prover_backend_doc: &'a str,
 }
 
+#[derive(Serialize)]
+struct TemplateData {
+    project_name: String,
+    sdk_dep: String,
+    sdk_default_features: String,
+    sdk_features: String,
+    host_dep: String,
+    host_dep_features: String,
+    prover_backend_doc: String,
+    guest_attributes: String,
+    main_attr_args: String,
+    custom_allocator_module: String,
+    rust_toolchain_channel: String,
+    guest_target: String,
+}
+
 impl<'a> TemplateContext<'a> {
     pub(super) fn new(
         project_name: &'a str,
@@ -57,48 +74,21 @@ impl<'a> TemplateContext<'a> {
         }
     }
 
-    fn replacements(self) -> [(&'static str, String); 12] {
-        [
-            ("__AIRBENDER_PROJECT_NAME__", self.project_name.to_string()),
-            ("__AIRBENDER_SDK_DEP__", self.sdk_dependency.to_string()),
-            (
-                "__AIRBENDER_SDK_DEFAULT_FEATURES__",
-                sdk_default_features(self.allocator).to_string(),
-            ),
-            (
-                "__AIRBENDER_SDK_FEATURES__",
-                sdk_features(self.enable_std, self.allocator),
-            ),
-            ("__AIRBENDER_HOST_DEP__", self.host_dependency.to_string()),
-            (
-                "__AIRBENDER_HOST_DEP_FEATURES__",
-                self.host_dependency_features.to_string(),
-            ),
-            (
-                "__AIRBENDER_PROVER_BACKEND_DOC__",
-                self.readme_prover_backend_doc.to_string(),
-            ),
-            (
-                "__AIRBENDER_GUEST_ATTRIBUTES__",
-                guest_attributes(self.enable_std).to_string(),
-            ),
-            (
-                "__AIRBENDER_MAIN_ATTR_ARGS__",
-                main_attr_args(self.allocator).to_string(),
-            ),
-            (
-                "__AIRBENDER_CUSTOM_ALLOCATOR_MODULE__",
-                custom_allocator_module(self.allocator).to_string(),
-            ),
-            (
-                "__AIRBENDER_RUST_TOOLCHAIN_CHANNEL__",
-                DEFAULT_GUEST_TOOLCHAIN.to_string(),
-            ),
-            (
-                "__AIRBENDER_GUEST_TARGET__",
-                DEFAULT_GUEST_TARGET.to_string(),
-            ),
-        ]
+    fn into_template_data(self) -> TemplateData {
+        TemplateData {
+            project_name: self.project_name.to_string(),
+            sdk_dep: self.sdk_dependency.to_string(),
+            sdk_default_features: sdk_default_features(self.allocator).to_string(),
+            sdk_features: sdk_features(self.enable_std, self.allocator),
+            host_dep: self.host_dependency.to_string(),
+            host_dep_features: self.host_dependency_features.to_string(),
+            prover_backend_doc: self.readme_prover_backend_doc.to_string(),
+            guest_attributes: guest_attributes(self.enable_std).to_string(),
+            main_attr_args: main_attr_args(self.allocator).to_string(),
+            custom_allocator_module: custom_allocator_module(self.allocator).to_string(),
+            rust_toolchain_channel: DEFAULT_GUEST_TOOLCHAIN.to_string(),
+            guest_target: DEFAULT_GUEST_TARGET.to_string(),
+        }
     }
 }
 
@@ -107,9 +97,10 @@ pub(super) fn write_templates(
     context: TemplateContext<'_>,
     profile: ProverBackendProfile,
 ) -> Result<()> {
-    let replacements = context.replacements();
-    let mut replacement_usage: BTreeMap<&'static str, usize> =
-        replacements.iter().map(|(key, _)| (*key, 0usize)).collect();
+    let template_data = context.into_template_data();
+    let template_context = Context::from_serialize(&template_data)
+        .map_err(|err| CliError::with_source("failed to build template context", err))?;
+    let template_renderer = template_renderer(profile)?;
 
     for template in template_files(profile) {
         let destination_path = destination_root.join(template.relative_path);
@@ -123,10 +114,9 @@ pub(super) fn write_templates(
         }
 
         let rendered = render_template(
-            template.source,
+            &template_renderer,
             template.relative_path,
-            &replacements,
-            &mut replacement_usage,
+            &template_context,
         )?;
 
         fs::write(&destination_path, rendered).map_err(|err| {
@@ -135,18 +125,6 @@ pub(super) fn write_templates(
                 err,
             )
         })?;
-    }
-
-    let unused_replacements: Vec<_> = replacement_usage
-        .into_iter()
-        .filter_map(|(key, used)| (used == 0).then_some(key))
-        .collect();
-    if !unused_replacements.is_empty() {
-        return Err(CliError::new(format!(
-            "template replacement keys were not used: {}",
-            unused_replacements.join(", ")
-        ))
-        .with_hint("remove stale placeholders or update template replacement mappings"));
     }
 
     Ok(())
@@ -193,30 +171,30 @@ fn template_files(profile: ProverBackendProfile) -> [TemplateFile<'static>; 9] {
     ]
 }
 
+fn template_renderer(profile: ProverBackendProfile) -> Result<Tera> {
+    let mut tera = Tera::default();
+    for template in template_files(profile) {
+        tera.add_raw_template(template.relative_path, template.source)
+            .map_err(|err| {
+                CliError::with_source(
+                    format!("failed to parse template `{}`", template.relative_path),
+                    err,
+                )
+            })?;
+    }
+    Ok(tera)
+}
+
 fn render_template(
-    source: &str,
+    template_renderer: &Tera,
     relative_path: &str,
-    replacements: &[(&'static str, String)],
-    usage: &mut BTreeMap<&'static str, usize>,
+    context: &Context,
 ) -> Result<String> {
-    let mut rendered = source.to_string();
-    for (from, to) in replacements {
-        if rendered.contains(from) {
-            if let Some(value) = usage.get_mut(from) {
-                *value += 1;
-            }
-            rendered = rendered.replace(from, to);
-        }
-    }
-
-    if rendered.contains("__AIRBENDER_") {
-        return Err(CliError::new(format!(
-            "failed to render template `{relative_path}` because unresolved placeholders remain"
-        ))
-        .with_hint("ensure every __AIRBENDER_*__ token has a replacement mapping"));
-    }
-
-    Ok(rendered)
+    template_renderer
+        .render(relative_path, context)
+        .map_err(|err| {
+            CliError::with_source(format!("failed to render template `{relative_path}`"), err)
+        })
 }
 
 fn guest_attributes(enable_std: bool) -> &'static str {
@@ -274,21 +252,40 @@ fn custom_allocator_module(allocator: NewAllocatorArg) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tera::Context;
 
     #[test]
-    fn rejects_unresolved_placeholder() {
-        let mut usage = BTreeMap::new();
-        usage.insert("__AIRBENDER_PROJECT_NAME__", 0);
-        let replacements = [("__AIRBENDER_PROJECT_NAME__", "demo".to_string())];
+    fn rejects_unknown_placeholder() {
+        let mut context = Context::new();
+        context.insert("project_name", "demo");
 
-        let err = render_template(
-            "__AIRBENDER_PROJECT_NAME__ __AIRBENDER_UNKNOWN__",
-            "dummy",
-            &replacements,
-            &mut usage,
-        )
-        .expect_err("must fail when unresolved placeholders remain");
+        let mut template_renderer = Tera::default();
+        template_renderer
+            .add_raw_template("dummy", "{{ project_name }} {{ unknown }}")
+            .expect("add test template");
 
-        assert!(err.to_string().contains("unresolved placeholders"));
+        let err = render_template(&template_renderer, "dummy", &context)
+            .expect_err("must fail when an unknown placeholder remains");
+
+        assert!(err
+            .to_string()
+            .contains("failed to render template `dummy`"));
+        assert!(err.source_error().is_some());
+    }
+
+    #[test]
+    fn renders_plain_rust_braces() {
+        let mut template_renderer = Tera::default();
+        template_renderer
+            .add_raw_template(
+                "host/src/main.rs",
+                "fn main() {\n    println!(\"hello\");\n}\n",
+            )
+            .expect("add test template");
+        let source = "fn main() {\n    println!(\"hello\");\n}\n";
+        let rendered = render_template(&template_renderer, "host/src/main.rs", &Context::new())
+            .expect("render template");
+
+        assert_eq!(rendered, source);
     }
 }

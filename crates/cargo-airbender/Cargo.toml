@@ -31,6 +31,7 @@ bincode = { workspace = true, features = ["alloc", "serde"] }
 clap = { workspace = true, features = ["derive"] }
 dialoguer = { workspace = true }
 serde = { workspace = true }
+tera = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
