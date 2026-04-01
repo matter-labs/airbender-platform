@@ -7,11 +7,12 @@ edition = "2021"
 airbender-host = { path = "../../../crates/airbender-host", default-features = false }
 stateless = { git = "https://github.com/paradigmxyz/stateless.git", rev = "ed189a5" }
 reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0" }
-alloy-provider = "1.5"
+alloy-provider = { version = "1.5", features = ["debug-api"] }
 alloy-primitives = { version = "1.5", features = ["k256"] }
 alloy-genesis = "1.5"
 alloy-rlp = "0.3"
 alloy-rpc-types-debug = "1.5"
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros"] }

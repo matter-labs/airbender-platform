@@ -166,7 +166,7 @@ jobs:
           test -n "$block_num"
           printf 'BLOCK_NUM=%s\n' "$block_num" >> "$GITHUB_ENV"
       - name: Replay block inside Airbender
-        run: cargo run --release --manifest-path examples/reth-block-replay/host/Cargo.toml --locked
+        run: cargo run --release --manifest-path examples/reth-block-replay/host/Cargo.toml --locked -- --block-num "$BLOCK_NUM"
       - name: Stop reth dev node
         if: always()
         working-directory: examples/reth-block-replay

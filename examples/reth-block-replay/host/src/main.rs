@@ -1,13 +1,28 @@
 use airbender_host::{Inputs, Program, Prover, Runner, VerificationRequest, Verifier};
 use alloy_genesis::ChainConfig;
 use alloy_primitives::{Bytes, B256, U256};
-use alloy_provider::{Provider, ProviderBuilder};
+use alloy_provider::{ext::DebugApi, Provider, ProviderBuilder};
 use alloy_rlp::{Decodable, Encodable};
 use alloy_rpc_types_debug::ExecutionWitness;
+use clap::Parser;
 use eyre::Result;
 use reth_ethereum_primitives::{Block, TransactionSigned};
 use stateless::UncompressedPublicKey;
 use std::path::PathBuf;
+
+#[derive(Debug, Parser)]
+#[command(about = "Replay a reth block with its execution witness inside Airbender")]
+struct Args {
+    /// JSON-RPC endpoint exposing the reth debug APIs used by this example.
+    #[arg(long, default_value = "http://localhost:8545")]
+    rpc_url: String,
+    /// Block number to replay from the connected reth node.
+    #[arg(long, default_value_t = 1)]
+    block_num: u64,
+    /// Generate and verify a proof after the simulation pass.
+    #[arg(long)]
+    prove: bool,
+}
 
 fn recover_signers(txs: &[TransactionSigned]) -> Result<Vec<UncompressedPublicKey>> {
     txs.iter()
@@ -66,45 +81,20 @@ fn dev_chain_config() -> ChainConfig {
 
 async fn fetch_execution_witness<P: Provider>(
     provider: &P,
-    block_hex: &str,
+    block_num: u64,
 ) -> Result<ExecutionWitness> {
-    // Different reth builds have exposed this RPC under both names.
-    match provider
-        .raw_request(
-            "debug_executionWitness".into(),
-            vec![serde_json::Value::String(block_hex.to_owned())],
-        )
-        .await
-    {
-        Ok(witness) => Ok(witness),
-        Err(primary_err) => provider
-            .raw_request(
-                "debug_getExecutionWitness".into(),
-                vec![serde_json::Value::String(block_hex.to_owned())],
-            )
-            .await
-            .map_err(|fallback_err| {
-                eyre::eyre!(
-                    "failed to fetch execution witness via debug_executionWitness ({primary_err}) or debug_getExecutionWitness ({fallback_err})"
-                )
-            }),
-    }
+    Ok(provider.debug_execution_witness(block_num.into()).await?)
 }
 
 async fn fetch_chain_config<P: Provider>(provider: &P) -> Result<ChainConfig> {
-    let chain_id_hex: String = provider
-        .raw_request("eth_chainId".into(), Vec::<serde_json::Value>::new())
-        .await?;
-    let chain_id = u64::from_str_radix(chain_id_hex.trim_start_matches("0x"), 16)
-        .map_err(|e| eyre::eyre!("failed to parse eth_chainId {chain_id_hex}: {e}"))?;
+    let chain_id = provider.get_chain_id().await?;
 
     if chain_id == 1337 {
         return Ok(dev_chain_config());
     }
 
-    let mut chain_config: ChainConfig = provider
-        .raw_request("debug_chainConfig".into(), Vec::<serde_json::Value>::new())
-        .await?;
+    let mut chain_config: ChainConfig =
+        provider.raw_request("debug_chainConfig".into(), ()).await?;
 
     if chain_config.chain_id != chain_id {
         eprintln!(
@@ -117,64 +107,34 @@ async fn fetch_chain_config<P: Provider>(provider: &P) -> Result<ChainConfig> {
     Ok(chain_config)
 }
 
-fn parse_args() -> Result<bool> {
-    let mut prove = false;
-
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--prove" => prove = true,
-            "-h" | "--help" => {
-                println!(
-                    "Usage: airbender-reth-block-replay-host [--prove]\n\nEnvironment:\n  RPC_URL   JSON-RPC endpoint to replay from (default: http://localhost:8545)\n  BLOCK_NUM Block number to replay (default: 1)"
-                );
-                std::process::exit(0);
-            }
-            _ => {
-                return Err(eyre::eyre!(
-                    "unknown argument {arg}; pass --prove to generate a proof"
-                ));
-            }
-        }
-    }
-
-    Ok(prove)
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let prove = parse_args()?;
-    let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".into());
-    let block_num: u64 = std::env::var("BLOCK_NUM")
-        .unwrap_or_else(|_| "1".into())
-        .parse()?;
+    let args = Args::parse();
+    println!(
+        "Connecting to {}, fetching block {}...",
+        args.rpc_url, args.block_num
+    );
 
-    let block_hex = format!("0x{block_num:x}");
-    println!("Connecting to {rpc_url}, fetching block {block_num}...");
+    let provider = ProviderBuilder::new().connect_http(args.rpc_url.parse()?);
 
-    let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
-
-    let raw_block: Bytes = provider
-        .raw_request(
-            "debug_getRawBlock".into(),
-            vec![serde_json::Value::String(block_hex.clone())],
-        )
-        .await?;
+    let raw_block: Bytes = provider.debug_get_raw_block(args.block_num.into()).await?;
     let block = Block::decode(&mut raw_block.as_ref())
         .map_err(|e| eyre::eyre!("failed to decode block RLP: {e}"))?;
 
     eyre::ensure!(
         !block.body.transactions.is_empty(),
-        "block {block_num} has no transactions; run examples/reth-block-replay/docker/generate-blocks.sh first"
+        "block {} has no transactions; run examples/reth-block-replay/docker/generate-blocks.sh first",
+        args.block_num
     );
 
     println!(
         "Block {}: {} transactions, gas_used={}",
-        block_num,
+        args.block_num,
         block.body.transactions.len(),
         block.header.gas_used
     );
 
-    let witness = fetch_execution_witness(&provider, &block_hex).await?;
+    let witness = fetch_execution_witness(&provider, args.block_num).await?;
 
     println!(
         "Witness: {} state nodes, {} codes, {} keys, {} headers",
@@ -221,7 +181,7 @@ async fn main() -> Result<()> {
     );
     println!("Simulation verified: block hash matches.");
 
-    if !prove {
+    if !args.prove {
         println!("Skipping proof (pass `--prove` to generate and verify).");
         return Ok(());
     }
@@ -244,7 +204,7 @@ async fn main() -> Result<()> {
     )?;
     println!(
         "Proof verified: block {} (hash={}) proven in ZK.",
-        block_num, expected_hash
+        args.block_num, expected_hash
     );
 
     Ok(())
