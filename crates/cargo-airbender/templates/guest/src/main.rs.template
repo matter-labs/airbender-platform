@@ -1,8 +1,6 @@
 {{ guest_attributes }}
 
-use airbender::guest::read;
-
-{{ custom_allocator_module }}
+use airbender::guest::read;{{ custom_allocator_block }}
 
 #[airbender::main{{ main_attr_args }}]
 fn main() -> u32 {

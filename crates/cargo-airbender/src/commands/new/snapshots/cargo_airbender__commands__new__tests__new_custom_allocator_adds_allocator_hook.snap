@@ -87,7 +87,6 @@ mod custom_allocator {
     }
 }
 
-
 #[airbender::main(allocator_init = crate::custom_allocator::init)]
 fn main() -> u32 {
     let value: u32 = read().expect("failed to read input");

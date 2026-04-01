@@ -48,7 +48,7 @@ struct TemplateData {
     prover_backend_doc: String,
     guest_attributes: String,
     main_attr_args: String,
-    custom_allocator_module: String,
+    custom_allocator_block: String,
     rust_toolchain_channel: String,
     guest_target: String,
 }
@@ -85,7 +85,7 @@ impl<'a> TemplateContext<'a> {
             prover_backend_doc: self.readme_prover_backend_doc.to_string(),
             guest_attributes: guest_attributes(self.enable_std).to_string(),
             main_attr_args: main_attr_args(self.allocator).to_string(),
-            custom_allocator_module: custom_allocator_module(self.allocator).to_string(),
+            custom_allocator_block: custom_allocator_block(self.allocator),
             rust_toolchain_channel: DEFAULT_GUEST_TOOLCHAIN.to_string(),
             guest_target: DEFAULT_GUEST_TARGET.to_string(),
         }
@@ -242,9 +242,11 @@ fn main_attr_args(allocator: NewAllocatorArg) -> &'static str {
     }
 }
 
-fn custom_allocator_module(allocator: NewAllocatorArg) -> &'static str {
+fn custom_allocator_block(allocator: NewAllocatorArg) -> String {
     match allocator {
-        NewAllocatorArg::Custom => CUSTOM_ALLOCATOR_MODULE_TEMPLATE,
-        NewAllocatorArg::Talc | NewAllocatorArg::Bump => "",
+        NewAllocatorArg::Custom => {
+            format!("\n\n{}", CUSTOM_ALLOCATOR_MODULE_TEMPLATE.trim_end())
+        }
+        NewAllocatorArg::Talc | NewAllocatorArg::Bump => String::new(),
     }
 }
