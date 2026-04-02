@@ -1,14 +1,15 @@
+mod utils;
+
 use airbender_host::{Inputs, Program, Prover, Runner, VerificationRequest, Verifier};
-use alloy_genesis::ChainConfig;
-use alloy_primitives::{Bytes, B256, U256};
-use alloy_provider::{ext::DebugApi, Provider, ProviderBuilder};
+use alloy_primitives::Bytes;
+use alloy_provider::{ext::DebugApi, ProviderBuilder};
 use alloy_rlp::{Decodable, Encodable};
-use alloy_rpc_types_debug::ExecutionWitness;
 use clap::Parser;
 use eyre::Result;
-use reth_ethereum_primitives::{Block, TransactionSigned};
-use stateless::UncompressedPublicKey;
+use reth_block_replay_shared::ReplayCommitment;
+use reth_ethereum_primitives::Block;
 use std::path::PathBuf;
+use utils::{fetch_chain_config, fetch_execution_witness, recover_signers};
 
 #[derive(Debug, Parser)]
 #[command(about = "Replay a reth block with its execution witness inside Airbender")]
@@ -22,89 +23,6 @@ struct Args {
     /// Generate and verify a proof after the simulation pass.
     #[arg(long)]
     prove: bool,
-}
-
-fn recover_signers(txs: &[TransactionSigned]) -> Result<Vec<UncompressedPublicKey>> {
-    txs.iter()
-        .enumerate()
-        .map(|(i, tx)| {
-            tx.signature()
-                .recover_from_prehash(&tx.signature_hash())
-                .map(|keys| {
-                    UncompressedPublicKey(
-                        keys.to_encoded_point(false).as_bytes().try_into().unwrap(),
-                    )
-                })
-                .map_err(|e| eyre::eyre!("failed to recover signature for tx #{i}: {e}"))
-        })
-        .collect()
-}
-
-fn b256_to_u32x8(hash: B256) -> [u32; 8] {
-    let bytes = hash.as_slice();
-    let mut out = [0u32; 8];
-    for i in 0..8 {
-        out[i] = u32::from_le_bytes([
-            bytes[i * 4],
-            bytes[i * 4 + 1],
-            bytes[i * 4 + 2],
-            bytes[i * 4 + 3],
-        ]);
-    }
-    out
-}
-
-fn dev_chain_config() -> ChainConfig {
-    ChainConfig {
-        chain_id: 1337,
-        homestead_block: Some(0),
-        dao_fork_block: Some(0),
-        dao_fork_support: true,
-        eip150_block: Some(0),
-        eip155_block: Some(0),
-        eip158_block: Some(0),
-        byzantium_block: Some(0),
-        constantinople_block: Some(0),
-        petersburg_block: Some(0),
-        istanbul_block: Some(0),
-        berlin_block: Some(0),
-        london_block: Some(0),
-        terminal_total_difficulty: Some(U256::ZERO),
-        terminal_total_difficulty_passed: true,
-        shanghai_time: Some(0),
-        cancun_time: Some(0),
-        prague_time: Some(0),
-        osaka_time: Some(0),
-        ..Default::default()
-    }
-}
-
-async fn fetch_execution_witness<P: Provider>(
-    provider: &P,
-    block_num: u64,
-) -> Result<ExecutionWitness> {
-    Ok(provider.debug_execution_witness(block_num.into()).await?)
-}
-
-async fn fetch_chain_config<P: Provider>(provider: &P) -> Result<ChainConfig> {
-    let chain_id = provider.get_chain_id().await?;
-
-    if chain_id == 1337 {
-        return Ok(dev_chain_config());
-    }
-
-    let mut chain_config: ChainConfig =
-        provider.raw_request("debug_chainConfig".into(), ()).await?;
-
-    if chain_config.chain_id != chain_id {
-        eprintln!(
-            "debug_chainConfig returned chain_id={}, overriding with eth_chainId={chain_id}",
-            chain_config.chain_id
-        );
-        chain_config.chain_id = chain_id;
-    }
-
-    Ok(chain_config)
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -123,7 +41,7 @@ async fn main() -> Result<()> {
 
     eyre::ensure!(
         !block.body.transactions.is_empty(),
-        "block {} has no transactions; run examples/reth-block-replay/docker/generate-blocks.sh first",
+        "block {} has no transactions; run examples/reth-block-replay/docker/generate-blocks.py first",
         args.block_num
     );
 
@@ -150,8 +68,12 @@ async fn main() -> Result<()> {
     let chain_config = fetch_chain_config(&provider).await?;
 
     let expected_hash = block.header.hash_slow();
-    let expected_commitment = b256_to_u32x8(expected_hash);
+    let expected_commitment = ReplayCommitment::from_header(expected_hash, &block.header);
     println!("Expected block hash: {expected_hash}");
+    println!(
+        "Expected public commitment: {}",
+        expected_commitment.digest()
+    );
 
     let mut block_rlp = Vec::new();
     block.encode(&mut block_rlp);
@@ -176,10 +98,11 @@ async fn main() -> Result<()> {
     );
 
     assert_eq!(
-        execution.receipt.output, expected_commitment,
+        execution.receipt.output,
+        expected_commitment.public_output_words(),
         "guest commitment mismatch"
     );
-    println!("Simulation verified: block hash matches.");
+    println!("Simulation verified: correctness commitment matches.");
 
     if !args.prove {
         println!("Skipping proof (pass `--prove` to generate and verify).");
@@ -189,7 +112,8 @@ async fn main() -> Result<()> {
     let prover = program.cpu_prover().build()?;
     let prove_result = prover.prove(inputs.words())?;
     assert_eq!(
-        prove_result.receipt.output, expected_commitment,
+        prove_result.receipt.output,
+        expected_commitment.public_output_words(),
         "proof output mismatch"
     );
 
@@ -200,7 +124,7 @@ async fn main() -> Result<()> {
     verifier.verify(
         &prove_result.proof,
         &vk,
-        VerificationRequest::real(&expected_commitment),
+        VerificationRequest::real(&expected_commitment.public_output_words()),
     )?;
     println!(
         "Proof verified: block {} (hash={}) proven in ZK.",

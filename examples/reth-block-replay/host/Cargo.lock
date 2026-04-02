@@ -103,6 +103,7 @@ dependencies = [
  "alloy-rpc-types-debug",
  "clap",
  "eyre",
+ "reth-block-replay-shared",
  "reth-ethereum-primitives",
  "serde",
  "serde_json",
@@ -3984,6 +3985,15 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "reth-block-replay-shared"
+version = "0.1.0"
+dependencies = [
+ "airbender-core",
+ "alloy-consensus",
+ "alloy-primitives",
 ]
 
 [[package]]

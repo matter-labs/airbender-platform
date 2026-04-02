@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 airbender = { package = "airbender-sdk", path = "../../../crates/airbender-sdk", features = ["std", "crypto"] }
+reth-block-replay-shared = { path = "../shared", default-features = false }
 revm-precompile = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never", default-features = false }
 stateless = { git = "https://github.com/paradigmxyz/stateless.git", rev = "ed189a5", default-features = false }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0", default-features = false }

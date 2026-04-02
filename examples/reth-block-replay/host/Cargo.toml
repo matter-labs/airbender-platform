@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 airbender-host = { path = "../../../crates/airbender-host", default-features = false }
+reth-block-replay-shared = { path = "../shared" }
 stateless = { git = "https://github.com/paradigmxyz/stateless.git", rev = "ed189a5" }
 reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0" }
 alloy-provider = { version = "1.5", features = ["debug-api"] }

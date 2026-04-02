@@ -5,9 +5,9 @@ node, re-executes the block inside an Airbender guest using
 [paradigmxyz/stateless](https://github.com/paradigmxyz/stateless), and generates a ZK proof
 that the execution is correct.
 
-The guest verifies gas usage, receipts root, and logs bloom against the block header.
-State root verification is deferred (v1 treats `PostStateRootMismatch` as non-fatal).
-The committed output is the block hash (`[u32; 8]`, 32 bytes).
+The guest verifies gas usage, receipts root, logs bloom, requests hash (when present), and state
+root against the block header. The committed output is a Keccak-256 digest over that checked
+correctness summary, exposed as the guest's `[u32; 8]` public output.
 
 ## Prerequisites
 
@@ -16,11 +16,11 @@ The committed output is the block hash (`[u32; 8]`, 32 bytes).
 
 ## Build and run
 
-Start reth in dev mode and generate a block that exercises `ecrecover`, `bn256Add`, and
-`bn256ScalarMul`:
+Start reth in dev mode and generate a block that exercises `ecrecover`, `sha256`, `ripemd160`,
+`bn256Add`, and `bn256ScalarMul`:
 
 ```sh
-bash examples/reth-block-replay/docker/generate-blocks.sh
+python3 examples/reth-block-replay/docker/generate-blocks.py
 ```
 
 The setup script prints a final `BLOCK_NUM=...` line so you can reuse the generated block number
@@ -42,11 +42,12 @@ Expected output (with `--prove`):
 
 ```
 Connecting to http://localhost:8545, fetching block 2...
-Block 2: 1 transactions, gas_used=40604
+Block 2: 1 transactions, gas_used=46189
 Witness: <n> state nodes, 2 codes, 3 keys, 1 headers
 Recovered 1 public keys
 Expected block hash: 0x...
-Simulation verified: block hash matches.
+Expected public commitment: 0x...
+Simulation verified: correctness commitment matches.
 Proof verified: block 2 (hash=0x...) proven in ZK.
 ```
 
@@ -67,7 +68,8 @@ docker compose -f examples/reth-block-replay/docker/docker-compose.yml down
 5. Resolves the chain config for the replayed block. On `reth --dev`, this uses the built-in
    dev chain config because `debug_chainConfig` only returns a partial config there.
 6. Passes four inputs to the guest: block RLP bytes, witness, chain config (as JSON), and public keys.
-7. Runs the guest in simulation, then optionally proves and verifies.
+7. Builds the expected public commitment from the block header and checks that the guest returns it.
+8. Runs the guest in simulation, then optionally proves and verifies.
 
 ### Guest (`guest/src/main.rs`)
 
@@ -80,17 +82,25 @@ docker compose -f examples/reth-block-replay/docker/docker-compose.yml down
    - Validates ancestor headers from the witness.
    - Builds a trie from witness data and verifies it against the parent state root.
    - Re-executes all transactions via revm (using the installed `Crypto` backend).
-   - Validates gas_used, receipts_root, and logs_bloom against the block header.
-6. Commits the block hash as `[u32; 8]` to the proof output.
+   - Validates gas_used, receipts_root, logs_bloom, requests hash, and state_root against the block header.
+6. Commits a shared `ReplayCommitment` digest as `[u32; 8]` to the proof output.
+
+### Shared commitment (`shared/src/lib.rs`)
+
+The example uses a dedicated shared crate for proof outputs. `ReplayCommitment` captures the
+header fields that were checked by the replay and hashes them into a `B256`, while
+`CommittableB256` handles the guest register layout for committing that digest.
 
 ### Custom crypto hooks (`guest/src/airbender_crypto.rs`)
 
 The guest installs a custom `revm_precompile::Crypto` backend backed by `airbender::crypto`.
-That keeps revm and `stateless` on the Airbender crypto stack for the secp256k1/BN254 hooks used
-by this example without changing the EVM configuration surface.
+That keeps revm and `stateless` on the Airbender crypto stack for the precompile hooks used by
+this example without changing the EVM configuration surface.
 
-This example backend implements `secp256k1_ecrecover`, `bn254_g1_add`, `bn254_g1_mul`, and
-`bn254_pairing_check`. Other revm precompiles continue using their default implementations.
+This example backend implements `sha256`, `ripemd160`, `secp256k1_ecrecover`,
+`secp256r1_verify_signature`, `bn254_g1_add`, `bn254_g1_mul`, and `bn254_pairing_check`.
+`modexp` and `blake2f` still use revm's default implementations because Airbender does not expose
+matching primitives for them today.
 
 ## Serialization notes
 

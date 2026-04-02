@@ -4,18 +4,17 @@ mod airbender_crypto;
 
 use airbender::guest::read;
 use alloy_genesis::Genesis;
-use alloy_primitives::B256;
 use alloy_rlp::Decodable;
 use alloy_rpc_types_debug::ExecutionWitness;
+use reth_block_replay_shared::ReplayCommitment;
 use reth_chainspec::ChainSpec;
 use reth_ethereum_primitives::Block;
 use reth_evm_ethereum::EthEvmConfig;
-use stateless::validation::StatelessValidationError;
 use stateless::{stateless_validation, UncompressedPublicKey};
 use std::sync::Arc;
 
 #[airbender::main]
-fn main() -> [u32; 8] {
+fn main() -> ReplayCommitment {
     assert!(
         revm_precompile::install_crypto(airbender_crypto::AirbenderCrypto),
         "failed to install AirbenderCrypto — default crypto was already set"
@@ -39,31 +38,11 @@ fn main() -> [u32; 8] {
     let evm_config = EthEvmConfig::new(chain_spec.clone());
 
     let expected_block_hash = block.header.hash_slow();
+    let expected_commitment = ReplayCommitment::from_header(expected_block_hash, &block.header);
 
-    match stateless_validation(block, public_keys, witness, chain_spec, evm_config) {
-        Ok((hash, _output)) => {
-            assert_eq!(hash, expected_block_hash, "block hash mismatch");
-            b256_to_u32x8(hash)
-        }
-        Err(StatelessValidationError::PostStateRootMismatch { .. }) => {
-            // Gas, receipts, and bloom were validated before the state root check.
-            // For v1 receipts-only verification, state root mismatch is accepted.
-            b256_to_u32x8(expected_block_hash)
-        }
-        Err(e) => panic!("stateless validation failed: {e}"),
-    }
-}
+    let (hash, _output) = stateless_validation(block, public_keys, witness, chain_spec, evm_config)
+        .unwrap_or_else(|e| panic!("stateless validation failed: {e}"));
+    assert_eq!(hash, expected_block_hash, "block hash mismatch");
 
-fn b256_to_u32x8(hash: B256) -> [u32; 8] {
-    let bytes = hash.as_slice();
-    let mut out = [0u32; 8];
-    for i in 0..8 {
-        out[i] = u32::from_le_bytes([
-            bytes[i * 4],
-            bytes[i * 4 + 1],
-            bytes[i * 4 + 2],
-            bytes[i * 4 + 3],
-        ]);
-    }
-    out
+    expected_commitment
 }

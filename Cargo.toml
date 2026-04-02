@@ -25,6 +25,7 @@ exclude = [
     "examples/revm-basic/shared",
     "examples/reth-block-replay/guest",
     "examples/reth-block-replay/host",
+    "examples/reth-block-replay/shared",
 ]
 resolver = "2"
 

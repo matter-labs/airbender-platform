@@ -3,6 +3,8 @@ pragma solidity ^0.8.0;
 
 contract PrecompileTest {
     event EcrecoverResult(address recovered);
+    event Sha256Result(bytes32 digest);
+    event Ripemd160Result(bytes20 digest);
     event Bn256AddResult(bytes32 x, bytes32 y);
     event Bn256MulResult(bytes32 x, bytes32 y);
 
@@ -15,6 +17,8 @@ contract PrecompileTest {
         address recovered = ecrecover(msgHash, v, r, s);
         require(recovered != address(0), "ecrecover failed");
         emit EcrecoverResult(recovered);
+        emit Sha256Result(sha256(abi.encodePacked(msgHash, recovered)));
+        emit Ripemd160Result(ripemd160(abi.encodePacked(msgHash, recovered)));
 
         bytes memory addInput = abi.encodePacked(
             uint256(1), uint256(2),

@@ -161,7 +161,7 @@ jobs:
           set -euo pipefail
           log_file="$(mktemp)"
           trap 'rm -f "$log_file"' EXIT
-          bash docker/generate-blocks.sh | tee "$log_file"
+          python3 docker/generate-blocks.py | tee "$log_file"
           block_num="$(awk -F= '/^BLOCK_NUM=/{print $2}' "$log_file" | tail -n 1)"
           test -n "$block_num"
           printf 'BLOCK_NUM=%s\n' "$block_num" >> "$GITHUB_ENV"

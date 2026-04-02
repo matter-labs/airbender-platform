@@ -140,6 +140,25 @@ fn encode_bn_g1(point: BnG1Affine) -> [u8; 64] {
 
 impl Crypto for AirbenderCrypto {
     #[inline(never)]
+    fn sha256(&self, input: &[u8]) -> [u8; 32] {
+        use airbender::crypto::sha256::Digest;
+
+        airbender::crypto::sha256::Sha256::digest(input).into()
+    }
+
+    #[inline(never)]
+    fn ripemd160(&self, input: &[u8]) -> [u8; 32] {
+        use airbender::crypto::ripemd160::Digest;
+
+        let mut hasher = airbender::crypto::ripemd160::Ripemd160::new();
+        hasher.update(input);
+
+        let mut output = [0u8; 32];
+        hasher.finalize_into((&mut output[12..]).into());
+        output
+    }
+
+    #[inline(never)]
     fn secp256k1_ecrecover(
         &self,
         sig: &[u8; 64],
@@ -186,5 +205,20 @@ impl Crypto for AirbenderCrypto {
 
         let result = Bn254::multi_pairing(&g1_points, &g2_points);
         Ok(result.0.is_one())
+    }
+
+    #[inline(never)]
+    fn secp256r1_verify_signature(&self, msg: &[u8; 32], sig: &[u8; 64], pk: &[u8; 64]) -> bool {
+        let mut r = [0u8; 32];
+        let mut s = [0u8; 32];
+        let mut x = [0u8; 32];
+        let mut y = [0u8; 32];
+
+        r.copy_from_slice(&sig[..32]);
+        s.copy_from_slice(&sig[32..]);
+        x.copy_from_slice(&pk[..32]);
+        y.copy_from_slice(&pk[32..]);
+
+        airbender::crypto::secp256r1::verify(msg, &r, &s, &x, &y).unwrap_or(false)
     }
 }
