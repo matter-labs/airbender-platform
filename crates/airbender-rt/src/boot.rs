@@ -14,7 +14,10 @@ where
 }
 
 /// Initialize the Airbender runtime with a custom allocator init hook.
-pub fn start_with_allocator_init<F>(allocator_init: fn(*mut usize, *mut usize), entry: F) -> !
+pub fn start_with_allocator_init<F>(
+    allocator_init: unsafe fn(*mut usize, *mut usize),
+    entry: F,
+) -> !
 where
     F: FnOnce() -> core::convert::Infallible,
 {
@@ -24,10 +27,14 @@ where
     #[cfg(target_arch = "riscv32")]
     {
         riscv_common::boot_sequence::init();
-        allocator_init(
-            riscv_common::boot_sequence::heap_start(),
-            riscv_common::boot_sequence::heap_end(),
-        );
+        // SAFETY: The boot sequence guarantees that heap_start and heap_end
+        // point to a valid, exclusively-owned memory region.
+        unsafe {
+            allocator_init(
+                riscv_common::boot_sequence::heap_start(),
+                riscv_common::boot_sequence::heap_end(),
+            );
+        }
     }
 
     match entry() {}
