@@ -101,6 +101,7 @@ pub fn main(attr: TokenStream, item: TokenStream) -> TokenStream {
         #input
 
         #[no_mangle]
+        #[link_section = ".init.rust"]
         #[export_name = "_start_rust"]
         pub extern "C" fn #wrapper_name() -> ! {
             #start_call
