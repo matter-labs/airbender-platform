@@ -14,7 +14,10 @@ where
 }
 
 /// Initialize the Airbender runtime with a custom allocator init hook.
-pub fn start_with_allocator_init<F>(allocator_init: unsafe fn(*mut usize, *mut usize), entry: F) -> !
+pub fn start_with_allocator_init<F>(
+    allocator_init: unsafe fn(*mut usize, *mut usize),
+    entry: F,
+) -> !
 where
     F: FnOnce() -> core::convert::Infallible,
 {
