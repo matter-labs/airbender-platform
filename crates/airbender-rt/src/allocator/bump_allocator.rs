@@ -90,12 +90,16 @@ unsafe impl GlobalAlloc for BumpAllocator {
 #[global_allocator]
 static GLOBAL_ALLOCATOR: BumpAllocator = BumpAllocator::uninit();
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // TODO: consider making it unsafe?
+/// # Safety
+///
+/// Caller must ensure `start` and `end` define a valid, exclusively-owned heap region.
 #[cfg(target_arch = "riscv32")]
-pub fn init(start: *mut usize, end: *mut usize) {
-    unsafe { GLOBAL_ALLOCATOR.init(start, end) };
+pub unsafe fn init(start: *mut usize, end: *mut usize) {
+    GLOBAL_ALLOCATOR.init(start, end);
 }
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // TODO: consider making it unsafe?
+/// # Safety
+///
+/// No-op on non-riscv32 targets; kept for API compatibility.
 #[cfg(not(target_arch = "riscv32"))]
-pub fn init(_start: *mut usize, _end: *mut usize) {}
+pub unsafe fn init(_start: *mut usize, _end: *mut usize) {}
