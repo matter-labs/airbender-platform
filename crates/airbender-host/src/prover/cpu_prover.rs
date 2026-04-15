@@ -1,3 +1,18 @@
+//! CPU-based prover for Airbender programs.
+//!
+//! # Warning: High Memory Requirement
+//!
+//! CPU proving typically requires **96 GB or more of RAM** to complete successfully.
+//! Running this prover on machines with insufficient memory will cause the process to crash.
+//!
+//! # When to use the CPU prover
+//!
+//! Using CPU proving is **very rarely a good idea**. It is primarily a reference
+//! implementation and is most useful for debugging circuit constraints. In almost all
+//! cases you want either the **dev prover** (for rapid iteration without real proofs)
+//! or the **GPU prover** (for production-grade performance). There should be a very
+//! specific reason to use the CPU prover before choosing it over the alternatives.
+
 use super::{
     receipt_from_real_proof, resolve_app_bin_path, resolve_text_path, resolve_worker_threads,
     ProveResult, Prover, DEFAULT_CPU_CYCLE_BOUND, DEFAULT_RAM_BOUND_BYTES,
@@ -11,6 +26,36 @@ use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
 use riscv_transpiler::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
 use std::path::{Path, PathBuf};
+
+/// Minimum system RAM (in GB) required to run CPU proving without crashing.
+const MIN_RAM_GB: u64 = 96;
+
+/// Minimum system RAM in bytes derived from [`MIN_RAM_GB`].
+const MIN_RAM_BYTES: u64 = MIN_RAM_GB * 1024 * 1024 * 1024;
+
+/// Environment variable that, when set to `true`, skips the system RAM check.
+const MEM_OVERRIDE_ENV: &str = "AIRBENDER_PLATFORM_CPU_PROVER_MEM_OVERRIDE";
+
+fn check_system_ram() -> Result<()> {
+    if std::env::var(MEM_OVERRIDE_ENV).as_deref() == Ok("true") {
+        return Ok(());
+    }
+
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let total_ram = sys.total_memory();
+
+    if total_ram < MIN_RAM_BYTES {
+        let detected_gb = total_ram / (1024 * 1024 * 1024);
+        return Err(HostError::Prover(format!(
+            "System is expected to have at least {MIN_RAM_GB} GB of ram, but this system only has \
+             {detected_gb} GB. On machines with not enough RAM, process might crash. If you want \
+             to run it anyway, set `{MEM_OVERRIDE_ENV}=true` and run again"
+        )));
+    }
+
+    Ok(())
+}
 
 /// Builder for creating a configured cached CPU prover.
 pub struct CpuProverBuilder {
@@ -94,6 +139,8 @@ impl CpuProver {
         cycles: Option<usize>,
         ram_bound: Option<usize>,
     ) -> Result<Self> {
+        check_system_ram()?;
+
         if matches!(worker_threads, Some(0)) {
             return Err(HostError::Prover(
                 "worker thread count must be greater than zero".to_string(),
