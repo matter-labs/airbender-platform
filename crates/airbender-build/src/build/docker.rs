@@ -275,8 +275,13 @@ impl<'a> ReproducibleBuild<'a> {
             .project_dir
             .canonicalize()
             .unwrap_or_else(|_| self.params.project_dir.to_path_buf());
+        let mount_root_abs = self
+            .params
+            .mount_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.params.mount_root.to_path_buf());
         let project_rel = project_abs
-            .strip_prefix(&self.params.mount_root)
+            .strip_prefix(&mount_root_abs)
             .unwrap_or(Path::new(""));
         let workdir = format!("/src/{}", project_rel.display());
         let build_cmd = build_container_cmd(
