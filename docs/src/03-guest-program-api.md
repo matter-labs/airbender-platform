@@ -153,3 +153,4 @@ For manual boundaries, call `cycle_marker()` directly.
 - [`examples/std-btreemap/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/guest) - std-enabled guest
 - [`examples/cycle-markers/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers/guest) - profiling with delegation
 - [`examples/revm-basic/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/revm-basic/guest) - revm transaction inside Airbender
+- [`examples/reth-block-replay/guest`](https://github.com/matter-labs/airbender-platform/tree/main/examples/reth-block-replay/guest) - replay a reth block from execution witness data

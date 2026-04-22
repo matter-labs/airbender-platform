@@ -1,0 +1,9 @@
+[package]
+name = "reth-block-replay-shared"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender-core = { path = "../../../crates/airbender-core", default-features = false }
+alloy-consensus = { version = "1.5", default-features = false }
+alloy-primitives = { version = "1.5", default-features = false }

@@ -1,0 +1,41 @@
+[package]
+name = "airbender-reth-block-replay"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", path = "../../../crates/airbender-sdk", features = ["std", "crypto"] }
+reth-block-replay-shared = { path = "../shared", default-features = false }
+revm-precompile = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never", default-features = false }
+stateless = { git = "https://github.com/paradigmxyz/stateless.git", rev = "ed189a5", default-features = false }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0", default-features = false }
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0", default-features = false }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.11.0", default-features = false }
+alloy-genesis = { version = "1.5", default-features = false }
+alloy-primitives = { version = "1.5", default-features = false }
+alloy-consensus = { version = "1.5", default-features = false }
+alloy-rlp = { version = "0.3", default-features = false }
+alloy-rpc-types-debug = { version = "1.5", default-features = false }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+critical-section = { version = "1", features = ["std"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[patch.crates-io]
+# TODO: switch back to upstream revm once the `memory_gas` `#[inline(never)]` fix lands
+revm = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-bytecode = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-context = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-context-interface = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-database = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-database-interface = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-handler = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-inspector = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-interpreter = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-precompile = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-primitives = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }
+revm-state = { git = "https://github.com/Jrigada/revm", branch = "fix/memory-gas-inline-never" }

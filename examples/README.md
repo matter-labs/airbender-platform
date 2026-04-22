@@ -27,3 +27,4 @@ See each example's own README for usage details and available options.
 - **std-btreemap** - std-enabled guest using `BTreeMap`
 - **cycle-markers** - transpiler profiling with cycle markers and delegation snapshots
 - **revm-basic** - revm transaction inside Airbender
+- **reth-block-replay** - replay a reth block from execution witness data inside Airbender

@@ -142,3 +142,4 @@ See full host-side usage in:
 - [`examples/std-btreemap/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap/host)
 - [`examples/cycle-markers/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers/host)
 - [`examples/revm-basic/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/revm-basic/host)
+- [`examples/reth-block-replay/host`](https://github.com/matter-labs/airbender-platform/tree/main/examples/reth-block-replay/host)

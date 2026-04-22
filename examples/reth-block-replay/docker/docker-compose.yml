@@ -1,0 +1,12 @@
+services:
+  reth:
+    image: ghcr.io/paradigmxyz/reth:v1.11.3
+    command:
+      - node
+      - --dev
+      - --dev.block-max-transactions=1
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.api=eth,net,web3,debug
+    ports:
+      - "8545:8545"

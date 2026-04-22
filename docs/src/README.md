@@ -27,3 +27,4 @@ Complete guest + host examples live in the repository under [`examples/`](https:
 - [`std-btreemap`](https://github.com/matter-labs/airbender-platform/tree/main/examples/std-btreemap) - std-enabled guest with `BTreeMap`
 - [`cycle-markers`](https://github.com/matter-labs/airbender-platform/tree/main/examples/cycle-markers) - transpiler profiling with delegation snapshots
 - [`revm-basic`](https://github.com/matter-labs/airbender-platform/tree/main/examples/revm-basic) - revm transaction inside Airbender
+- [`reth-block-replay`](https://github.com/matter-labs/airbender-platform/tree/main/examples/reth-block-replay) - replay a reth block from execution witness data
