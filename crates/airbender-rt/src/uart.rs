@@ -29,7 +29,7 @@ impl QuasiUart {
     }
 
     #[inline(never)]
-    fn write_byte(&mut self, byte: u8) {
+    pub fn write_byte(&mut self, byte: u8) {
         self.buffer[self.len] = byte;
         self.len += 1;
         if self.len == 4 {
@@ -39,7 +39,7 @@ impl QuasiUart {
         }
     }
 
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         if self.len == 0 {
             self.buffer.fill(0);
             return;
