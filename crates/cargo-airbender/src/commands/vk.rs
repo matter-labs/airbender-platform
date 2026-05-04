@@ -10,30 +10,33 @@ pub fn generate(args: GenerateVkArgs) -> Result<()> {
     let security = args.security.to_host();
     let vk = match args.level {
         ProverLevelArg::RecursionUnified => {
-            let vk = airbender_host::compute_unified_vk(&args.app_bin, security).map_err(|err| {
-                CliError::with_source(
-                    format!(
-                        "failed to compute unified verification keys for `{}`",
-                        args.app_bin.display()
-                    ),
-                    err,
-                )
-            })?;
+            let vk =
+                airbender_host::compute_unified_vk(&args.app_bin, security).map_err(|err| {
+                    CliError::with_source(
+                        format!(
+                            "failed to compute unified verification keys for `{}`",
+                            args.app_bin.display()
+                        ),
+                        err,
+                    )
+                })?;
             airbender_host::VerificationKey::RealUnified(
                 airbender_host::RealUnifiedVerificationKey { vk },
             )
         }
         ProverLevelArg::Base | ProverLevelArg::RecursionUnrolled => {
             let level = as_host_level(args.level);
-            let vk = airbender_host::compute_unrolled_vk(&args.app_bin, level, security).map_err(|err| {
-                CliError::with_source(
-                    format!(
-                        "failed to compute unrolled verification keys for `{}`",
-                        args.app_bin.display()
-                    ),
-                    err,
-                )
-            })?;
+            let vk = airbender_host::compute_unrolled_vk(&args.app_bin, level, security).map_err(
+                |err| {
+                    CliError::with_source(
+                        format!(
+                            "failed to compute unrolled verification keys for `{}`",
+                            args.app_bin.display()
+                        ),
+                        err,
+                    )
+                },
+            )?;
             airbender_host::VerificationKey::RealUnrolled(
                 airbender_host::RealUnrolledVerificationKey { level, vk },
             )
@@ -100,8 +103,13 @@ pub fn verify(args: VerifyProofArgs) -> Result<()> {
                 .as_ref()
                 .map(|words| words as &dyn airbender_host::Commit);
 
-            airbender_host::verify_real_proof_with_vk(proof, &vk, expected_output_commit, args.security.to_host())
-                .map_err(|err| CliError::with_source("proof verification failed", err))?;
+            airbender_host::verify_real_proof_with_vk(
+                proof,
+                &vk,
+                expected_output_commit,
+                args.security.to_host(),
+            )
+            .map_err(|err| CliError::with_source("proof verification failed", err))?;
             proof.level()
         }
     };

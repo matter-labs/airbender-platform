@@ -350,7 +350,14 @@ pub fn verify_real_proof_with_vk(
                 )));
             }
 
-            verify_unrolled_proof(proof.inner(), vk, proof.level(), None, expected_output, security)
+            verify_unrolled_proof(
+                proof.inner(),
+                vk,
+                proof.level(),
+                None,
+                expected_output,
+                security,
+            )
         }
         (_, VerificationKey::Dev(_)) => Err(HostError::Verification(
             "real proofs require real verification keys".to_string(),

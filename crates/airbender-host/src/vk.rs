@@ -48,10 +48,20 @@ pub fn compute_unified_vk(app_bin_path: &Path, security: SecurityModel) -> Resul
 
         // TODO: cache unified setup/layout artifacts on disk to avoid recomputing on every run.
         let (binary, binary_u32) = setups::pad_binary(
-            verifier_binaries::recursion_artifact(security, RecursionLayer::Unified, RecursionArtifact::Bin).to_vec(),
+            verifier_binaries::recursion_artifact(
+                security,
+                RecursionLayer::Unified,
+                RecursionArtifact::Bin,
+            )
+            .to_vec(),
         );
         let (text, _) = setups::pad_binary(
-            verifier_binaries::recursion_artifact(security, RecursionLayer::Unified, RecursionArtifact::Txt).to_vec(),
+            verifier_binaries::recursion_artifact(
+                security,
+                RecursionLayer::Unified,
+                RecursionArtifact::Txt,
+            )
+            .to_vec(),
         );
 
         let unified_setup =
@@ -71,7 +81,11 @@ pub fn compute_unified_vk(app_bin_path: &Path, security: SecurityModel) -> Resul
     }
 }
 
-pub fn compute_unrolled_vk(app_bin_path: &Path, level: ProverLevel, security: SecurityModel) -> Result<UnrolledVk> {
+pub fn compute_unrolled_vk(
+    app_bin_path: &Path,
+    level: ProverLevel,
+    security: SecurityModel,
+) -> Result<UnrolledVk> {
     if level == ProverLevel::RecursionUnified {
         return Err(HostError::Verification(
             "unified verification keys must be generated with compute_unified_vk".to_string(),
@@ -100,10 +114,20 @@ pub fn compute_unrolled_vk(app_bin_path: &Path, level: ProverLevel, security: Se
             #[cfg(feature = "gpu-prover")]
             {
                 let (binary, binary_u32) = setups::pad_binary(
-                    verifier_binaries::recursion_artifact(security, RecursionLayer::Unrolled, RecursionArtifact::Bin).to_vec(),
+                    verifier_binaries::recursion_artifact(
+                        security,
+                        RecursionLayer::Unrolled,
+                        RecursionArtifact::Bin,
+                    )
+                    .to_vec(),
                 );
                 let (text, _) = setups::pad_binary(
-                    verifier_binaries::recursion_artifact(security, RecursionLayer::Unrolled, RecursionArtifact::Txt).to_vec(),
+                    verifier_binaries::recursion_artifact(
+                        security,
+                        RecursionLayer::Unrolled,
+                        RecursionArtifact::Txt,
+                    )
+                    .to_vec(),
                 );
                 (binary, binary_u32, text)
             }
@@ -157,9 +181,14 @@ pub fn verify_proof(
 ) -> Result<()> {
     verify_app_bin_hash(expected_app_bin_hash, vk.app_bin_hash)?;
 
-    let verifier_output =
-        verify_proof_in_unified_layer(proof, &vk.unified_setup, &vk.unified_layouts, false, security)
-            .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
+    let verifier_output = verify_proof_in_unified_layer(
+        proof,
+        &vk.unified_setup,
+        &vk.unified_layouts,
+        false,
+        security,
+    )
+    .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
     verify_expected_output(expected_output, verifier_output)?;
     Ok(())
 }
@@ -185,9 +214,14 @@ pub fn verify_unrolled_proof(
         }
     };
 
-    let verifier_output =
-        verify_unrolled_layer_proof(proof, &vk.setup, &vk.compiled_layouts, is_base_layer, security)
-            .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
+    let verifier_output = verify_unrolled_layer_proof(
+        proof,
+        &vk.setup,
+        &vk.compiled_layouts,
+        is_base_layer,
+        security,
+    )
+    .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
     verify_expected_output(expected_output, verifier_output)?;
     Ok(())
 }

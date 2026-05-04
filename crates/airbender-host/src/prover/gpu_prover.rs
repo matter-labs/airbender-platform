@@ -53,7 +53,12 @@ impl GpuProverBuilder {
     }
 
     pub fn build(self) -> Result<GpuProver> {
-        GpuProver::new(&self.app_bin_path, self.worker_threads, self.level, self.security)
+        GpuProver::new(
+            &self.app_bin_path,
+            self.worker_threads,
+            self.level,
+            self.security,
+        )
     }
 }
 
@@ -83,7 +88,12 @@ enum WorkerCommand {
 }
 
 impl GpuProver {
-    fn new(app_bin_path: &Path, worker_threads: Option<usize>, level: ProverLevel, security: verifier_common::SecurityModel) -> Result<Self> {
+    fn new(
+        app_bin_path: &Path,
+        worker_threads: Option<usize>,
+        level: ProverLevel,
+        security: verifier_common::SecurityModel,
+    ) -> Result<Self> {
         if matches!(worker_threads, Some(0)) {
             return Err(HostError::Prover(
                 "worker thread count must be greater than zero".to_string(),
@@ -91,7 +101,8 @@ impl GpuProver {
         }
 
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
-        let (command_tx, worker_handle) = spawn_worker(app_bin_path, worker_threads, level, security)?;
+        let (command_tx, worker_handle) =
+            spawn_worker(app_bin_path, worker_threads, level, security)?;
 
         Ok(Self {
             command_tx,
@@ -183,7 +194,16 @@ fn spawn_worker(
 
     let worker_handle = std::thread::Builder::new()
         .name("airbender-gpu-prover".to_string())
-        .spawn(move || gpu_worker_loop(command_rx, init_tx, app_bin_path, worker_threads, level, security))
+        .spawn(move || {
+            gpu_worker_loop(
+                command_rx,
+                init_tx,
+                app_bin_path,
+                worker_threads,
+                level,
+                security,
+            )
+        })
         .map_err(|err| {
             HostError::Prover(format!("failed to spawn GPU prover worker thread: {err}"))
         })?;
@@ -217,14 +237,18 @@ fn gpu_worker_loop(
 ) {
     // Keep all prover state inside this dedicated thread so a panic does not unwind
     // through host-call boundaries or require `AssertUnwindSafe`.
-    let prover =
-        match create_unrolled_prover(&app_bin_path, worker_threads, level.as_unrolled_level(), security) {
-            Ok(prover) => prover,
-            Err(err) => {
-                let _ = init_tx.send(Err(err));
-                return;
-            }
-        };
+    let prover = match create_unrolled_prover(
+        &app_bin_path,
+        worker_threads,
+        level.as_unrolled_level(),
+        security,
+    ) {
+        Ok(prover) => prover,
+        Err(err) => {
+            let _ = init_tx.send(Err(err));
+            return;
+        }
+    };
 
     if init_tx.send(Ok(())).is_err() {
         return;
@@ -276,5 +300,10 @@ fn create_unrolled_prover(
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
     }
-    Ok(UnrolledProver::new(security, &base_path, configuration, level))
+    Ok(UnrolledProver::new(
+        security,
+        &base_path,
+        configuration,
+        level,
+    ))
 }
