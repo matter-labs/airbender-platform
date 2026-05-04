@@ -92,13 +92,11 @@ let prover = program.dev_prover().build()?;
 // GPU - full proving, requires NVIDIA GPU with 32GB+ VRAM
 let prover = program.gpu_prover()
     .with_level(ProverLevel::RecursionUnified)
-    .with_security(SecurityModel::Security80)  // or Security100
     .build()?;
 
 // CPU - base layer only, mainly for debugging circuits
 let prover = program.cpu_prover()
     .with_worker_threads(8)
-    .with_security(SecurityModel::Security80)
     .build()?;
 ```
 
@@ -113,9 +111,7 @@ let vk = verifier.generate_vk()?;
 verifier.verify(&proof, &vk, VerificationRequest::dev(inputs.words(), &expected))?;
 
 // Real verification (GPU-generated proofs)
-let verifier = program.real_verifier(ProverLevel::RecursionUnified)
-    .with_security(SecurityModel::Security80)
-    .build()?;
+let verifier = program.real_verifier(ProverLevel::RecursionUnified).build()?;
 let vk = verifier.generate_vk()?;
 verifier.verify(&proof, &vk, VerificationRequest::real(&expected))?;
 ```
