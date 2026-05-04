@@ -70,8 +70,8 @@ impl Scalar {
 
     #[cfg(test)]
     pub(crate) fn from_repr(bytes: FieldBytes) -> Self {
-        let bytes = bytes.as_slice().try_into().unwrap();
-        Self(ScalarInner::from_be_bytes(bytes))
+        let bytes: [u8; 32] = bytes.into();
+        Self(ScalarInner::from_be_bytes(&bytes))
     }
 
     #[inline(always)]
