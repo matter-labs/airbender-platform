@@ -162,6 +162,7 @@ cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
 |--------|-------------|
 | `--backend <dev\|cpu\|gpu>` | Prover backend (default: `dev`) |
 | `--level <base\|recursion-unrolled\|recursion-unified>` | Prover level (default: `recursion-unified`) |
+| `--security <80\|100>` | Security model (default: `80`) |
 | `--threads <n>` | Worker threads |
 | `--output <file>` | Output proof file (required) |
 | `--cycles <n>` | Cycle limit (dev and CPU backends) |
@@ -185,6 +186,7 @@ cargo airbender generate-vk ./dist/app/app.bin --output vk.bin
 |--------|-------------|
 | `--output <file>` | Output path (default: `vk.bin`) |
 | `--level <base\|recursion-unrolled\|recursion-unified>` | VK level |
+| `--security <80\|100>` | Security model (default: `80`) |
 
 ---
 
@@ -200,6 +202,7 @@ cargo airbender verify-proof ./proof.bin --vk ./vk.bin
 |--------|-------------|
 | `--vk <file>` | Verification key file (required) |
 | `--expected-output <words>` | Expected public output (comma-separated, decimal or `0x` hex) |
+| `--security <80\|100>` | Security model (default: `80`) |
 
 When `--expected-output` is omitted, only proof/VK validity is checked (with a warning). Fewer than 8 words are zero-padded.
 
