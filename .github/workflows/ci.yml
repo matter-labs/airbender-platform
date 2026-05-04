@@ -44,7 +44,11 @@ jobs:
       - name: Build mdBook
         run: mdbook build docs
       - name: Build workspace rustdocs
-        run: cargo doc --workspace --no-deps --locked
+        # TODO: remove excludes once zksync-airbender verifier crates fix
+        # the const-generic cycle that triggers rustdoc E0391.
+        # See: ProofSkeletonInstance<S> type alias uses { Geometry::<S>::CONST }
+        # as const generic args, which rustdoc can't normalize.
+        run: cargo doc --workspace --no-deps --locked --exclude airbender-host --exclude cargo-airbender
       - name: Generate workspace API landing page
         run: |
           python3 scripts/generate_api_index.py \
