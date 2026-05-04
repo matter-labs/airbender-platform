@@ -134,7 +134,7 @@ impl Affine {
 
     pub(crate) fn decompress(x_bytes: &FieldBytes, y_is_odd: bool) -> Option<Self> {
         #[allow(deprecated)]
-        let len = x_bytes.as_slice().len();
+        let len = x_bytes.len();
         debug_assert!(len == 32);
 
         #[allow(deprecated)]

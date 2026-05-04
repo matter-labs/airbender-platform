@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn to_bytes_round_trip() {
         proptest!(|(x: FieldElement)| {
-            let bytes: [u8; 32] = x.to_bytes().as_slice().try_into().unwrap();
+            let bytes: [u8; 32] = x.to_bytes().into();
             prop_assert_eq!(
                 FieldElement::from_bytes(&bytes),
                 Some(x)

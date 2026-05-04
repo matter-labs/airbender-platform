@@ -43,7 +43,7 @@ pub mod blake2s_tests {
         let output = crate::blake2s::Blake2s256::digest(&input);
         use crate::blake2_ext::Digest;
         let expected = crate::blake2_ext::Blake2s256::digest(&input);
-        assert_eq!(&output, expected.as_slice());
+        assert_eq!(&output, &*expected);
     }
 
     pub fn test_empty() {
