@@ -758,7 +758,7 @@ dependencies = [
 [[package]]
 name = "common_constants"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=24a74ace#24a74aceac0805253537c2d749b018c55cff5777"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=ec603bc6#ec603bc64e54dc31f93aaf4b8596ebb9e1a57e28"
 
 [[package]]
 name = "const-hex"
@@ -2185,7 +2185,7 @@ dependencies = [
 [[package]]
 name = "riscv_common"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=24a74ace#24a74aceac0805253537c2d749b018c55cff5777"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=ec603bc6#ec603bc64e54dc31f93aaf4b8596ebb9e1a57e28"
 dependencies = [
  "common_constants",
  "seq-macro",
