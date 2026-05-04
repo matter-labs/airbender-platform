@@ -32,6 +32,7 @@ pub use verifier::{
     RealUnifiedVerificationKey, RealUnrolledVerificationKey, RealVerifier, RealVerifierBuilder,
     VerificationKey, VerificationRequest, Verifier,
 };
+pub use verifier_common::SecurityModel;
 pub use vk::{
     compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
     UnrolledVk,

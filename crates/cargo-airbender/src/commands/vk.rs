@@ -7,9 +7,10 @@ use std::path::Path;
 pub fn generate(args: GenerateVkArgs) -> Result<()> {
     ensure_gpu_vk_support()?;
 
+    let security = args.security.to_host();
     let vk = match args.level {
         ProverLevelArg::RecursionUnified => {
-            let vk = airbender_host::compute_unified_vk(&args.app_bin).map_err(|err| {
+            let vk = airbender_host::compute_unified_vk(&args.app_bin, security).map_err(|err| {
                 CliError::with_source(
                     format!(
                         "failed to compute unified verification keys for `{}`",
@@ -24,7 +25,7 @@ pub fn generate(args: GenerateVkArgs) -> Result<()> {
         }
         ProverLevelArg::Base | ProverLevelArg::RecursionUnrolled => {
             let level = as_host_level(args.level);
-            let vk = airbender_host::compute_unrolled_vk(&args.app_bin, level).map_err(|err| {
+            let vk = airbender_host::compute_unrolled_vk(&args.app_bin, level, security).map_err(|err| {
                 CliError::with_source(
                     format!(
                         "failed to compute unrolled verification keys for `{}`",
@@ -99,7 +100,7 @@ pub fn verify(args: VerifyProofArgs) -> Result<()> {
                 .as_ref()
                 .map(|words| words as &dyn airbender_host::Commit);
 
-            airbender_host::verify_real_proof_with_vk(proof, &vk, expected_output_commit)
+            airbender_host::verify_real_proof_with_vk(proof, &vk, expected_output_commit, args.security.to_host())
                 .map_err(|err| CliError::with_source("proof verification failed", err))?;
             proof.level()
         }

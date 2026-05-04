@@ -85,6 +85,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
                 .maybe_worker_threads(args.threads)
                 .maybe_cycles(args.cycles)
                 .maybe_ram_bound(args.ram_bound)
+                .with_security(args.security.to_host())
                 .build()
                 .map_err(|err| {
                 CliError::with_source(

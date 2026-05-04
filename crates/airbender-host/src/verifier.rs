@@ -7,6 +7,7 @@ use crate::vk::{
 };
 use airbender_core::guest::Commit;
 use std::path::{Path, PathBuf};
+use verifier_common::SecurityModel;
 
 /// Wrapper around all verification-key flavors.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -109,6 +110,7 @@ impl DevVerifierBuilder {
 pub struct RealVerifierBuilder {
     app_bin_path: PathBuf,
     level: ProverLevel,
+    security: SecurityModel,
 }
 
 impl RealVerifierBuilder {
@@ -116,11 +118,17 @@ impl RealVerifierBuilder {
         Self {
             app_bin_path: app_bin_path.as_ref().to_path_buf(),
             level,
+            security: SecurityModel::Security80,
         }
     }
 
+    pub fn with_security(mut self, security: SecurityModel) -> Self {
+        self.security = security;
+        self
+    }
+
     pub fn build(self) -> Result<RealVerifier> {
-        RealVerifier::new(&self.app_bin_path, self.level)
+        RealVerifier::new(&self.app_bin_path, self.level, self.security)
     }
 }
 
@@ -209,16 +217,18 @@ pub struct RealVerifier {
     app_bin_path: PathBuf,
     app_bin_hash: [u8; 32],
     level: ProverLevel,
+    security: SecurityModel,
 }
 
 impl RealVerifier {
-    fn new(app_bin_path: &Path, level: ProverLevel) -> Result<Self> {
+    fn new(app_bin_path: &Path, level: ProverLevel, security: SecurityModel) -> Result<Self> {
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
         let app_bin_hash = hash_app_bin(&app_bin_path)?;
         Ok(Self {
             app_bin_path,
             app_bin_hash,
             level,
+            security,
         })
     }
 }
@@ -227,13 +237,13 @@ impl Verifier for RealVerifier {
     fn generate_vk(&self) -> Result<VerificationKey> {
         match self.level {
             ProverLevel::RecursionUnified => {
-                let vk = compute_unified_vk(&self.app_bin_path)?;
+                let vk = compute_unified_vk(&self.app_bin_path, self.security)?;
                 Ok(VerificationKey::RealUnified(RealUnifiedVerificationKey {
                     vk,
                 }))
             }
             ProverLevel::Base | ProverLevel::RecursionUnrolled => {
-                let vk = compute_unrolled_vk(&self.app_bin_path, self.level)?;
+                let vk = compute_unrolled_vk(&self.app_bin_path, self.level, self.security)?;
                 Ok(VerificationKey::RealUnrolled(RealUnrolledVerificationKey {
                     level: self.level,
                     vk,
@@ -272,6 +282,7 @@ impl Verifier for RealVerifier {
                 vk,
                 Some(self.app_bin_hash),
                 request.expected_output(),
+                self.security,
             ),
             (
                 ProverLevel::Base | ProverLevel::RecursionUnrolled,
@@ -291,6 +302,7 @@ impl Verifier for RealVerifier {
                     proof.level(),
                     Some(self.app_bin_hash),
                     request.expected_output(),
+                    self.security,
                 )
             }
             (_, VerificationKey::Dev(_)) => Err(HostError::Verification(
@@ -319,12 +331,13 @@ pub fn verify_real_proof_with_vk(
     proof: &RealProof,
     vk: &VerificationKey,
     expected_output: Option<&dyn Commit>,
+    security: SecurityModel,
 ) -> Result<()> {
     match (proof.level(), vk) {
         (
             ProverLevel::RecursionUnified,
             VerificationKey::RealUnified(RealUnifiedVerificationKey { vk }),
-        ) => verify_proof(proof.inner(), vk, None, expected_output),
+        ) => verify_proof(proof.inner(), vk, None, expected_output, security),
         (
             ProverLevel::Base | ProverLevel::RecursionUnrolled,
             VerificationKey::RealUnrolled(RealUnrolledVerificationKey { level, vk }),
@@ -337,7 +350,7 @@ pub fn verify_real_proof_with_vk(
                 )));
             }
 
-            verify_unrolled_proof(proof.inner(), vk, proof.level(), None, expected_output)
+            verify_unrolled_proof(proof.inner(), vk, proof.level(), None, expected_output, security)
         }
         (_, VerificationKey::Dev(_)) => Err(HostError::Verification(
             "real proofs require real verification keys".to_string(),

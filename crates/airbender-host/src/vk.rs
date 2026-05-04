@@ -7,12 +7,14 @@ use execution_utils::unrolled::{
     compute_setup_for_machine_configuration, get_unrolled_circuits_artifacts_for_machine_type,
     verify_unrolled_layer_proof, UnrolledProgramProof, UnrolledProgramSetup,
 };
+use execution_utils::{verifier_binaries, RecursionArtifact, RecursionLayer};
 use riscv_transpiler::cycle::{
     IMStandardIsaConfigWithUnsignedMulDiv, IWithoutByteAccessIsaConfigWithDelegation,
 };
 use sha3::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
+use verifier_common::SecurityModel;
 
 /// Unified verification key bundle for recursion.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -30,7 +32,7 @@ pub struct UnrolledVk {
     pub compiled_layouts: setups::CompiledCircuitsSet,
 }
 
-pub fn compute_unified_vk(app_bin_path: &Path) -> Result<UnifiedVk> {
+pub fn compute_unified_vk(app_bin_path: &Path, security: SecurityModel) -> Result<UnifiedVk> {
     #[cfg(not(feature = "gpu-prover"))]
     {
         let _ = app_bin_path;
@@ -45,10 +47,12 @@ pub fn compute_unified_vk(app_bin_path: &Path) -> Result<UnifiedVk> {
         let app_bin_hash = hash_app_bin(app_bin_path)?;
 
         // TODO: cache unified setup/layout artifacts on disk to avoid recomputing on every run.
-        let (binary, binary_u32) =
-            setups::pad_binary(execution_utils::unrolled_gpu::RECURSION_UNIFIED_BIN.to_vec());
-        let (text, _) =
-            setups::pad_binary(execution_utils::unrolled_gpu::RECURSION_UNIFIED_TXT.to_vec());
+        let (binary, binary_u32) = setups::pad_binary(
+            verifier_binaries::recursion_artifact(security, RecursionLayer::Unified, RecursionArtifact::Bin).to_vec(),
+        );
+        let (text, _) = setups::pad_binary(
+            verifier_binaries::recursion_artifact(security, RecursionLayer::Unified, RecursionArtifact::Txt).to_vec(),
+        );
 
         let unified_setup =
             execution_utils::unified_circuit::compute_unified_setup_for_machine_configuration::<
@@ -67,7 +71,7 @@ pub fn compute_unified_vk(app_bin_path: &Path) -> Result<UnifiedVk> {
     }
 }
 
-pub fn compute_unrolled_vk(app_bin_path: &Path, level: ProverLevel) -> Result<UnrolledVk> {
+pub fn compute_unrolled_vk(app_bin_path: &Path, level: ProverLevel, security: SecurityModel) -> Result<UnrolledVk> {
     if level == ProverLevel::RecursionUnified {
         return Err(HostError::Verification(
             "unified verification keys must be generated with compute_unified_vk".to_string(),
@@ -96,10 +100,10 @@ pub fn compute_unrolled_vk(app_bin_path: &Path, level: ProverLevel) -> Result<Un
             #[cfg(feature = "gpu-prover")]
             {
                 let (binary, binary_u32) = setups::pad_binary(
-                    execution_utils::unrolled_gpu::RECURSION_UNROLLED_BIN.to_vec(),
+                    verifier_binaries::recursion_artifact(security, RecursionLayer::Unrolled, RecursionArtifact::Bin).to_vec(),
                 );
                 let (text, _) = setups::pad_binary(
-                    execution_utils::unrolled_gpu::RECURSION_UNROLLED_TXT.to_vec(),
+                    verifier_binaries::recursion_artifact(security, RecursionLayer::Unrolled, RecursionArtifact::Txt).to_vec(),
                 );
                 (binary, binary_u32, text)
             }
@@ -149,11 +153,12 @@ pub fn verify_proof(
     vk: &UnifiedVk,
     expected_app_bin_hash: Option<[u8; 32]>,
     expected_output: Option<&dyn Commit>,
+    security: SecurityModel,
 ) -> Result<()> {
     verify_app_bin_hash(expected_app_bin_hash, vk.app_bin_hash)?;
 
     let verifier_output =
-        verify_proof_in_unified_layer(proof, &vk.unified_setup, &vk.unified_layouts, false)
+        verify_proof_in_unified_layer(proof, &vk.unified_setup, &vk.unified_layouts, false, security)
             .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
     verify_expected_output(expected_output, verifier_output)?;
     Ok(())
@@ -165,6 +170,7 @@ pub fn verify_unrolled_proof(
     level: ProverLevel,
     expected_app_bin_hash: Option<[u8; 32]>,
     expected_output: Option<&dyn Commit>,
+    security: SecurityModel,
 ) -> Result<()> {
     verify_app_bin_hash(expected_app_bin_hash, vk.app_bin_hash)?;
 
@@ -180,7 +186,7 @@ pub fn verify_unrolled_proof(
     };
 
     let verifier_output =
-        verify_unrolled_layer_proof(proof, &vk.setup, &vk.compiled_layouts, is_base_layer)
+        verify_unrolled_layer_proof(proof, &vk.setup, &vk.compiled_layouts, is_base_layer, security)
             .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
     verify_expected_output(expected_output, verifier_output)?;
     Ok(())

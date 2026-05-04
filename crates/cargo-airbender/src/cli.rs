@@ -178,6 +178,8 @@ pub struct ProveArgs {
     pub ram_bound: Option<usize>,
     #[arg(long, value_enum, default_value_t = ProverLevelArg::RecursionUnified)]
     pub level: ProverLevelArg,
+    #[arg(long, value_enum, default_value_t = SecurityArg::Security80)]
+    pub security: SecurityArg,
 }
 
 #[derive(Args, Debug)]
@@ -187,6 +189,8 @@ pub struct GenerateVkArgs {
     pub output: PathBuf,
     #[arg(long, value_enum, default_value_t = ProverLevelArg::RecursionUnified)]
     pub level: ProverLevelArg,
+    #[arg(long, value_enum, default_value_t = SecurityArg::Security80)]
+    pub security: SecurityArg,
 }
 
 #[derive(Args, Debug)]
@@ -200,6 +204,8 @@ pub struct VerifyProofArgs {
         help = "Comma-separated expected public output words (x10..x17), decimal or 0x hex"
     )]
     pub expected_output: Option<String>,
+    #[arg(long, value_enum, default_value_t = SecurityArg::Security80)]
+    pub security: SecurityArg,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -214,6 +220,23 @@ pub enum ProverLevelArg {
     Base,
     RecursionUnrolled,
     RecursionUnified,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityArg {
+    #[value(name = "80")]
+    Security80,
+    #[value(name = "100")]
+    Security100,
+}
+
+impl SecurityArg {
+    pub fn to_host(self) -> airbender_host::SecurityModel {
+        match self {
+            Self::Security80 => airbender_host::SecurityModel::Security80,
+            Self::Security100 => airbender_host::SecurityModel::Security100,
+        }
+    }
 }
 
 #[cfg(test)]

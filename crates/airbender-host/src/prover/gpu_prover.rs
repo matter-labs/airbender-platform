@@ -266,5 +266,5 @@ fn create_unrolled_prover(
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
     }
-    Ok(UnrolledProver::new(&base_path, configuration, level))
+    Ok(UnrolledProver::new(verifier_common::SecurityModel::Security80, &base_path, configuration, level))
 }

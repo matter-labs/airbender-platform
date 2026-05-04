@@ -26,6 +26,7 @@ use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
 use riscv_transpiler::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
 use std::path::{Path, PathBuf};
+use verifier_common::SecurityModel;
 
 /// Minimum system RAM (in GB) required to run CPU proving without crashing.
 const MIN_RAM_GB: u64 = 96;
@@ -63,6 +64,7 @@ pub struct CpuProverBuilder {
     worker_threads: Option<usize>,
     cycles: Option<usize>,
     ram_bound: Option<usize>,
+    security: SecurityModel,
 }
 
 impl CpuProverBuilder {
@@ -72,7 +74,13 @@ impl CpuProverBuilder {
             worker_threads: None,
             cycles: None,
             ram_bound: None,
+            security: SecurityModel::Security80,
         }
+    }
+
+    pub fn with_security(mut self, security: SecurityModel) -> Self {
+        self.security = security;
+        self
     }
 
     pub fn with_worker_threads(mut self, worker_threads: usize) -> Self {
@@ -117,6 +125,7 @@ impl CpuProverBuilder {
             self.worker_threads,
             self.cycles,
             self.ram_bound,
+            self.security,
         )
     }
 }
@@ -129,6 +138,7 @@ pub struct CpuProver {
     text_u32: Vec<u32>,
     cycles: Option<usize>,
     ram_bound: usize,
+    security: SecurityModel,
     worker: execution_utils::prover_examples::prover::worker::Worker,
 }
 
@@ -138,6 +148,7 @@ impl CpuProver {
         worker_threads: Option<usize>,
         cycles: Option<usize>,
         ram_bound: Option<usize>,
+        security: SecurityModel,
     ) -> Result<Self> {
         check_system_ram()?;
 
@@ -171,6 +182,7 @@ impl CpuProver {
             text_u32,
             cycles,
             ram_bound,
+            security,
             worker,
         })
     }
@@ -211,6 +223,7 @@ impl Prover for CpuProver {
             oracle,
             self.ram_bound,
             &self.worker,
+            self.security,
         );
         let receipt = receipt_from_real_proof(&inner_proof);
         let proof = Proof::Real(RealProof::new(super::ProverLevel::Base, inner_proof));
