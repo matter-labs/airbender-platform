@@ -3,7 +3,7 @@ use super::Scalar;
 impl Scalar {
     // using addition chain from
     // https://briansmith.org/ecc-inversion-addition-chains-01#secp256k1_scalar_inversion
-    pub(crate) fn invert_in_place(&mut self) {
+    pub fn invert_in_place(&mut self) {
         let x_1 = *self;
         self.pow2k_in_place(1);
         let x_10 = *self;
