@@ -178,7 +178,6 @@ impl core::ops::Mul for Scalar {
     }
 }
 
-#[cfg(test)]
 impl core::ops::Add for Scalar {
     type Output = Self;
 
@@ -193,10 +192,7 @@ impl core::ops::Sub for Scalar {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        let mut result = self;
-        let neg_rhs = -rhs;
-        result += neg_rhs;
-        result
+        self + (-rhs)
     }
 }
 

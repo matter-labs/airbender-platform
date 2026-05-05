@@ -64,6 +64,7 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     let (mut sigr, mut sigs) = Scalar::from_signature(signature);
     let message = Scalar::from_k256_scalar(*message);
 
+    // We go through bytes because it's mod GROUP_ORDER and later we need mod BASE FIELD
     let mut brx = sigr.to_repr();
 
     if recovery_id.is_x_reduced() {
