@@ -34,20 +34,26 @@ const ORDER_HEX: &str = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8
 pub struct Scalar(pub ScalarInner);
 
 impl Scalar {
-    pub const ZERO: Self = Self(ScalarInner::ZERO);
+    #[cfg(test)]
+    pub(crate) const ZERO: Self = Self(ScalarInner::ZERO);
     pub const ONE: Self = Self(ScalarInner::ONE);
-    pub const ORDER: Self = Self(ScalarInner::ORDER);
-    pub const MINUS_LAMBDA: Self = Self(ScalarInner::MINUS_LAMBDA);
+    #[cfg(test)]
+    pub(crate) const ORDER: Self = Self(ScalarInner::ORDER);
+    #[cfg(test)]
+    pub(crate) const MINUS_LAMBDA: Self = Self(ScalarInner::MINUS_LAMBDA);
 
-    pub const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
+    #[cfg(test)]
+    pub(crate) const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
         Self(ScalarInner::from_be_bytes_unchecked(bytes))
     }
 
-    pub fn from_u128(n: u128) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_u128(n: u128) -> Self {
         Self(ScalarInner::from_u128(n))
     }
 
-    pub fn from_be_hex(hex: &str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_be_hex(hex: &str) -> Self {
         Self(ScalarInner::from_be_hex(hex))
     }
 
@@ -60,7 +66,8 @@ impl Scalar {
         self.0.to_be_bytes().into()
     }
 
-    pub fn from_repr(bytes: FieldBytes) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_repr(bytes: FieldBytes) -> Self {
         let bytes: [u8; 32] = bytes.into();
         Self(ScalarInner::from_be_bytes(&bytes))
     }

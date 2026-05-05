@@ -124,7 +124,8 @@ impl FieldElement {
     // 0x7ae96a2b657c07106e64479eac3434e99cf0497512f58995c1396c28719501ee
     pub const BETA: Self = Self(FieldElementImpl::BETA);
 
-    pub const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
+    #[cfg(test)]
+    pub(crate) const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
         Self(FieldElementImpl::from_bytes_unchecked(bytes))
     }
 
