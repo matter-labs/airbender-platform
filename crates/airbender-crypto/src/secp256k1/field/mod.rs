@@ -95,7 +95,7 @@ impl FieldElementConst {
         Self(self.0.normalize())
     }
 
-    pub const fn to_storage(self) -> FieldStorage {
+    pub(crate) const fn to_storage(self) -> FieldStorage {
         FieldStorage(self.0.to_storage())
     }
 
@@ -252,7 +252,8 @@ impl FieldElement {
         self.0.to_bytes()
     }
 
-    pub const fn to_storage(self) -> FieldStorage {
+    #[cfg(test)]
+    pub(crate) const fn to_storage(self) -> FieldStorage {
         FieldStorage(self.0.to_storage())
     }
 }

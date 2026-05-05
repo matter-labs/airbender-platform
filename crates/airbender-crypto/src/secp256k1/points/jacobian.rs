@@ -174,7 +174,7 @@ impl JacobianConst {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Jacobian {
+pub struct Jacobian {
     pub(crate) x: FieldElement,
     pub(crate) y: FieldElement,
     pub(crate) z: FieldElement,
