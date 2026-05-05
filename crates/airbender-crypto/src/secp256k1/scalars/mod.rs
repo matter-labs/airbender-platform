@@ -34,8 +34,7 @@ const ORDER_HEX: &str = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8
 pub struct Scalar(pub ScalarInner);
 
 impl Scalar {
-    #[cfg(test)]
-    pub(crate) const ZERO: Self = Self(ScalarInner::ZERO);
+    pub const ZERO: Self = Self(ScalarInner::ZERO);
     pub const ONE: Self = Self(ScalarInner::ONE);
     #[cfg(test)]
     pub(crate) const ORDER: Self = Self(ScalarInner::ORDER);
