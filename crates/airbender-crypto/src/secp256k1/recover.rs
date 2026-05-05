@@ -72,6 +72,64 @@ pub fn recover_with_context(
     Ok(pk)
 }
 
+#[cfg(feature = "secp256k1-static-context")]
+pub fn recover_with_hooks<H: super::hooks::Secp256k1Hooks>(
+    message: &crate::k256::Scalar,
+    signature: &crate::k256::ecdsa::Signature,
+    recovery_id: &crate::k256::ecdsa::RecoveryId,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
+    use super::context::ECRECOVER_CONTEXT;
+
+    recover_with_context_and_hooks(message, signature, recovery_id, &ECRECOVER_CONTEXT, hooks)
+}
+
+pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
+    message: &crate::k256::Scalar,
+    signature: &crate::k256::ecdsa::Signature,
+    recovery_id: &crate::k256::ecdsa::RecoveryId,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
+    let (mut sigr, mut sigs) = Scalar::from_signature(signature);
+    let message = Scalar::from_k256_scalar(*message);
+
+    let mut brx = sigr.to_repr();
+
+    if recovery_id.is_x_reduced() {
+        match <U256 as FieldBytesEncoding<Secp256k1>>::decode_field_bytes(&brx)
+            .checked_add(&Secp256k1::ORDER)
+            .into_option()
+        {
+            Some(restored) => {
+                brx = <U256 as FieldBytesEncoding<Secp256k1>>::encode_field_bytes(&restored);
+            }
+            None => return Err(Secp256k1Err::OperationOverflow),
+        }
+    }
+
+    let is_odd = recovery_id.is_y_odd();
+    let x = Affine::decompress_with_hooks(&brx, is_odd, hooks)
+        .ok_or(Secp256k1Err::InvalidParams)?;
+
+    let xj = x.to_jacobian();
+
+    hooks.scalar_invert_and_assign(&mut sigr);
+    sigs *= sigr;
+
+    sigr *= message;
+    sigr.negate_in_place();
+
+    let mut pk = ecmult(&xj, &sigs, &sigr, context).to_affine_with_hooks(hooks);
+    pk.normalize_in_place();
+
+    if pk.is_infinity() {
+        return Err(Secp256k1Err::RecoveredInfinity);
+    }
+
+    Ok(pk)
+}
+
 /// Compute na*a+ng*g where g is the generator.
 /// Algorithm adapted from https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h#L237
 fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Jacobian {
