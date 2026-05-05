@@ -69,7 +69,6 @@ impl ScalarInner {
         unsafe { Self(core::mem::transmute(s)) }
     }
 
-    #[cfg(test)]
     pub(super) const fn from_u128(n: u128) -> Self {
         Self(U256::from_u128(n))
     }
