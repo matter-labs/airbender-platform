@@ -206,7 +206,7 @@ impl Jacobian {
         self.z.normalizes_to_zero()
     }
 
-    pub(crate) fn to_affine(self) -> Affine {
+    pub fn to_affine(self) -> Affine {
         self.assert_verify();
 
         if self.is_infinity() {

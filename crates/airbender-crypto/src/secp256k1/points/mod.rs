@@ -3,5 +3,6 @@ mod jacobian;
 mod storage;
 
 pub use affine::Affine;
-pub(crate) use jacobian::{Jacobian, JacobianConst};
+pub use jacobian::Jacobian;
+pub(crate) use jacobian::JacobianConst;
 pub(crate) use storage::AffineStorage;

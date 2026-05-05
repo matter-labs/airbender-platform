@@ -99,8 +99,7 @@ impl Affine {
         infinity: true,
     };
 
-    #[cfg(test)]
-    pub(crate) const GENERATOR: Self = Self {
+    pub const GENERATOR: Self = Self {
         x: FieldElement::from_bytes_unchecked(&[
             0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87,
             0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81, 0x5b,
@@ -132,7 +131,7 @@ impl Affine {
         self.infinity || (self.x.normalizes_to_zero() && self.y.normalizes_to_zero())
     }
 
-    pub(crate) fn decompress(x_bytes: &FieldBytes, y_is_odd: bool) -> Option<Self> {
+    pub fn decompress(x_bytes: &FieldBytes, y_is_odd: bool) -> Option<Self> {
         #[allow(deprecated)]
         let len = x_bytes.len();
         debug_assert!(len == 32);
@@ -168,7 +167,7 @@ impl Affine {
         ret
     }
 
-    pub(crate) fn normalize_in_place(&mut self) {
+    pub fn normalize_in_place(&mut self) {
         self.x.normalize_in_place();
         self.y.normalize_in_place();
     }
@@ -208,7 +207,7 @@ impl Affine {
         self.infinity = a.infinity;
     }
 
-    pub(crate) fn to_jacobian(self) -> Jacobian {
+    pub fn to_jacobian(self) -> Jacobian {
         if self.is_infinity() {
             return Jacobian::INFINITY;
         }
