@@ -38,33 +38,33 @@ cfg_if! {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FieldElementConst(pub(crate) FieldElementImplConst);
+pub struct FieldElementConst(pub FieldElementImplConst);
 
 impl FieldElementConst {
-    pub(crate) const ZERO: Self = Self(FieldElementImplConst::ZERO);
-    pub(crate) const ONE: Self = Self(FieldElementImplConst::ONE);
+    pub const ZERO: Self = Self(FieldElementImplConst::ZERO);
+    pub const ONE: Self = Self(FieldElementImplConst::ONE);
 
-    pub(crate) const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
+    pub const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
         Self(FieldElementImplConst::from_bytes_unchecked(bytes))
     }
 
-    pub(crate) const fn mul(&self, rhs: &Self) -> Self {
+    pub const fn mul(&self, rhs: &Self) -> Self {
         Self(self.0.mul(&rhs.0))
     }
 
-    pub(crate) const fn mul_int(&self, rhs: u32) -> Self {
+    pub const fn mul_int(&self, rhs: u32) -> Self {
         Self(self.0.mul_int(rhs))
     }
 
-    pub(crate) const fn square(&self) -> Self {
+    pub const fn square(&self) -> Self {
         Self(self.0.square())
     }
 
-    pub(crate) const fn add(&self, rhs: &Self) -> Self {
+    pub const fn add(&self, rhs: &Self) -> Self {
         Self(self.0.add(&rhs.0))
     }
 
-    pub(crate) const fn invert(&self) -> Self {
+    pub const fn invert(&self) -> Self {
         let x2 = self.pow2k(1).mul(self);
         let x3 = x2.pow2k(1).mul(self);
         let x6 = x3.pow2k(3).mul(&x3);
@@ -87,19 +87,19 @@ impl FieldElementConst {
             .mul(self)
     }
 
-    pub(crate) const fn negate(&self, magnitude: u32) -> Self {
+    pub const fn negate(&self, magnitude: u32) -> Self {
         Self(self.0.negate(magnitude))
     }
 
-    pub(crate) const fn normalize(&self) -> Self {
+    pub const fn normalize(&self) -> Self {
         Self(self.0.normalize())
     }
 
-    pub(crate) const fn to_storage(self) -> FieldStorage {
+    pub const fn to_storage(self) -> FieldStorage {
         FieldStorage(self.0.to_storage())
     }
 
-    pub(crate) const fn normalizes_to_zero(&self) -> bool {
+    pub const fn normalizes_to_zero(&self) -> bool {
         self.0.normalizes_to_zero()
     }
 
@@ -116,56 +116,55 @@ impl FieldElementConst {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FieldElement(pub(crate) FieldElementImpl);
+pub struct FieldElement(pub FieldElementImpl);
 
 impl FieldElement {
-    pub(crate) const ZERO: Self = Self(FieldElementImpl::ZERO);
-    pub(crate) const ONE: Self = Self(FieldElementImpl::ONE);
+    pub const ZERO: Self = Self(FieldElementImpl::ZERO);
+    pub const ONE: Self = Self(FieldElementImpl::ONE);
     // 0x7ae96a2b657c07106e64479eac3434e99cf0497512f58995c1396c28719501ee
-    pub(crate) const BETA: Self = Self(FieldElementImpl::BETA);
+    pub const BETA: Self = Self(FieldElementImpl::BETA);
 
-    #[cfg(test)]
-    pub(crate) const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
+    pub const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
         Self(FieldElementImpl::from_bytes_unchecked(bytes))
     }
 
-    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
         FieldElementImpl::from_bytes(bytes).map(Self)
     }
 
-    pub(crate) fn mul_in_place(&mut self, rhs: &Self) {
+    pub fn mul_in_place(&mut self, rhs: &Self) {
         self.0.mul_in_place(&rhs.0);
     }
 
-    pub(crate) fn mul_int_in_place(&mut self, rhs: u32) {
+    pub fn mul_int_in_place(&mut self, rhs: u32) {
         self.0.mul_int_in_place(rhs);
     }
 
-    pub(crate) fn square_in_place(&mut self) {
+    pub fn square_in_place(&mut self) {
         self.0.square_in_place();
     }
 
-    pub(crate) fn add_in_place(&mut self, rhs: &Self) {
+    pub fn add_in_place(&mut self, rhs: &Self) {
         self.0.add_in_place(&rhs.0);
     }
 
-    pub(crate) fn double_in_place(&mut self) {
+    pub fn double_in_place(&mut self) {
         self.0.double_in_place();
     }
 
-    pub(crate) fn sub_in_place(&mut self, rhs: &Self) {
+    pub fn sub_in_place(&mut self, rhs: &Self) {
         self.0.sub_in_place(&rhs.0);
     }
 
-    pub(crate) fn add_int_in_place(&mut self, rhs: u32) {
+    pub fn add_int_in_place(&mut self, rhs: u32) {
         self.0.add_int_in_place(rhs);
     }
 
-    pub(crate) fn invert_in_place(&mut self) {
+    pub fn invert_in_place(&mut self) {
         self.0.invert_in_place()
     }
 
-    pub(crate) fn sqrt_in_place_unchecked(&mut self) {
+    pub fn sqrt_in_place_unchecked(&mut self) {
         let x1 = *self;
 
         self.pow2k_in_place(1);
@@ -214,7 +213,7 @@ impl FieldElement {
         self.pow2k_in_place(2);
     }
 
-    pub(crate) fn sqrt_in_place(&mut self) -> bool {
+    pub fn sqrt_in_place(&mut self) -> bool {
         let original = *self;
         self.sqrt_in_place_unchecked();
 
@@ -225,19 +224,19 @@ impl FieldElement {
 
         is_root.normalizes_to_zero()
     }
-    pub(crate) fn negate_in_place(&mut self, magnitude: u32) {
+    pub fn negate_in_place(&mut self, magnitude: u32) {
         self.0.negate_in_place(magnitude);
     }
 
-    pub(crate) fn normalize_in_place(&mut self) {
+    pub fn normalize_in_place(&mut self) {
         self.0.normalize_in_place();
     }
 
-    pub(crate) fn is_odd(&self) -> bool {
+    pub fn is_odd(&self) -> bool {
         self.0.is_odd()
     }
 
-    pub(crate) fn normalizes_to_zero(&self) -> bool {
+    pub fn normalizes_to_zero(&self) -> bool {
         self.0.normalizes_to_zero()
     }
 
@@ -248,13 +247,12 @@ impl FieldElement {
         }
     }
 
-    pub(crate) fn to_bytes(mut self) -> FieldBytes {
+    pub fn to_bytes(mut self) -> FieldBytes {
         self.normalize_in_place();
         self.0.to_bytes()
     }
 
-    #[cfg(test)]
-    pub(crate) const fn to_storage(self) -> FieldStorage {
+    pub const fn to_storage(self) -> FieldStorage {
         FieldStorage(self.0.to_storage())
     }
 }
