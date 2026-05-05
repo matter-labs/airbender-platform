@@ -53,6 +53,7 @@ impl Scalar {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn from_be_hex(hex: &str) -> Self {
         Self(ScalarInner::from_be_hex(hex))
     }
