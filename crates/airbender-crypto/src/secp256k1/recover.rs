@@ -33,43 +33,13 @@ pub fn recover_with_context(
     recovery_id: &crate::k256::ecdsa::RecoveryId,
     context: &ECMultContext,
 ) -> Result<Affine, Secp256k1Err> {
-    let (mut sigr, mut sigs) = Scalar::from_signature(signature);
-    let message = Scalar::from_k256_scalar(*message);
-
-    // We go through bytes because it's mod GROUP_ORDER and later we need mod BASE FIELD
-    let mut brx = sigr.to_repr();
-
-    if recovery_id.is_x_reduced() {
-        match <U256 as FieldBytesEncoding<Secp256k1>>::decode_field_bytes(&brx)
-            .checked_add(&Secp256k1::ORDER)
-            .into_option()
-        {
-            Some(restored) => {
-                brx = <U256 as FieldBytesEncoding<Secp256k1>>::encode_field_bytes(&restored);
-            }
-            None => return Err(Secp256k1Err::OperationOverflow),
-        }
-    }
-
-    let is_odd = recovery_id.is_y_odd();
-    let x = Affine::decompress(&brx, is_odd).ok_or(Secp256k1Err::InvalidParams)?;
-
-    let xj = x.to_jacobian();
-
-    sigr.invert_in_place();
-    sigs *= sigr;
-
-    sigr *= message;
-    sigr.negate_in_place();
-
-    let mut pk = ecmult(&xj, &sigs, &sigr, context).to_affine();
-    pk.normalize_in_place();
-
-    if pk.is_infinity() {
-        return Err(Secp256k1Err::RecoveredInfinity);
-    }
-
-    Ok(pk)
+    recover_with_context_and_hooks(
+        message,
+        signature,
+        recovery_id,
+        context,
+        &mut super::hooks::DefaultSecp256k1Hooks,
+    )
 }
 
 #[cfg(feature = "secp256k1-static-context")]
