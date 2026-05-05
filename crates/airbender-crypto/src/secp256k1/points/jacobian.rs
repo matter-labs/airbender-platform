@@ -231,6 +231,34 @@ impl Jacobian {
         ret
     }
 
+    pub fn to_affine_with_hooks<H: super::super::hooks::Secp256k1Hooks>(
+        self,
+        hooks: &mut H,
+    ) -> Affine {
+        self.assert_verify();
+
+        if self.is_infinity() {
+            return Affine::INFINITY;
+        }
+
+        let mut zi = self.z;
+        hooks.fe_invert_and_assign(&mut zi);
+
+        let mut ret = Affine {
+            x: zi,
+            y: zi,
+            infinity: false,
+        };
+
+        ret.x.square_in_place();
+        ret.y *= ret.x;
+
+        ret.x *= self.x;
+        ret.y *= self.y;
+
+        ret
+    }
+
     // this is essentially this algorithm https://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#doubling-dbl-2009-l
     // but reorganized to reduce copies
     pub(crate) fn double_in_place(&mut self, rzr: Option<&mut FieldElement>) {
