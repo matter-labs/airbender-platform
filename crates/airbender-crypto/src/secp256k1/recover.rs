@@ -109,8 +109,8 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     }
 
     let is_odd = recovery_id.is_y_odd();
-    let x = Affine::decompress_with_hooks(&brx, is_odd, hooks)
-        .ok_or(Secp256k1Err::InvalidParams)?;
+    let x =
+        Affine::decompress_with_hooks(&brx, is_odd, hooks).ok_or(Secp256k1Err::InvalidParams)?;
 
     let xj = x.to_jacobian();
 
@@ -730,13 +730,13 @@ mod tests {
         };
 
         let digest = [
-            56, 209, 138, 203, 103, 210, 92, 139, 185, 148, 39, 100, 182, 47, 24, 225, 112,
-            84, 246, 106, 129, 123, 212, 41, 84, 35, 173, 249, 237, 152, 135, 62,
+            56, 209, 138, 203, 103, 210, 92, 139, 185, 148, 39, 100, 182, 47, 24, 225, 112, 84,
+            246, 106, 129, 123, 212, 41, 84, 35, 173, 249, 237, 152, 135, 62,
         ];
         let r = digest;
         let s = [
-            120, 157, 29, 212, 35, 210, 95, 7, 114, 210, 116, 141, 96, 247, 228, 184, 27,
-            177, 77, 8, 110, 186, 142, 142, 142, 251, 109, 207, 248, 164, 174, 2,
+            120, 157, 29, 212, 35, 210, 95, 7, 114, 210, 116, 141, 96, 247, 228, 184, 27, 177, 77,
+            8, 110, 186, 142, 142, 142, 251, 109, 207, 248, 164, 174, 2,
         ];
 
         let signature = Signature::from_scalars(r, s).unwrap();

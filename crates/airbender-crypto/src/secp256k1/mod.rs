@@ -3,10 +3,10 @@
 
 mod context;
 pub mod field;
+pub mod hooks;
 mod points;
 mod recover;
 pub mod scalars;
-pub mod hooks;
 
 #[cfg(test)]
 mod test_vectors;
