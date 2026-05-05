@@ -718,4 +718,42 @@ mod tests {
 
         super::recover(&message, &signature, &recovery_id)
     }
+
+    #[cfg(feature = "secp256k1-static-context")]
+    #[test]
+    fn recover_with_default_hooks_matches_recover() {
+        use crate::secp256k1::hooks::DefaultSecp256k1Hooks;
+        use k256::ecdsa::{RecoveryId, Signature};
+        use {
+            k256::elliptic_curve::ops::Reduce,
+            k256::{ecdsa::hazmat::bits2field, Scalar},
+        };
+
+        let digest = [
+            56, 209, 138, 203, 103, 210, 92, 139, 185, 148, 39, 100, 182, 47, 24, 225, 112,
+            84, 246, 106, 129, 123, 212, 41, 84, 35, 173, 249, 237, 152, 135, 62,
+        ];
+        let r = digest;
+        let s = [
+            120, 157, 29, 212, 35, 210, 95, 7, 114, 210, 116, 141, 96, 247, 228, 184, 27,
+            177, 77, 8, 110, 186, 142, 142, 142, 251, 109, 207, 248, 164, 174, 2,
+        ];
+
+        let signature = Signature::from_scalars(r, s).unwrap();
+        let recovery_id = RecoveryId::try_from(0u8).unwrap();
+        let message = <Scalar as Reduce<k256::U256>>::reduce_bytes(
+            &bits2field::<k256::Secp256k1>(&digest).unwrap(),
+        );
+
+        let without_hooks = super::recover(&message, &signature, &recovery_id).unwrap();
+        let with_hooks = super::recover_with_hooks(
+            &message,
+            &signature,
+            &recovery_id,
+            &mut DefaultSecp256k1Hooks,
+        )
+        .unwrap();
+
+        assert_eq!(without_hooks, with_hooks);
+    }
 }
