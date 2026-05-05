@@ -2,10 +2,11 @@
 #![allow(clippy::precedence)]
 
 mod context;
-mod field;
+pub mod field;
 mod points;
 mod recover;
-mod scalars;
+pub mod scalars;
+pub mod hooks;
 
 #[cfg(test)]
 mod test_vectors;
