@@ -130,6 +130,8 @@ cargo airbender generate-vk ./dist/app/app.bin --output ./vk.bin --level base
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin
 ```
 
+Real proving defaults to 100-bit security. Add `--security 80` to both `prove` and `generate-vk` only when you need legacy 80-bit artifacts.
+
 For non-trivial inputs, use the host-side `Inputs::push(...)` API and `write_hex_file(...)` to generate input files. See [Host Program API](./02-host-program-api.md).
 
 ## Proving Hardware

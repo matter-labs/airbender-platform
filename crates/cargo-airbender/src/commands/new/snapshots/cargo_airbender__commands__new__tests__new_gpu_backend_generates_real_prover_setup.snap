@@ -63,7 +63,8 @@ debug = 0
 debug = 0
 === host/src/main.rs ===
 use airbender_host::{
-    Inputs, Program, Prover, ProverLevel, Result, Runner, VerificationRequest, Verifier,
+    Inputs, Program, Prover, ProverLevel, Result, Runner, SecurityLevel, VerificationRequest,
+    Verifier,
 };
 use std::path::PathBuf;
 
@@ -90,8 +91,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let security = SecurityLevel::default();
     let prover = program
         .gpu_prover()
+        .with_security(security)
         .with_level(ProverLevel::RecursionUnified)
         .build()?;
     let prove_result = prover.prove(inputs.words())?;
@@ -107,7 +110,7 @@ fn main() -> Result<()> {
 
     let expected_output = 42u32;
     let verifier = program.real_verifier(ProverLevel::RecursionUnified).build()?;
-    let vk = verifier.generate_vk()?;
+    let vk = verifier.generate_vk(security)?;
     verifier.verify(
         &prove_result.proof,
         &vk,

@@ -8,6 +8,7 @@ mod proof;
 mod prover;
 mod receipt;
 mod runner;
+mod security;
 mod verifier;
 mod vk;
 
@@ -27,6 +28,7 @@ pub use runner::{
     resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, TranspilerRunner,
     TranspilerRunnerBuilder, DEFAULT_CYCLES,
 };
+pub use security::SecurityLevel;
 pub use verifier::{
     verify_real_proof_with_vk, DevVerificationKey, DevVerifier, DevVerifierBuilder,
     RealUnifiedVerificationKey, RealUnrolledVerificationKey, RealVerifier, RealVerifierBuilder,

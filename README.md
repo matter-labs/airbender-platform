@@ -21,7 +21,7 @@ You write a **guest** program (the code you want to prove) and a **host** progra
 
 **Host SDK** (`airbender-host`) - drive guest programs from native Rust:
 - Load and run RISC-V binaries
-- Generate verification keys, prove execution, verify proofs
+- Generate verification keys, choose real proof security, prove execution, verify proofs
 - Collect cycle-marker snapshots from transpiler runs
 
 ## Documentation

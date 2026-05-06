@@ -1,4 +1,6 @@
-use airbender_host::{Inputs, Program, Prover, Runner, VerificationRequest, Verifier};
+use airbender_host::{
+    Inputs, Program, Prover, Runner, SecurityLevel, VerificationRequest, Verifier,
+};
 use revm_basic_shared::RunInput;
 use std::path::PathBuf;
 
@@ -39,7 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let prover = program.dev_prover().build()?;
+    let security = SecurityLevel::default();
+    let prover = program.dev_prover().with_security(security).build()?;
     let prove_result = prover.prove(inputs.words())?;
     assert_eq!(
         execution.receipt.output, prove_result.receipt.output,
@@ -47,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let verifier = program.dev_verifier().build()?;
-    let vk = verifier.generate_vk()?;
+    let vk = verifier.generate_vk(security)?;
     verifier.verify(
         &prove_result.proof,
         &vk,

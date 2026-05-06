@@ -20,6 +20,7 @@ use super::{
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
 use crate::runner::{Runner, TranspilerRunnerBuilder};
+use crate::security::SecurityLevel;
 use execution_utils::setups;
 use execution_utils::unrolled;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
@@ -63,6 +64,7 @@ pub struct CpuProverBuilder {
     worker_threads: Option<usize>,
     cycles: Option<usize>,
     ram_bound: Option<usize>,
+    security: SecurityLevel,
 }
 
 impl CpuProverBuilder {
@@ -72,6 +74,7 @@ impl CpuProverBuilder {
             worker_threads: None,
             cycles: None,
             ram_bound: None,
+            security: SecurityLevel::default(),
         }
     }
 
@@ -111,12 +114,18 @@ impl CpuProverBuilder {
         }
     }
 
+    pub fn with_security(mut self, security: SecurityLevel) -> Self {
+        self.security = security;
+        self
+    }
+
     pub fn build(self) -> Result<CpuProver> {
         CpuProver::new(
             &self.app_bin_path,
             self.worker_threads,
             self.cycles,
             self.ram_bound,
+            self.security,
         )
     }
 }
@@ -129,6 +138,7 @@ pub struct CpuProver {
     text_u32: Vec<u32>,
     cycles: Option<usize>,
     ram_bound: usize,
+    security: SecurityLevel,
     worker: execution_utils::prover_examples::prover::worker::Worker,
 }
 
@@ -138,6 +148,7 @@ impl CpuProver {
         worker_threads: Option<usize>,
         cycles: Option<usize>,
         ram_bound: Option<usize>,
+        security: SecurityLevel,
     ) -> Result<Self> {
         check_system_ram()?;
 
@@ -171,6 +182,7 @@ impl CpuProver {
             text_u32,
             cycles,
             ram_bound,
+            security,
             worker,
         })
     }
@@ -211,9 +223,14 @@ impl Prover for CpuProver {
             oracle,
             self.ram_bound,
             &self.worker,
+            self.security.into(),
         );
         let receipt = receipt_from_real_proof(&inner_proof);
-        let proof = Proof::Real(RealProof::new(super::ProverLevel::Base, inner_proof));
+        let proof = Proof::Real(RealProof::new(
+            self.security,
+            super::ProverLevel::Base,
+            inner_proof,
+        ));
 
         Ok(ProveResult {
             proof,

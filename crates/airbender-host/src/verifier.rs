@@ -1,6 +1,7 @@
 use crate::error::{HostError, Result};
 use crate::proof::{hash_app_bin, hash_input_words, Proof, RealProof};
 use crate::prover::ProverLevel;
+use crate::security::SecurityLevel;
 use crate::vk::{
     compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
     UnrolledVk,
@@ -16,9 +17,20 @@ pub enum VerificationKey {
     RealUnrolled(RealUnrolledVerificationKey),
 }
 
+impl VerificationKey {
+    pub fn security(&self) -> SecurityLevel {
+        match self {
+            Self::Dev(vk) => vk.security,
+            Self::RealUnified(vk) => vk.vk.security,
+            Self::RealUnrolled(vk) => vk.vk.security,
+        }
+    }
+}
+
 /// Development verification key.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DevVerificationKey {
+    pub security: SecurityLevel,
     pub app_bin_hash: [u8; 32],
 }
 
@@ -78,7 +90,7 @@ impl<'a> VerificationRequest<'a> {
 
 /// Verifier interface shared by dev and real verifiers.
 pub trait Verifier {
-    fn generate_vk(&self) -> Result<VerificationKey>;
+    fn generate_vk(&self, security: SecurityLevel) -> Result<VerificationKey>;
 
     fn verify(
         &self,
@@ -135,13 +147,18 @@ impl DevVerifier {
         let app_bin_hash = hash_app_bin(&app_bin_path)?;
         Ok(Self { app_bin_hash })
     }
+
+    pub fn generate_vk(&self, security: SecurityLevel) -> Result<VerificationKey> {
+        Ok(VerificationKey::Dev(DevVerificationKey {
+            security,
+            app_bin_hash: self.app_bin_hash,
+        }))
+    }
 }
 
 impl Verifier for DevVerifier {
-    fn generate_vk(&self) -> Result<VerificationKey> {
-        Ok(VerificationKey::Dev(DevVerificationKey {
-            app_bin_hash: self.app_bin_hash,
-        }))
+    fn generate_vk(&self, security: SecurityLevel) -> Result<VerificationKey> {
+        DevVerifier::generate_vk(self, security)
     }
 
     fn verify(
@@ -166,6 +183,8 @@ impl Verifier for DevVerifier {
                 ));
             }
         };
+
+        ensure_proof_vk_security_matches(proof.security, vk.security)?;
 
         if vk.app_bin_hash != self.app_bin_hash {
             return Err(HostError::Verification(
@@ -221,25 +240,29 @@ impl RealVerifier {
             level,
         })
     }
-}
 
-impl Verifier for RealVerifier {
-    fn generate_vk(&self) -> Result<VerificationKey> {
+    pub fn generate_vk(&self, security: SecurityLevel) -> Result<VerificationKey> {
         match self.level {
             ProverLevel::RecursionUnified => {
-                let vk = compute_unified_vk(&self.app_bin_path)?;
+                let vk = compute_unified_vk(&self.app_bin_path, security)?;
                 Ok(VerificationKey::RealUnified(RealUnifiedVerificationKey {
                     vk,
                 }))
             }
             ProverLevel::Base | ProverLevel::RecursionUnrolled => {
-                let vk = compute_unrolled_vk(&self.app_bin_path, self.level)?;
+                let vk = compute_unrolled_vk(&self.app_bin_path, self.level, security)?;
                 Ok(VerificationKey::RealUnrolled(RealUnrolledVerificationKey {
                     level: self.level,
                     vk,
                 }))
             }
         }
+    }
+}
+
+impl Verifier for RealVerifier {
+    fn generate_vk(&self, security: SecurityLevel) -> Result<VerificationKey> {
+        RealVerifier::generate_vk(self, security)
     }
 
     fn verify(
@@ -267,12 +290,15 @@ impl Verifier for RealVerifier {
             (
                 ProverLevel::RecursionUnified,
                 VerificationKey::RealUnified(RealUnifiedVerificationKey { vk }),
-            ) => verify_proof(
-                proof.inner(),
-                vk,
-                Some(self.app_bin_hash),
-                request.expected_output(),
-            ),
+            ) => {
+                ensure_proof_vk_security_matches(proof.security(), vk.security)?;
+                verify_proof(
+                    proof.inner(),
+                    vk,
+                    Some(self.app_bin_hash),
+                    request.expected_output(),
+                )
+            }
             (
                 ProverLevel::Base | ProverLevel::RecursionUnrolled,
                 VerificationKey::RealUnrolled(RealUnrolledVerificationKey { level, vk }),
@@ -284,6 +310,7 @@ impl Verifier for RealVerifier {
                         level
                     )));
                 }
+                ensure_proof_vk_security_matches(proof.security(), vk.security)?;
 
                 verify_unrolled_proof(
                     proof.inner(),
@@ -324,7 +351,10 @@ pub fn verify_real_proof_with_vk(
         (
             ProverLevel::RecursionUnified,
             VerificationKey::RealUnified(RealUnifiedVerificationKey { vk }),
-        ) => verify_proof(proof.inner(), vk, None, expected_output),
+        ) => {
+            ensure_proof_vk_security_matches(proof.security(), vk.security)?;
+            verify_proof(proof.inner(), vk, None, expected_output)
+        }
         (
             ProverLevel::Base | ProverLevel::RecursionUnrolled,
             VerificationKey::RealUnrolled(RealUnrolledVerificationKey { level, vk }),
@@ -336,6 +366,7 @@ pub fn verify_real_proof_with_vk(
                     level
                 )));
             }
+            ensure_proof_vk_security_matches(proof.security(), vk.security)?;
 
             verify_unrolled_proof(proof.inner(), vk, proof.level(), None, expected_output)
         }
@@ -353,6 +384,19 @@ pub fn verify_real_proof_with_vk(
             ))
         }
     }
+}
+
+fn ensure_proof_vk_security_matches(
+    proof_security: SecurityLevel,
+    vk_security: SecurityLevel,
+) -> Result<()> {
+    if proof_security != vk_security {
+        return Err(HostError::Verification(format!(
+            "proof security {} bits does not match verification key security {} bits",
+            proof_security, vk_security
+        )));
+    }
+    Ok(())
 }
 
 fn resolve_app_bin_path(path: &Path) -> Result<PathBuf> {
@@ -380,4 +424,42 @@ fn resolve_app_bin_path(path: &Path) -> Result<PathBuf> {
         "binary not found: {}",
         path.display()
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proof::DevProof;
+    use crate::receipt::Receipt;
+
+    #[test]
+    fn dev_verifier_rejects_security_mismatch() {
+        let app_bin_hash = [7u8; 32];
+        let input_words = [1u32, 10u32];
+        let receipt = receipt_with_output(55);
+        let proof = Proof::Dev(DevProof {
+            security: SecurityLevel::Bits100,
+            app_bin_hash,
+            input_words_hash: hash_input_words(&input_words),
+            receipt,
+            cycles: 100,
+        });
+        let vk = VerificationKey::Dev(DevVerificationKey {
+            security: SecurityLevel::Bits80,
+            app_bin_hash,
+        });
+        let verifier = DevVerifier { app_bin_hash };
+
+        let err = verifier
+            .verify(&proof, &vk, VerificationRequest::dev(&input_words, &55u32))
+            .expect_err("mismatched dev proof/VK security must fail verification");
+
+        assert!(err.to_string().contains("proof security 100 bits"));
+    }
+
+    fn receipt_with_output(output: u32) -> Receipt {
+        let mut registers = [0u32; 32];
+        registers[10] = output;
+        Receipt::from_registers(registers)
+    }
 }
