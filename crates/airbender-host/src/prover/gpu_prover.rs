@@ -4,7 +4,7 @@ use super::{
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
 use crate::security::SecurityLevel;
-use execution_utils::unrolled_gpu::UnrolledProver;
+use execution_utils::unrolled_gpu::{UnrolledProver, UnrolledProverCache};
 use gpu_prover::execution::prover::ExecutionProverConfiguration;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use std::any::Any;
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread::JoinHandle;
+use tracing::info;
 
 /// Builder for creating a configured cached GPU prover.
 pub struct GpuProverBuilder {
@@ -19,6 +20,7 @@ pub struct GpuProverBuilder {
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
+    setup_cache_path: Option<PathBuf>,
 }
 
 impl GpuProverBuilder {
@@ -28,6 +30,7 @@ impl GpuProverBuilder {
             worker_threads: None,
             security: SecurityLevel::default(),
             level: ProverLevel::RecursionUnified,
+            setup_cache_path: None,
         }
     }
 
@@ -53,12 +56,32 @@ impl GpuProverBuilder {
         self
     }
 
+    /// Cache the per-level setup data at `path`. On the first call the file is
+    /// missing, the prover computes the setup as usual and writes it; on later
+    /// calls the file is loaded and the compute is skipped.
+    ///
+    /// The caller is responsible for keying the path on whatever distinguishes
+    /// the underlying binaries (e.g. an app-binary hash). Stale cache files
+    /// produce proving-time failures, not load-time errors.
+    pub fn with_setup_cache_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.setup_cache_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn maybe_setup_cache_path(self, path: Option<PathBuf>) -> Self {
+        match path {
+            Some(p) => self.with_setup_cache_path(p),
+            None => self,
+        }
+    }
+
     pub fn build(self) -> Result<GpuProver> {
         GpuProver::new(
             &self.app_bin_path,
             self.worker_threads,
             self.security,
             self.level,
+            self.setup_cache_path,
         )
     }
 }
@@ -94,6 +117,7 @@ impl GpuProver {
         worker_threads: Option<usize>,
         security: SecurityLevel,
         level: ProverLevel,
+        setup_cache_path: Option<PathBuf>,
     ) -> Result<Self> {
         if matches!(worker_threads, Some(0)) {
             return Err(HostError::Prover(
@@ -102,8 +126,13 @@ impl GpuProver {
         }
 
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
-        let (command_tx, worker_handle) =
-            spawn_worker(app_bin_path, worker_threads, security, level)?;
+        let (command_tx, worker_handle) = spawn_worker(
+            app_bin_path,
+            worker_threads,
+            security,
+            level,
+            setup_cache_path,
+        )?;
 
         Ok(Self {
             command_tx,
@@ -189,6 +218,7 @@ fn spawn_worker(
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
+    setup_cache_path: Option<PathBuf>,
 ) -> Result<(mpsc::Sender<WorkerCommand>, JoinHandle<()>)> {
     let (command_tx, command_rx) = mpsc::channel();
     let (init_tx, init_rx) = mpsc::channel();
@@ -203,6 +233,7 @@ fn spawn_worker(
                 worker_threads,
                 security,
                 level,
+                setup_cache_path,
             )
         })
         .map_err(|err| {
@@ -235,6 +266,7 @@ fn gpu_worker_loop(
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
+    setup_cache_path: Option<PathBuf>,
 ) {
     // Keep all prover state inside this dedicated thread so a panic does not unwind
     // through host-call boundaries or require `AssertUnwindSafe`.
@@ -243,6 +275,7 @@ fn gpu_worker_loop(
         worker_threads,
         security,
         level.as_unrolled_level(),
+        setup_cache_path.as_deref(),
     ) {
         Ok(prover) => prover,
         Err(err) => {
@@ -294,6 +327,7 @@ fn create_unrolled_prover(
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: execution_utils::unrolled_gpu::UnrolledProverLevel,
+    setup_cache_path: Option<&Path>,
 ) -> Result<UnrolledProver> {
     let base_path = base_path(app_bin_path)?;
     let mut configuration = ExecutionProverConfiguration::default();
@@ -301,10 +335,75 @@ fn create_unrolled_prover(
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
     }
-    Ok(UnrolledProver::new(
-        security.into(),
-        &base_path,
-        configuration,
-        level,
-    ))
+
+    let Some(cache_path) = setup_cache_path else {
+        return Ok(UnrolledProver::new(
+            security.into(),
+            &base_path,
+            configuration,
+            level,
+        ));
+    };
+
+    if cache_path.exists() {
+        info!(path = %cache_path.display(), "Loading GPU prover setup cache");
+        let bytes = std::fs::read(cache_path).map_err(|err| {
+            HostError::Prover(format!(
+                "failed to read setup cache {}: {err}",
+                cache_path.display()
+            ))
+        })?;
+        let (cache, decoded_len): (UnrolledProverCache, usize) =
+            bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).map_err(
+                |err| {
+                    HostError::Prover(format!(
+                        "failed to decode setup cache {}: {err}",
+                        cache_path.display()
+                    ))
+                },
+            )?;
+        if decoded_len != bytes.len() {
+            return Err(HostError::Prover(format!(
+                "setup cache {} has trailing bytes",
+                cache_path.display()
+            )));
+        }
+        return UnrolledProver::new_with_cache(
+            security.into(),
+            &base_path,
+            configuration,
+            level,
+            &cache,
+        )
+        .map_err(|err| {
+            HostError::Prover(format!(
+                "setup cache {} is incompatible: {err}",
+                cache_path.display()
+            ))
+        });
+    }
+
+    info!(path = %cache_path.display(), "Setup cache missing, computing and saving");
+    let prover = UnrolledProver::new(security.into(), &base_path, configuration, level);
+    let cache = prover.dump_cache();
+    let encoded = bincode::serde::encode_to_vec(&cache, bincode::config::standard())
+        .map_err(|err| HostError::Prover(format!("failed to encode setup cache: {err}")))?;
+    if let Some(parent) = cache_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                HostError::Prover(format!(
+                    "failed to create setup cache directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+    }
+    std::fs::write(cache_path, &encoded).map_err(|err| {
+        HostError::Prover(format!(
+            "failed to write setup cache {}: {err}",
+            cache_path.display()
+        ))
+    })?;
+    info!(path = %cache_path.display(), bytes = encoded.len(), "Wrote GPU prover setup cache");
+    Ok(prover)
 }
