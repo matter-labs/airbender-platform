@@ -72,6 +72,17 @@ mod tests {
         fs::remove_file(&file_path).expect("remove input hex file");
     }
 
+    #[test]
+    fn serializes_small_u32_as_varint_payload() {
+        let mut inputs = Inputs::new();
+        inputs.push(&10u32).expect("frame input value");
+
+        // This fixture documents the format expected by CLI and workflow input
+        // files. Bincode's standard config encodes small integers as varints, so
+        // `10u32` is a one-byte payload rather than a four-byte little-endian word.
+        assert_eq!(inputs.words(), &[1, 0x0a000000]);
+    }
+
     fn test_file_path(prefix: &str) -> PathBuf {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)

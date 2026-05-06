@@ -147,9 +147,10 @@ jobs:
 
           chmod +x airbender-gpu-e2e/bin/cargo-airbender
 
-          # `Inputs::push(&10u32)` serializes to a 4-byte payload framed as two
-          # u32 words: byte length followed by the little-endian value bytes.
-          printf '00000004\n0a000000\n' > input.hex
+          # `Inputs::push(&10u32)` uses bincode's standard varint encoding, so
+          # the payload is one byte framed as two u32 words: byte length followed
+          # by the value byte padded to a full input word.
+          printf '00000001\n0a000000\n' > input.hex
 
           app_bin="airbender-gpu-e2e/fibonacci/app/app.bin"
           proof_path="output/proof-${{ matrix.security_bits }}.bin"
