@@ -51,12 +51,6 @@ impl Scalar {
         Self(ScalarInner::from_u128(n))
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
-    pub(crate) fn from_be_hex(hex: &str) -> Self {
-        Self(ScalarInner::from_be_hex(hex))
-    }
-
     pub fn from_signature(signature: &crate::k256::ecdsa::Signature) -> (Self, Self) {
         let (r, s) = signature.split_scalars();
         (Self::from_k256_scalar(*r), Self::from_k256_scalar(*s))

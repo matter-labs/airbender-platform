@@ -105,12 +105,6 @@ impl ScalarInner {
         self
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
-    pub(super) fn from_u128(n: u128) -> Self {
-        Self(BigInt([n as u64, (n >> 64) as u64, 0, 0])).to_representation()
-    }
-
     pub(super) const fn from_be_hex_unchecked(hex: &str) -> Self {
         let bytes = hex.as_bytes();
 
