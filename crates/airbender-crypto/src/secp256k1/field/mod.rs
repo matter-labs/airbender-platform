@@ -38,7 +38,7 @@ cfg_if! {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FieldElementConst(pub FieldElementImplConst);
+pub struct FieldElementConst(pub(crate) FieldElementImplConst);
 
 impl FieldElementConst {
     pub const ZERO: Self = Self(FieldElementImplConst::ZERO);
@@ -116,7 +116,7 @@ impl FieldElementConst {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FieldElement(pub FieldElementImpl);
+pub struct FieldElement(pub(crate) FieldElementImpl);
 
 impl FieldElement {
     pub const ZERO: Self = Self(FieldElementImpl::ZERO);

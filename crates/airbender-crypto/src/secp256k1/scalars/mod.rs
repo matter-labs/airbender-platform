@@ -31,7 +31,7 @@ cfg_if! {
 const ORDER_HEX: &str = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141";
 
 #[derive(Debug, Clone, Copy)]
-pub struct Scalar(pub ScalarInner);
+pub struct Scalar(pub(crate) ScalarInner);
 
 impl Scalar {
     pub const ZERO: Self = Self(ScalarInner::ZERO);
