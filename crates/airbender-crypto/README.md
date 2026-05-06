@@ -14,6 +14,7 @@
 
 - Hashing modules such as `sha256`, `sha3`, `ripemd160`, and `blake2s`.
 - Curve and field modules including `secp256k1`, `secp256r1`, `bn254`, and `bls12_381`.
+- `Secp256k1Hooks` trait for plugging custom implementations of field sqrt, field inverse, and scalar inverse into EC recovery. This allows oracle-based proving workflows where the prover provides hints and the verifier checks them.
 - Re-exports of supporting crates such as `k256`, `p256`, and arkworks types used by the Airbender integrations.
 
 ## Features
