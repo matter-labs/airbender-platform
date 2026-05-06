@@ -1,4 +1,10 @@
 #![doc = include_str!("../README.md")]
+// TODO: This feature is not really required, but added as a workaround for:
+// https://github.com/rust-lang/rust/issues/141492
+// See also:
+// - https://github.com/rust-lang/rust/issues/144690
+// - https://github.com/rust-lang/rust/issues/133199
+#![cfg_attr(doc, feature(generic_const_exprs))]
 
 mod cli;
 mod commands;
