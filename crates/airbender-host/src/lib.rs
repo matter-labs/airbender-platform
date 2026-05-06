@@ -1,4 +1,10 @@
 #![doc = include_str!("../README.md")]
+// TODO: This feature is not really required, but added as a workaround for:
+// https://github.com/rust-lang/rust/issues/141492
+// See also:
+// - https://github.com/rust-lang/rust/issues/144690
+// - https://github.com/rust-lang/rust/issues/133199
+#![cfg_attr(doc, feature(generic_const_exprs))]
 
 mod cycle_marker;
 mod error;
@@ -8,6 +14,7 @@ mod proof;
 mod prover;
 mod receipt;
 mod runner;
+mod security;
 mod verifier;
 mod vk;
 
@@ -27,6 +34,7 @@ pub use runner::{
     resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, TranspilerRunner,
     TranspilerRunnerBuilder, DEFAULT_CYCLES,
 };
+pub use security::SecurityLevel;
 pub use verifier::{
     verify_real_proof_with_vk, DevVerificationKey, DevVerifier, DevVerifierBuilder,
     RealUnifiedVerificationKey, RealUnrolledVerificationKey, RealVerifier, RealVerifierBuilder,

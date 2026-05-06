@@ -6,6 +6,7 @@ use airbender_host::Prover;
 
 pub fn run(args: ProveArgs) -> Result<()> {
     let input_words = input::parse_input_words(&args.input)?;
+    let security = args.security;
 
     let prove_result = match args.backend {
         ProverBackendArg::Dev => {
@@ -19,7 +20,9 @@ pub fn run(args: ProveArgs) -> Result<()> {
                 tracing::warn!("ignoring `--level` for dev backend");
             }
 
+            let security = security.into();
             let prover = airbender_host::DevProverBuilder::new(&args.app_bin)
+                .with_security(security)
                 .maybe_cycles(args.cycles)
                 .build()
                 .map_err(|err| {
@@ -45,8 +48,10 @@ pub fn run(args: ProveArgs) -> Result<()> {
             #[cfg(feature = "gpu-prover")]
             {
                 let level = as_host_level(args.level);
+                let security = security.into();
                 let prover = airbender_host::GpuProverBuilder::new(&args.app_bin)
                     .with_level(level)
+                    .with_security(security)
                     .maybe_worker_threads(args.threads)
                     .build()
                     .map_err(|err| {
@@ -74,6 +79,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
         }
         ProverBackendArg::Cpu => {
             let level = as_host_level(args.level);
+            let security = security.into();
             if level != airbender_host::ProverLevel::Base {
                 return Err(
                     CliError::new("CPU backend currently supports only `--level base`")
@@ -82,6 +88,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
             }
 
             let prover = airbender_host::CpuProverBuilder::new(&args.app_bin)
+                .with_security(security)
                 .maybe_worker_threads(args.threads)
                 .maybe_cycles(args.cycles)
                 .maybe_ram_bound(args.ram_bound)
@@ -121,6 +128,7 @@ pub fn run(args: ProveArgs) -> Result<()> {
     ui::success("proof generated");
     ui::field("backend", backend_name(args.backend));
     ui::field("level", proof_level(args.backend, args.level));
+    ui::field("security", security);
     ui::field("cycles", prove_result.cycles);
     ui::field("output", args.output.display());
 

@@ -2,6 +2,7 @@ use super::{resolve_app_bin_path, ProveResult, Prover};
 use crate::error::Result;
 use crate::proof::{hash_app_bin, hash_input_words, DevProof, Proof};
 use crate::runner::{Runner, TranspilerRunner, TranspilerRunnerBuilder};
+use crate::security::SecurityLevel;
 use std::path::{Path, PathBuf};
 
 /// Builder for creating a configured development prover.
@@ -9,6 +10,7 @@ pub struct DevProverBuilder {
     app_bin_path: PathBuf,
     cycles: Option<usize>,
     text_path: Option<PathBuf>,
+    security: SecurityLevel,
 }
 
 impl DevProverBuilder {
@@ -17,6 +19,7 @@ impl DevProverBuilder {
             app_bin_path: app_bin_path.as_ref().to_path_buf(),
             cycles: None,
             text_path: None,
+            security: SecurityLevel::default(),
         }
     }
 
@@ -37,6 +40,11 @@ impl DevProverBuilder {
         self
     }
 
+    pub fn with_security(mut self, security: SecurityLevel) -> Self {
+        self.security = security;
+        self
+    }
+
     pub fn maybe_text_path(self, text_path: Option<impl AsRef<Path>>) -> Self {
         match text_path {
             Some(v) => self.with_text_path(v),
@@ -45,18 +53,29 @@ impl DevProverBuilder {
     }
 
     pub fn build(self) -> Result<DevProver> {
-        DevProver::new(&self.app_bin_path, self.cycles, self.text_path.as_deref())
+        DevProver::new(
+            &self.app_bin_path,
+            self.cycles,
+            self.text_path.as_deref(),
+            self.security,
+        )
     }
 }
 
 /// Development prover that records transpiler execution metadata instead of generating a zk-proof.
 pub struct DevProver {
+    security: SecurityLevel,
     app_bin_hash: [u8; 32],
     runner: TranspilerRunner,
 }
 
 impl DevProver {
-    fn new(app_bin_path: &Path, cycles: Option<usize>, text_path: Option<&Path>) -> Result<Self> {
+    fn new(
+        app_bin_path: &Path,
+        cycles: Option<usize>,
+        text_path: Option<&Path>,
+        security: SecurityLevel,
+    ) -> Result<Self> {
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
         let app_bin_hash = hash_app_bin(&app_bin_path)?;
 
@@ -66,6 +85,7 @@ impl DevProver {
             .build()?;
 
         Ok(Self {
+            security,
             app_bin_hash,
             runner,
         })
@@ -79,6 +99,7 @@ impl Prover for DevProver {
         let receipt = execution.receipt;
 
         let proof = Proof::Dev(DevProof {
+            security: self.security,
             app_bin_hash: self.app_bin_hash,
             input_words_hash: hash_input_words(input_words),
             receipt: receipt.clone(),

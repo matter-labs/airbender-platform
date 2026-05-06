@@ -19,14 +19,13 @@ pub(crate) use self::precompile_logic_simulator::keccak_f1600;
 
 use crate::MiniDigest;
 
-use common_constants::delegation_types::keccak_special5::KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS;
+use common_constants::delegation_types::keccak_special5::{
+    KeccakF1600State, KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS,
+};
 
-// NB: repr(align(256)) ensures that the lowest u16 of the pointer can fully address
-//     all the words without carry, s.t. we can very cheaply offset the ptr in-circuit
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-#[repr(align(256))]
-pub(crate) struct AlignedState([u64; KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS]);
+// Use Airbender's ABI type directly so the digest state layout stays coupled to
+// the delegation circuit contract exposed by `common_constants`.
+pub(crate) type AlignedState = KeccakF1600State;
 
 // NOTE: Sha3 and Keccak differ only in padding, so we can make it generic for free,
 // whether we will need it in practice or not. We also do not use a separate buffer for input,
@@ -164,7 +163,7 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
     #[inline(always)]
     fn new() -> Self {
         Self {
-            state: AlignedState([0; KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS]),
+            state: AlignedState::zeroed(),
             filled_bytes: 0,
         }
     }
@@ -265,7 +264,6 @@ pub mod tests {
 
     #[allow(dead_code)]
     pub fn bad_keccak_f1600_test() {
-        use super::*;
         let state_first = [
             0xF1258F7940E1DDE7,
             0x84D5CCF933C0478A,
@@ -321,7 +319,7 @@ pub mod tests {
             0x1, //0x20D06CD26A8FBF5C,
         ];
 
-        let mut state = super::AlignedState([0; KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS]);
+        let mut state = super::AlignedState::zeroed();
         state.0[..25].copy_from_slice(&state_first);
         super::keccak_f1600(&mut state);
         assert!(state.0[..25] == state_second);
@@ -329,7 +327,6 @@ pub mod tests {
 
     #[allow(dead_code)]
     pub fn keccak_f1600_test() {
-        use super::*;
         let state_first = [
             0xF1258F7940E1DDE7,
             0x84D5CCF933C0478A,
@@ -385,7 +382,7 @@ pub mod tests {
             0x20D06CD26A8FBF5C,
         ];
 
-        let mut state = super::AlignedState([0; KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS]);
+        let mut state = super::AlignedState::zeroed();
         state.0[..25].copy_from_slice(&state_first);
         super::keccak_f1600(&mut state);
         assert!(state.0[..25] == state_second);
@@ -425,7 +422,7 @@ pub mod tests {
     #[allow(dead_code)]
     pub fn hash_chain_test() {
         use super::*;
-        let mut state = AlignedState([0; KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS]);
+        let mut state = AlignedState::zeroed();
         for _ in 0..2000 {
             super::keccak_f1600(&mut state);
         }

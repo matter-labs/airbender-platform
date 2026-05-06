@@ -12,7 +12,7 @@
 - `new`: create a host + guest template project.
 - `build`: compile a guest and package a `dist/` bundle.
 - `run` and `flamegraph`: execute guest binaries through the transpiler.
-- `prove`, `generate-vk`, and `verify-proof`: work with dev, CPU, or GPU proof flows.
+- `prove`, `generate-vk`, and `verify-proof`: work with dev, CPU, or GPU proof flows, including 80-bit or 100-bit real proof security.
 - `clean`: remove Docker resources created by reproducible builds.
 
 ## Installation

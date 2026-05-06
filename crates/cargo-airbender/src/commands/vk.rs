@@ -6,33 +6,38 @@ use std::path::Path;
 
 pub fn generate(args: GenerateVkArgs) -> Result<()> {
     ensure_gpu_vk_support()?;
+    let security = args.security;
+    let host_security = security.into();
 
     let vk = match args.level {
         ProverLevelArg::RecursionUnified => {
-            let vk = airbender_host::compute_unified_vk(&args.app_bin).map_err(|err| {
-                CliError::with_source(
-                    format!(
-                        "failed to compute unified verification keys for `{}`",
-                        args.app_bin.display()
-                    ),
-                    err,
-                )
-            })?;
+            let vk = airbender_host::compute_unified_vk(&args.app_bin, host_security).map_err(
+                |err| {
+                    CliError::with_source(
+                        format!(
+                            "failed to compute unified verification keys for `{}`",
+                            args.app_bin.display()
+                        ),
+                        err,
+                    )
+                },
+            )?;
             airbender_host::VerificationKey::RealUnified(
                 airbender_host::RealUnifiedVerificationKey { vk },
             )
         }
         ProverLevelArg::Base | ProverLevelArg::RecursionUnrolled => {
             let level = as_host_level(args.level);
-            let vk = airbender_host::compute_unrolled_vk(&args.app_bin, level).map_err(|err| {
-                CliError::with_source(
-                    format!(
-                        "failed to compute unrolled verification keys for `{}`",
-                        args.app_bin.display()
-                    ),
-                    err,
-                )
-            })?;
+            let vk = airbender_host::compute_unrolled_vk(&args.app_bin, level, host_security)
+                .map_err(|err| {
+                    CliError::with_source(
+                        format!(
+                            "failed to compute unrolled verification keys for `{}`",
+                            args.app_bin.display()
+                        ),
+                        err,
+                    )
+                })?;
             airbender_host::VerificationKey::RealUnrolled(
                 airbender_host::RealUnrolledVerificationKey { level, vk },
             )
@@ -43,6 +48,7 @@ pub fn generate(args: GenerateVkArgs) -> Result<()> {
 
     ui::success("verification keys generated");
     ui::field("level", level_name(args.level));
+    ui::field("security", security);
     ui::field("output", args.output.display());
 
     Ok(())
@@ -85,7 +91,7 @@ pub fn verify(args: VerifyProofArgs) -> Result<()> {
         )
     })?;
 
-    let level = match &proof {
+    let (level, security) = match &proof {
         airbender_host::Proof::Dev(_) => {
             return Err(CliError::new(
                 "detected a dev proof; `cargo airbender verify-proof` supports only real proofs",
@@ -101,7 +107,7 @@ pub fn verify(args: VerifyProofArgs) -> Result<()> {
 
             airbender_host::verify_real_proof_with_vk(proof, &vk, expected_output_commit)
                 .map_err(|err| CliError::with_source("proof verification failed", err))?;
-            proof.level()
+            (proof.level(), proof.security())
         }
     };
 
@@ -111,6 +117,7 @@ pub fn verify(args: VerifyProofArgs) -> Result<()> {
 
     ui::success("proof verified");
     ui::field("level", host_level_name(level));
+    ui::field("security", security);
     if let Some(words) = expected_output_words {
         ui::field("expected_output", format_output_words(&words));
     }
@@ -253,7 +260,7 @@ fn write_bincode<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 mod tests {
     use super::*;
     #[cfg(not(feature = "gpu-prover"))]
-    use crate::cli::GenerateVkArgs;
+    use crate::cli::{GenerateVkArgs, SecurityLevelArg};
     #[cfg(not(feature = "gpu-prover"))]
     use std::path::PathBuf;
 
@@ -264,6 +271,7 @@ mod tests {
             app_bin: PathBuf::from("app.bin"),
             output: PathBuf::from("vk.bin"),
             level: ProverLevelArg::Base,
+            security: SecurityLevelArg::default(),
         })
         .expect_err("generate-vk must require gpu-prover support");
 

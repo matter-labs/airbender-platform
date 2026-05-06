@@ -12,6 +12,7 @@
 - `Program` for loading a packaged `dist/` directory and validating manifest hashes.
 - `Inputs` for serializing typed values or raw bytes into the canonical guest input word stream.
 - Runner, prover, and verifier builders covering transpiler execution plus dev, CPU, and GPU proving flows.
+- Runtime selection between 80-bit and 100-bit security for real proof and verification-key generation.
 - Cycle-marker utilities for profiling transpiler runs.
 
 ## Features

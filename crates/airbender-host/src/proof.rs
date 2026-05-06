@@ -1,6 +1,7 @@
 use crate::error::Result;
 use crate::prover::ProverLevel;
 use crate::receipt::Receipt;
+use crate::security::SecurityLevel;
 use sha3::Digest;
 use std::path::Path;
 
@@ -13,13 +14,26 @@ pub enum Proof {
 }
 
 impl Proof {
+    pub fn security(&self) -> SecurityLevel {
+        match self {
+            Self::Dev(proof) => proof.security,
+            Self::Real(proof) => proof.security,
+        }
+    }
+
     pub fn debug_info(&self) -> String {
         match self {
             Self::Dev(proof) => format!(
-                "dev proof: cycles={}, output={:?}",
-                proof.cycles, proof.receipt.output
+                "dev proof: security={} bits, cycles={}, output={:?}",
+                proof.security, proof.cycles, proof.receipt.output
             ),
-            Self::Real(proof) => proof.inner.debug_info(),
+            Self::Real(proof) => {
+                format!(
+                    "real proof: security={} bits, {}",
+                    proof.security,
+                    proof.inner.debug_info()
+                )
+            }
         }
     }
 }
@@ -27,6 +41,7 @@ impl Proof {
 /// Development proof emitted by the transpiler-based prover.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DevProof {
+    pub security: SecurityLevel,
     pub app_bin_hash: [u8; 32],
     pub input_words_hash: [u8; 32],
     pub receipt: Receipt,
@@ -36,16 +51,26 @@ pub struct DevProof {
 /// Real cryptographic proof emitted by CPU/GPU provers.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RealProof {
+    security: SecurityLevel,
     level: ProverLevel,
     inner: execution_utils::unrolled::UnrolledProgramProof,
 }
 
 impl RealProof {
     pub(crate) fn new(
+        security: SecurityLevel,
         level: ProverLevel,
         inner: execution_utils::unrolled::UnrolledProgramProof,
     ) -> Self {
-        Self { level, inner }
+        Self {
+            security,
+            level,
+            inner,
+        }
+    }
+
+    pub fn security(&self) -> SecurityLevel {
+        self.security
     }
 
     pub fn level(&self) -> ProverLevel {

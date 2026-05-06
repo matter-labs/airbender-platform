@@ -178,6 +178,13 @@ pub struct ProveArgs {
     pub ram_bound: Option<usize>,
     #[arg(long, value_enum, default_value_t = ProverLevelArg::RecursionUnified)]
     pub level: ProverLevelArg,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = SecurityLevelArg::default(),
+        help = "Security level recorded in proof artifacts (80 or 100 bits; default: 100)"
+    )]
+    pub security: SecurityLevelArg,
 }
 
 #[derive(Args, Debug)]
@@ -187,6 +194,13 @@ pub struct GenerateVkArgs {
     pub output: PathBuf,
     #[arg(long, value_enum, default_value_t = ProverLevelArg::RecursionUnified)]
     pub level: ProverLevelArg,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = SecurityLevelArg::default(),
+        help = "Security level for verification keys (80 or 100 bits; default: 100)"
+    )]
+    pub security: SecurityLevelArg,
 }
 
 #[derive(Args, Debug)]
@@ -214,6 +228,45 @@ pub enum ProverLevelArg {
     Base,
     RecursionUnrolled,
     RecursionUnified,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityLevelArg {
+    #[value(name = "80")]
+    Bits80,
+    #[value(name = "100")]
+    Bits100,
+}
+
+impl Default for SecurityLevelArg {
+    fn default() -> Self {
+        Self::from(airbender_host::SecurityLevel::default())
+    }
+}
+
+impl From<airbender_host::SecurityLevel> for SecurityLevelArg {
+    fn from(security: airbender_host::SecurityLevel) -> Self {
+        match security {
+            airbender_host::SecurityLevel::Bits80 => Self::Bits80,
+            airbender_host::SecurityLevel::Bits100 => Self::Bits100,
+        }
+    }
+}
+
+impl From<SecurityLevelArg> for airbender_host::SecurityLevel {
+    fn from(security: SecurityLevelArg) -> Self {
+        match security {
+            SecurityLevelArg::Bits80 => Self::Bits80,
+            SecurityLevelArg::Bits100 => Self::Bits100,
+        }
+    }
+}
+
+impl std::fmt::Display for SecurityLevelArg {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let host_security = airbender_host::SecurityLevel::from(*self);
+        write!(formatter, "{host_security}")
+    }
 }
 
 #[cfg(test)]
@@ -436,5 +489,95 @@ mod tests {
         .expect_err("repeated expected-output flag should fail");
 
         assert!(err.to_string().contains("cannot be used multiple times"));
+    }
+
+    #[test]
+    fn parse_prove_security_100() {
+        let cli = Cli::parse_from([
+            "cargo-airbender",
+            "prove",
+            "app.bin",
+            "--input",
+            "input.hex",
+            "--output",
+            "proof.bin",
+            "--backend",
+            "gpu",
+            "--security",
+            "100",
+        ]);
+        match cli.command {
+            Commands::Prove(args) => {
+                assert_eq!(args.security, SecurityLevelArg::Bits100);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_prove_security_defaults_to_100() {
+        let cli = Cli::parse_from([
+            "cargo-airbender",
+            "prove",
+            "app.bin",
+            "--input",
+            "input.hex",
+            "--output",
+            "proof.bin",
+            "--backend",
+            "gpu",
+        ]);
+        match cli.command {
+            Commands::Prove(args) => {
+                assert_eq!(args.security, SecurityLevelArg::Bits100);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_generate_vk_security_80() {
+        let cli = Cli::parse_from([
+            "cargo-airbender",
+            "generate-vk",
+            "app.bin",
+            "--security",
+            "80",
+        ]);
+        match cli.command {
+            Commands::GenerateVk(args) => {
+                assert_eq!(args.security, SecurityLevelArg::Bits80);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_generate_vk_security_defaults_to_100() {
+        let cli = Cli::parse_from(["cargo-airbender", "generate-vk", "app.bin"]);
+        match cli.command {
+            Commands::GenerateVk(args) => {
+                assert_eq!(args.security, SecurityLevelArg::Bits100);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_prove_rejects_invalid_security() {
+        let err = Cli::try_parse_from([
+            "cargo-airbender",
+            "prove",
+            "app.bin",
+            "--input",
+            "input.hex",
+            "--output",
+            "proof.bin",
+            "--security",
+            "90",
+        ])
+        .expect_err("invalid security should fail");
+
+        assert!(err.to_string().contains("invalid value"));
     }
 }

@@ -1,0 +1,191 @@
+name: Test on GPU
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+env:
+  # Keep this value in sync with rust-toolchain.toml.
+  RUST_TOOLCHAIN: nightly-2026-02-10
+
+jobs:
+  airbender-platform-gpu-build:
+    runs-on: [ matterlabs-ci-runner-highmem ]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # matterlabs-ci-gpu-runner currently has CUDA 12.2 driver support only, so
+        # CUDA 13-compiled binaries are not runnable there.
+        cuda: [ "12.9.1-devel-ubuntu22.04" ]
+    container:
+      image: nvidia/cuda:${{ matrix.cuda }}
+    steps:
+      - name: Prepare environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt update
+          apt install -y build-essential ca-certificates clang cmake curl git libssl-dev lld pkg-config wget
+          echo "/usr/local/nvidia/bin:/usr/local/cuda/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@v4
+
+      - name: Setup rustup
+        run: |
+          wget -q -O - https://sh.rustup.rs | bash -s -- -y --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+          echo "export PATH=\"$HOME/.cargo/bin:\$PATH\"" >> "${HOME}/.bash_profile"
+
+      - name: Install Rust prerequisites
+        run: |
+          rustup component add rust-src llvm-tools-preview
+          cargo install cargo-binutils --locked
+
+      # We need cmake 3.30 because older cmake versions do not properly pass cuda_standard_20.
+      - name: Setup CMake
+        run: |
+          curl -LO https://github.com/Kitware/CMake/releases/download/v3.30.2/cmake-3.30.2-linux-x86_64.sh
+          chmod +x cmake-3.30.2-linux-x86_64.sh
+          ./cmake-3.30.2-linux-x86_64.sh --skip-license --prefix=/usr/local
+
+      - name: Check CUDA version
+        run: nvcc --version
+
+      - name: Build cargo-airbender and Fibonacci guest artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Build one GPU-enabled CLI binary, then reuse it for both security
+          # levels in the runtime test matrix. Build for A100 (sm_80), L4
+          # (sm_89), and H100 (sm_90), matching the self-hosted GPU fleet.
+          CUDAARCHS="80;89;90" \
+          cargo +"$RUST_TOOLCHAIN" build \
+            -p cargo-airbender \
+            --release \
+            --locked \
+            --target x86_64-unknown-linux-gnu
+
+          target/x86_64-unknown-linux-gnu/release/cargo-airbender build \
+            --project examples/fibonacci/guest \
+            -- \
+            --locked
+
+          mkdir -p artifacts/bin artifacts/fibonacci
+          cp target/x86_64-unknown-linux-gnu/release/cargo-airbender artifacts/bin/cargo-airbender
+          cp -r examples/fibonacci/guest/dist/app artifacts/fibonacci/app
+
+      - name: Upload GPU e2e artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: airbender-platform-${{ matrix.cuda }}-gpu-e2e
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 1
+
+  airbender-platform-fibonacci-gpu-e2e:
+    runs-on: [ matterlabs-ci-gpu-runner ]
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep this aligned with the build matrix because runner driver support is
+        # currently limited to CUDA 12.2 (CUDA 13 artifacts fail at runtime).
+        cuda: [ "12.9.1-devel-ubuntu22.04" ]
+        security_bits: [ "80", "100" ]
+    needs: airbender-platform-gpu-build
+    steps:
+      - name: Prepare environment
+        run: echo "/usr/local/nvidia/bin:/usr/local/cuda/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@v4
+
+      - name: Check Nvidia driver version
+        run: nvidia-smi
+
+      - name: Configure low VRAM mode
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gpu_info="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader)"
+          min_full_vram_mib=32768
+          low_vram_mode=0
+          while IFS=',' read -r memory; do
+            memory_mib="$(echo "$memory" | tr -dc '0-9')"
+            if [[ "$memory_mib" -lt "$min_full_vram_mib" ]]; then
+              low_vram_mode=1
+              break
+            fi
+          done <<< "$gpu_info"
+
+          if [[ "$low_vram_mode" -eq 1 ]]; then
+            echo "ZKSYNC_AIRBENDER_LOW_VRAM_MODE=1" >> "$GITHUB_ENV"
+            echo "Enabled low VRAM mode"
+          else
+            echo "Low VRAM mode is not required"
+          fi
+
+      - name: Download GPU e2e artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: airbender-platform-${{ matrix.cuda }}-gpu-e2e
+          path: airbender-gpu-e2e/
+
+      - name: Run Fibonacci through cargo-airbender
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x airbender-gpu-e2e/bin/cargo-airbender
+
+          # `Inputs::push(&10u32)` uses bincode's standard varint encoding, so
+          # the payload is one byte framed as two u32 words: byte length followed
+          # by the value byte padded to a full input word.
+          printf '00000001\n0a000000\n' > input.hex
+
+          app_bin="airbender-gpu-e2e/fibonacci/app/app.bin"
+          proof_path="output/proof-${{ matrix.security_bits }}.bin"
+          vk_path="output/vk-${{ matrix.security_bits }}.bin"
+          mkdir -p output
+
+          airbender-gpu-e2e/bin/cargo-airbender run "$app_bin" --input input.hex
+
+          airbender-gpu-e2e/bin/cargo-airbender prove "$app_bin" \
+            --input input.hex \
+            --output "$proof_path" \
+            --backend gpu \
+            --level recursion-unified \
+            --security "${{ matrix.security_bits }}"
+
+          airbender-gpu-e2e/bin/cargo-airbender generate-vk "$app_bin" \
+            --output "$vk_path" \
+            --level recursion-unified \
+            --security "${{ matrix.security_bits }}"
+
+          airbender-gpu-e2e/bin/cargo-airbender verify-proof "$proof_path" \
+            --vk "$vk_path" \
+            --expected-output 55
+
+  # Keep branch protection tied to one stable GPU check name even if we split
+  # GPU coverage across multiple jobs or matrix entries later on.
+  gpu-checks:
+    name: gpu-checks
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - airbender-platform-gpu-build
+      - airbender-platform-fibonacci-gpu-e2e
+    steps:
+      - name: Decide on GPU checks
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}

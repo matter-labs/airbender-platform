@@ -3,6 +3,7 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
+use crate::security::SecurityLevel;
 use execution_utils::unrolled_gpu::UnrolledProver;
 use gpu_prover::execution::prover::ExecutionProverConfiguration;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
@@ -16,6 +17,7 @@ use std::thread::JoinHandle;
 pub struct GpuProverBuilder {
     app_bin_path: PathBuf,
     worker_threads: Option<usize>,
+    security: SecurityLevel,
     level: ProverLevel,
 }
 
@@ -24,6 +26,7 @@ impl GpuProverBuilder {
         Self {
             app_bin_path: app_bin_path.as_ref().to_path_buf(),
             worker_threads: None,
+            security: SecurityLevel::default(),
             level: ProverLevel::RecursionUnified,
         }
     }
@@ -45,8 +48,18 @@ impl GpuProverBuilder {
         self
     }
 
+    pub fn with_security(mut self, security: SecurityLevel) -> Self {
+        self.security = security;
+        self
+    }
+
     pub fn build(self) -> Result<GpuProver> {
-        GpuProver::new(&self.app_bin_path, self.worker_threads, self.level)
+        GpuProver::new(
+            &self.app_bin_path,
+            self.worker_threads,
+            self.security,
+            self.level,
+        )
     }
 }
 
@@ -76,7 +89,12 @@ enum WorkerCommand {
 }
 
 impl GpuProver {
-    fn new(app_bin_path: &Path, worker_threads: Option<usize>, level: ProverLevel) -> Result<Self> {
+    fn new(
+        app_bin_path: &Path,
+        worker_threads: Option<usize>,
+        security: SecurityLevel,
+        level: ProverLevel,
+    ) -> Result<Self> {
         if matches!(worker_threads, Some(0)) {
             return Err(HostError::Prover(
                 "worker thread count must be greater than zero".to_string(),
@@ -84,7 +102,8 @@ impl GpuProver {
         }
 
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
-        let (command_tx, worker_handle) = spawn_worker(app_bin_path, worker_threads, level)?;
+        let (command_tx, worker_handle) =
+            spawn_worker(app_bin_path, worker_threads, security, level)?;
 
         Ok(Self {
             command_tx,
@@ -168,6 +187,7 @@ impl Drop for GpuProver {
 fn spawn_worker(
     app_bin_path: PathBuf,
     worker_threads: Option<usize>,
+    security: SecurityLevel,
     level: ProverLevel,
 ) -> Result<(mpsc::Sender<WorkerCommand>, JoinHandle<()>)> {
     let (command_tx, command_rx) = mpsc::channel();
@@ -175,7 +195,16 @@ fn spawn_worker(
 
     let worker_handle = std::thread::Builder::new()
         .name("airbender-gpu-prover".to_string())
-        .spawn(move || gpu_worker_loop(command_rx, init_tx, app_bin_path, worker_threads, level))
+        .spawn(move || {
+            gpu_worker_loop(
+                command_rx,
+                init_tx,
+                app_bin_path,
+                worker_threads,
+                security,
+                level,
+            )
+        })
         .map_err(|err| {
             HostError::Prover(format!("failed to spawn GPU prover worker thread: {err}"))
         })?;
@@ -204,18 +233,23 @@ fn gpu_worker_loop(
     init_tx: mpsc::Sender<Result<()>>,
     app_bin_path: PathBuf,
     worker_threads: Option<usize>,
+    security: SecurityLevel,
     level: ProverLevel,
 ) {
     // Keep all prover state inside this dedicated thread so a panic does not unwind
     // through host-call boundaries or require `AssertUnwindSafe`.
-    let prover =
-        match create_unrolled_prover(&app_bin_path, worker_threads, level.as_unrolled_level()) {
-            Ok(prover) => prover,
-            Err(err) => {
-                let _ = init_tx.send(Err(err));
-                return;
-            }
-        };
+    let prover = match create_unrolled_prover(
+        &app_bin_path,
+        worker_threads,
+        security,
+        level.as_unrolled_level(),
+    ) {
+        Ok(prover) => prover,
+        Err(err) => {
+            let _ = init_tx.send(Err(err));
+            return;
+        }
+    };
 
     if init_tx.send(Ok(())).is_err() {
         return;
@@ -231,7 +265,7 @@ fn gpu_worker_loop(
                 // TODO: we use `batch 0` for all the jobs, which can cause issues when generating multiple proofs in parallel.
                 let (inner_proof, cycles) = prover.prove(0, oracle);
                 let receipt = receipt_from_real_proof(&inner_proof);
-                let proof = Proof::Real(RealProof::new(level, inner_proof));
+                let proof = Proof::Real(RealProof::new(security, level, inner_proof));
                 let result = Ok(ProveResult {
                     proof,
                     cycles,
@@ -258,6 +292,7 @@ fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
 fn create_unrolled_prover(
     app_bin_path: &Path,
     worker_threads: Option<usize>,
+    security: SecurityLevel,
     level: execution_utils::unrolled_gpu::UnrolledProverLevel,
 ) -> Result<UnrolledProver> {
     let base_path = base_path(app_bin_path)?;
@@ -266,5 +301,10 @@ fn create_unrolled_prover(
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
     }
-    Ok(UnrolledProver::new(&base_path, configuration, level))
+    Ok(UnrolledProver::new(
+        security.into(),
+        &base_path,
+        configuration,
+        level,
+    ))
 }

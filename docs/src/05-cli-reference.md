@@ -162,6 +162,7 @@ cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
 |--------|-------------|
 | `--backend <dev\|cpu\|gpu>` | Prover backend (default: `dev`) |
 | `--level <base\|recursion-unrolled\|recursion-unified>` | Prover level (default: `recursion-unified`) |
+| `--security <80\|100>` | Security level recorded in proof artifacts (default: `100`) |
 | `--threads <n>` | Worker threads |
 | `--output <file>` | Output proof file (required) |
 | `--cycles <n>` | Cycle limit (dev and CPU backends) |
@@ -170,6 +171,13 @@ cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin
 **Important:** `verify-proof` only accepts real proofs (CPU/GPU). Dev proofs are rejected with a clear error message.
 
 The `cpu` backend is for debugging circuits. It can only prove the base layer and is slow. Use `gpu` for real end-to-end proving.
+
+For legacy 80-bit real proofs, pass the same security level when proving and generating verification keys:
+
+```sh
+cargo airbender prove ./dist/app/app.bin --input ./input.hex --output proof.bin --backend gpu --security 80
+cargo airbender generate-vk ./dist/app/app.bin --output vk.bin --security 80
+```
 
 ---
 
@@ -185,6 +193,7 @@ cargo airbender generate-vk ./dist/app/app.bin --output vk.bin
 |--------|-------------|
 | `--output <file>` | Output path (default: `vk.bin`) |
 | `--level <base\|recursion-unrolled\|recursion-unified>` | VK level |
+| `--security <80\|100>` | Security level for verification keys (default: `100`) |
 
 ---
 
@@ -202,6 +211,7 @@ cargo airbender verify-proof ./proof.bin --vk ./vk.bin
 | `--expected-output <words>` | Expected public output (comma-separated, decimal or `0x` hex) |
 
 When `--expected-output` is omitted, only proof/VK validity is checked (with a warning). Fewer than 8 words are zero-padded.
+The proof and VK files carry their security level, so no `--security` flag is needed for verification.
 
 ```sh
 cargo airbender verify-proof ./proof.bin --vk ./vk.bin --expected-output 42

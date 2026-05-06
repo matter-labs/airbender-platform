@@ -1,4 +1,6 @@
-use airbender_host::{Inputs, Program, Prover, Result, Runner, VerificationRequest, Verifier};
+use airbender_host::{
+    Inputs, Program, Prover, Result, Runner, SecurityLevel, VerificationRequest, Verifier,
+};
 use ruint::aliases::U256;
 use std::path::PathBuf;
 
@@ -32,7 +34,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let prover = program.dev_prover().build()?;
+    let security = SecurityLevel::default();
+    let prover = program.dev_prover().with_security(security).build()?;
     let prove_result = prover.prove(inputs.words())?;
     let proof_valid = prove_result.receipt.output[0] == 1;
     println!(
@@ -41,7 +44,7 @@ fn main() -> Result<()> {
     );
 
     let verifier = program.dev_verifier().build()?;
-    let vk = verifier.generate_vk()?;
+    let vk = verifier.generate_vk(security)?;
     verifier.verify(
         &prove_result.proof,
         &vk,

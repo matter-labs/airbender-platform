@@ -24,7 +24,7 @@ Load the program, push inputs, run it, then prove and verify. Runners and prover
 
 ```rust
 use airbender_host::{
-    Inputs, Program, Prover, Result, Runner, VerificationRequest, Verifier,
+    Inputs, Program, Prover, Result, Runner, SecurityLevel, VerificationRequest, Verifier,
 };
 
 fn run() -> Result<()> {
@@ -41,12 +41,13 @@ fn run() -> Result<()> {
     println!("output x10={}", execution.receipt.output[0]);
 
     // Prove execution
-    let prover = program.dev_prover().build()?;
+    let security = SecurityLevel::default();
+    let prover = program.dev_prover().with_security(security).build()?;
     let prove_result = prover.prove(inputs.words())?;
 
     // Verify the proof
     let verifier = program.dev_verifier().build()?;
-    let vk = verifier.generate_vk()?;
+    let vk = verifier.generate_vk(security)?;
     verifier.verify(
         &prove_result.proof,
         &vk,
@@ -87,36 +88,40 @@ Three prover backends are available:
 
 ```rust
 // Dev - no real cryptography, for local testing
-let prover = program.dev_prover().build()?;
+let prover = program.dev_prover()
+    .with_security(SecurityLevel::default())
+    .build()?;
 
 // GPU - full proving, requires NVIDIA GPU with 32GB+ VRAM
 let prover = program.gpu_prover()
     .with_level(ProverLevel::RecursionUnified)
     .build()?;
 
-// CPU - base layer only, mainly for debugging circuits
+// CPU - base layer only, mainly for debugging circuits.
+// Use 80-bit security only when producing legacy-compatible artifacts.
 let prover = program.cpu_prover()
+    .with_security(SecurityLevel::Bits80)
     .with_worker_threads(8)
     .build()?;
 ```
 
-All provers share the same interface: `prover.prove(inputs.words())`.
+Real CPU and GPU provers default to 100-bit security. Use `.with_security(SecurityLevel::Bits80)` only when you need legacy 80-bit artifacts. All provers share the same interface: `prover.prove(inputs.words())`.
 
 ## Verification
 
 ```rust
 // Dev verification
 let verifier = program.dev_verifier().build()?;
-let vk = verifier.generate_vk()?;
+let vk = verifier.generate_vk(SecurityLevel::default())?;
 verifier.verify(&proof, &vk, VerificationRequest::dev(inputs.words(), &expected))?;
 
 // Real verification (GPU-generated proofs)
 let verifier = program.real_verifier(ProverLevel::RecursionUnified).build()?;
-let vk = verifier.generate_vk()?;
+let vk = verifier.generate_vk(SecurityLevel::default())?;
 verifier.verify(&proof, &vk, VerificationRequest::real(&expected))?;
 ```
 
-Verification can optionally enforce expected public outputs (`x10..x17`) in addition to proof validity.
+Verification can optionally enforce expected public outputs (`x10..x17`) in addition to proof validity. Proofs and verification keys encode their security level, and verification rejects mismatched 80-bit/100-bit artifacts. Verification-key generation takes `SecurityLevel` explicitly so generic dev/real flows do not rely on hidden verifier-side defaults.
 
 ## Receipt Output
 
