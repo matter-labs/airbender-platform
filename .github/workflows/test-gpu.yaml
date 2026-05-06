@@ -43,10 +43,11 @@ jobs:
           wget -q -O - https://sh.rustup.rs | bash -s -- -y --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
           echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
           echo "export PATH=\"$HOME/.cargo/bin:\$PATH\"" >> "${HOME}/.bash_profile"
-          rustup component add rust-src llvm-tools-preview
 
-      - name: Install cargo-binutils
-        run: cargo install cargo-binutils --locked
+      - name: Install Rust prerequisites
+        run: |
+          rustup component add rust-src llvm-tools-preview
+          cargo install cargo-binutils --locked
 
       # We need cmake 3.30 because older cmake versions do not properly pass cuda_standard_20.
       - name: Setup CMake
