@@ -16,6 +16,10 @@ pub enum HostError {
     Prover(String),
     #[error("verification error: {0}")]
     Verification(String),
+    #[error("setup cache not found in path: {0}")]
+    SetupCacheNotFound(String),
+   
+
 }
 
 pub type Result<T> = std::result::Result<T, HostError>;

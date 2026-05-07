@@ -8,11 +8,10 @@ use execution_utils::unrolled_gpu::{UnrolledProver, UnrolledProverCache};
 use gpu_prover::execution::prover::ExecutionProverConfiguration;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use std::any::Any;
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread::JoinHandle;
-use tracing::info;
 
 /// Builder for creating a configured cached GPU prover.
 pub struct GpuProverBuilder {
@@ -345,65 +344,47 @@ fn create_unrolled_prover(
         ));
     };
 
-    if cache_path.exists() {
-        info!(path = %cache_path.display(), "Loading GPU prover setup cache");
-        let bytes = std::fs::read(cache_path).map_err(|err| {
-            HostError::Prover(format!(
-                "failed to read setup cache {}: {err}",
-                cache_path.display()
-            ))
-        })?;
-        let (cache, decoded_len): (UnrolledProverCache, usize) =
-            bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).map_err(
-                |err| {
-                    HostError::Prover(format!(
-                        "failed to decode setup cache {}: {err}",
-                        cache_path.display()
-                    ))
-                },
-            )?;
-        if decoded_len != bytes.len() {
-            return Err(HostError::Prover(format!(
-                "setup cache {} has trailing bytes",
-                cache_path.display()
-            )));
-        }
-        return UnrolledProver::new_with_cache(
-            security.into(),
-            &base_path,
-            configuration,
-            level,
-            &cache,
-        )
-        .map_err(|err| {
-            HostError::Prover(format!(
-                "setup cache {} is incompatible: {err}",
-                cache_path.display()
-            ))
-        });
-    }
-
-    info!(path = %cache_path.display(), "Setup cache missing, computing and saving");
-    let prover = UnrolledProver::new(security.into(), &base_path, configuration, level);
-    let cache = prover.dump_cache();
-    let encoded = bincode::serde::encode_to_vec(&cache, bincode::config::standard())
-        .map_err(|err| HostError::Prover(format!("failed to encode setup cache: {err}")))?;
-    if let Some(parent) = cache_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|err| {
-                HostError::Prover(format!(
-                    "failed to create setup cache directory {}: {err}",
-                    parent.display()
-                ))
-            })?;
-        }
-    }
-    std::fs::write(cache_path, &encoded).map_err(|err| {
+    let cache = load_cache(cache_path)?;
+    return UnrolledProver::new_with_cache(
+        security.into(),
+        &base_path,
+        configuration,
+        level,
+        &cache,
+    )
+    .map_err(|err| {
         HostError::Prover(format!(
-            "failed to write setup cache {}: {err}",
+            "setup cache {} is incompatible: {err}",
             cache_path.display()
         ))
+    });
+}
+
+fn load_cache(path: &Path) -> Result<UnrolledProverCache> {
+    if !path.exists() {
+        return Err(HostError::SetupCacheNotFound(path.display().to_string()));
+    }
+
+    let bytes = std::fs::read(path).map_err(|err| {
+        HostError::Prover(format!(
+            "failed to read setup cache {}: {err}",
+            path.display()
+        ))
     })?;
-    info!(path = %cache_path.display(), bytes = encoded.len(), "Wrote GPU prover setup cache");
-    Ok(prover)
+
+    let (cache, decoded_len): (UnrolledProverCache, usize) =
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).map_err(|err| {
+            HostError::Prover(format!(
+                "failed to decode setup cache {}: {err}",
+                path.display()
+            ))
+        })?;
+    if decoded_len != bytes.len() {
+        return Err(HostError::Prover(format!(
+            "setup cache {} has trailing bytes",
+            path.display()
+        )));
+    }
+
+    Ok(cache)
 }
