@@ -55,9 +55,10 @@ impl GpuProverBuilder {
         self
     }
 
-    /// Cache the per-level setup data at `path`. On the first call the file is
-    /// missing, the prover computes the setup as usual and writes it; on later
-    /// calls the file is loaded and the compute is skipped.
+    /// Load pre-computed per-level setup data from `path` instead of running
+    /// the multi-minute compute. The file must exist (built earlier with a
+    /// dedicated generator that calls `UnrolledProver::dump_cache`); a missing
+    /// file at `build` time produces `HostError::SetupCacheNotFound`.
     ///
     /// The caller is responsible for keying the path on whatever distinguishes
     /// the underlying binaries (e.g. an app-binary hash). Stale cache files
@@ -345,7 +346,7 @@ fn create_unrolled_prover(
     };
 
     let cache = load_cache(cache_path)?;
-    return UnrolledProver::new_with_cache(
+    UnrolledProver::new_with_cache(
         security.into(),
         &base_path,
         configuration,
@@ -357,7 +358,7 @@ fn create_unrolled_prover(
             "setup cache {} is incompatible: {err}",
             cache_path.display()
         ))
-    });
+    })
 }
 
 fn load_cache(path: &Path) -> Result<UnrolledProverCache> {

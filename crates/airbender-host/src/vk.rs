@@ -8,6 +8,7 @@ use execution_utils::unrolled::{
     compute_setup_for_machine_configuration, get_unrolled_circuits_artifacts_for_machine_type,
     verify_unrolled_layer_proof, UnrolledProgramProof, UnrolledProgramSetup,
 };
+use execution_utils::unrolled_gpu::{UnrolledProverCache, UnrolledProverLevel};
 use riscv_transpiler::cycle::{
     IMStandardIsaConfigWithUnsignedMulDiv, IWithoutByteAccessIsaConfigWithDelegation,
 };
@@ -31,6 +32,30 @@ pub struct UnrolledVk {
     pub app_bin_hash: [u8; 32],
     pub setup: UnrolledProgramSetup,
     pub compiled_layouts: setups::CompiledCircuitsSet,
+}
+
+/// Build a `UnifiedVk` directly from a prover setup cache, no compute.
+///
+/// Returns `None` when the cache does not contain the unified-recursion level
+/// (e.g. the cache was produced for a `Base`-only or `RecursionUnrolled`-only
+/// prover). The caller supplies `app_bin_hash` separately because the setup
+/// cache does not carry it.
+pub fn unified_vk_from_setup_cache(
+    cache: &UnrolledProverCache,
+    app_bin_hash: [u8; 32],
+    security: SecurityLevel,
+) -> Option<UnifiedVk> {
+    let level_setup = cache.levels.get(&UnrolledProverLevel::RecursionUnified)?;
+    let cached_security: SecurityLevel = cache.security.into();
+    if cached_security != security {
+        return None;
+    }
+    Some(UnifiedVk {
+        security,
+        app_bin_hash,
+        unified_setup: level_setup.setup.clone(),
+        unified_layouts: level_setup.compiled_layouts.clone(),
+    })
 }
 
 pub fn compute_unified_vk(app_bin_path: &Path, security: SecurityLevel) -> Result<UnifiedVk> {

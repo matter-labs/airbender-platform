@@ -3,11 +3,13 @@ use crate::proof::{hash_app_bin, hash_input_words, Proof, RealProof};
 use crate::prover::ProverLevel;
 use crate::security::SecurityLevel;
 use crate::vk::{
-    compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
-    UnrolledVk,
+    compute_unified_vk, compute_unrolled_vk, unified_vk_from_setup_cache, verify_proof,
+    verify_unrolled_proof, UnifiedVk, UnrolledVk,
 };
 use airbender_core::guest::Commit;
+use execution_utils::unrolled_gpu::UnrolledProverCache;
 use std::path::{Path, PathBuf};
+use tracing::info;
 
 /// Wrapper around all verification-key flavors.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -121,6 +123,8 @@ impl DevVerifierBuilder {
 pub struct RealVerifierBuilder {
     app_bin_path: PathBuf,
     level: ProverLevel,
+    vk_cache_path: Option<PathBuf>,
+    setup_cache_path: Option<PathBuf>,
 }
 
 impl RealVerifierBuilder {
@@ -128,11 +132,50 @@ impl RealVerifierBuilder {
         Self {
             app_bin_path: app_bin_path.as_ref().to_path_buf(),
             level,
+            vk_cache_path: None,
+            setup_cache_path: None,
+        }
+    }
+
+    /// Cache the verification key at `path`. The first `generate_vk` call writes
+    /// the freshly-computed VK; later calls load it back, skipping the
+    /// multi-minute compute. The caller is responsible for keying the path on
+    /// the binary fingerprint — stale caches are not detected.
+    pub fn with_vk_cache_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.vk_cache_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn maybe_vk_cache_path(self, path: Option<PathBuf>) -> Self {
+        match path {
+            Some(p) => self.with_vk_cache_path(p),
+            None => self,
+        }
+    }
+
+    /// Reuse the GPU prover's setup cache (the same file written by
+    /// `GpuProverBuilder::with_setup_cache_path`) to derive the VK without
+    /// running compute. Only meaningful for `ProverLevel::RecursionUnified`;
+    /// other levels fall back to either a VK cache (if set) or a fresh compute.
+    pub fn with_setup_cache_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.setup_cache_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn maybe_setup_cache_path(self, path: Option<PathBuf>) -> Self {
+        match path {
+            Some(p) => self.with_setup_cache_path(p),
+            None => self,
         }
     }
 
     pub fn build(self) -> Result<RealVerifier> {
-        RealVerifier::new(&self.app_bin_path, self.level)
+        RealVerifier::new(
+            &self.app_bin_path,
+            self.level,
+            self.vk_cache_path,
+            self.setup_cache_path,
+        )
     }
 }
 
@@ -228,20 +271,81 @@ pub struct RealVerifier {
     app_bin_path: PathBuf,
     app_bin_hash: [u8; 32],
     level: ProverLevel,
+    vk_cache_path: Option<PathBuf>,
+    setup_cache_path: Option<PathBuf>,
 }
 
 impl RealVerifier {
-    fn new(app_bin_path: &Path, level: ProverLevel) -> Result<Self> {
+    fn new(
+        app_bin_path: &Path,
+        level: ProverLevel,
+        vk_cache_path: Option<PathBuf>,
+        setup_cache_path: Option<PathBuf>,
+    ) -> Result<Self> {
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
         let app_bin_hash = hash_app_bin(&app_bin_path)?;
         Ok(Self {
             app_bin_path,
             app_bin_hash,
             level,
+            vk_cache_path,
+            setup_cache_path,
         })
     }
 
     pub fn generate_vk(&self, security: SecurityLevel) -> Result<VerificationKey> {
+        // 1. If a VK cache file exists, use it.
+        if let Some(path) = self.vk_cache_path.as_deref() {
+            if path.exists() {
+                let vk = load_vk_from_cache(path)?;
+                if vk.security() != security {
+                    return Err(HostError::Verification(format!(
+                        "verification key cache {} was built for {} bits, requested {} bits",
+                        path.display(),
+                        vk.security(),
+                        security
+                    )));
+                }
+                info!(path = %path.display(), "Loaded verification key from cache");
+                return Ok(vk);
+            }
+        }
+
+        // 2. If a setup cache exists and we're at the unified level, derive
+        //    the VK from it for free instead of recomputing from scratch.
+        if self.level == ProverLevel::RecursionUnified {
+            if let Some(path) = self.setup_cache_path.as_deref() {
+                if path.exists() {
+                    let cache = load_setup_cache(path)?;
+                    let unified = unified_vk_from_setup_cache(&cache, self.app_bin_hash, security)
+                        .ok_or_else(|| {
+                            HostError::Verification(format!(
+                                "setup cache {} does not contain the unified-recursion level needed to derive a VK",
+                                path.display()
+                            ))
+                        })?;
+                    let vk =
+                        VerificationKey::RealUnified(RealUnifiedVerificationKey { vk: unified });
+                    info!(path = %path.display(), "Derived verification key from prover setup cache");
+                    if let Some(vk_path) = self.vk_cache_path.as_deref() {
+                        save_vk_to_cache(&vk, vk_path)?;
+                        info!(path = %vk_path.display(), "Wrote derived VK to verification key cache");
+                    }
+                    return Ok(vk);
+                }
+            }
+        }
+
+        // 3. Fallback: compute from scratch.
+        let vk = self.compute_vk(security)?;
+        if let Some(path) = self.vk_cache_path.as_deref() {
+            save_vk_to_cache(&vk, path)?;
+            info!(path = %path.display(), "Wrote freshly-computed VK to verification key cache");
+        }
+        Ok(vk)
+    }
+
+    fn compute_vk(&self, security: SecurityLevel) -> Result<VerificationKey> {
         match self.level {
             ProverLevel::RecursionUnified => {
                 let vk = compute_unified_vk(&self.app_bin_path, security)?;
@@ -258,6 +362,70 @@ impl RealVerifier {
             }
         }
     }
+}
+
+fn load_vk_from_cache(path: &Path) -> Result<VerificationKey> {
+    let bytes = std::fs::read(path).map_err(|err| {
+        HostError::Verification(format!("failed to read VK cache {}: {err}", path.display()))
+    })?;
+    let (vk, decoded_len): (VerificationKey, usize) =
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).map_err(|err| {
+            HostError::Verification(format!(
+                "failed to decode VK cache {}: {err}",
+                path.display()
+            ))
+        })?;
+    if decoded_len != bytes.len() {
+        return Err(HostError::Verification(format!(
+            "VK cache {} has trailing bytes",
+            path.display()
+        )));
+    }
+    Ok(vk)
+}
+
+fn save_vk_to_cache(vk: &VerificationKey, path: &Path) -> Result<()> {
+    let encoded = bincode::serde::encode_to_vec(vk, bincode::config::standard())
+        .map_err(|err| HostError::Verification(format!("failed to encode VK: {err}")))?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                HostError::Verification(format!(
+                    "failed to create VK cache directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+    }
+    std::fs::write(path, &encoded).map_err(|err| {
+        HostError::Verification(format!(
+            "failed to write VK cache {}: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn load_setup_cache(path: &Path) -> Result<UnrolledProverCache> {
+    let bytes = std::fs::read(path).map_err(|err| {
+        HostError::Verification(format!(
+            "failed to read setup cache {}: {err}",
+            path.display()
+        ))
+    })?;
+    let (cache, decoded_len): (UnrolledProverCache, usize) =
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).map_err(|err| {
+            HostError::Verification(format!(
+                "failed to decode setup cache {}: {err}",
+                path.display()
+            ))
+        })?;
+    if decoded_len != bytes.len() {
+        return Err(HostError::Verification(format!(
+            "setup cache {} has trailing bytes",
+            path.display()
+        )));
+    }
+    Ok(cache)
 }
 
 impl Verifier for RealVerifier {

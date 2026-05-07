@@ -33,6 +33,15 @@ impl From<SecurityLevel> for verifier_common::SecurityModel {
     }
 }
 
+impl From<verifier_common::SecurityModel> for SecurityLevel {
+    fn from(model: verifier_common::SecurityModel) -> Self {
+        match model {
+            verifier_common::SecurityModel::Security80 => SecurityLevel::Bits80,
+            verifier_common::SecurityModel::Security100 => SecurityLevel::Bits100,
+        }
+    }
+}
+
 impl std::fmt::Display for SecurityLevel {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}", self.bits())
