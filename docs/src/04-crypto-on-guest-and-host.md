@@ -76,6 +76,31 @@ Prefer delegated primitives when they're available. They can be orders of magnit
 - `k256`
 - `p256`
 
+## Secp256k1 Hooks
+
+EC recovery (`ecrecover`) involves three expensive operations: a field-element square root to decompress the public key, a field-element inversion to convert from Jacobian to affine coordinates, and a scalar inversion for the recovery formula. On a RISC-V guest these dominate the proving cost of every `ecrecover` call.
+
+The `Secp256k1Hooks` trait lets you replace these three operations with your own implementation. The primary use case is **hint-and-verify**: the host precomputes the result and passes it as a hint, and the guest checks it with a single multiplication (`a * a⁻¹ == 1`) instead of recomputing from scratch. This is much cheaper to prove.
+
+### Using custom hooks
+
+Most callers should use the standard `secp256k1::recover` API, which computes everything directly.
+To make use of hooks, implement `Secp256k1Hooks` and pass them to `secp256k1::recover_with_hooks`.
+
+Each trait method receives a mutable reference to the value that needs the operation and should store the result in-place. For inversions, verify with `candidate * input == 1`. For square roots, verify with `candidate² == input`.
+
+The `_with_hooks` variants are also available on the lower-level operations:
+
+- `Affine::decompress_with_hooks` — point decompression (uses `fe_sqrt_and_assign`)
+- `Jacobian::to_affine_with_hooks` — coordinate conversion (uses `fe_invert_and_assign`)
+- `recover_with_context_and_hooks` — recovery with explicit precomputed context
+
+Hook implementations must produce correct results. The recovery functions trust the hook output and do not re-verify it. The verification logic belongs in the hook implementation itself.
+
+### Example
+
+The [`examples/ecrecover-hooks/`](https://github.com/matter-labs/airbender-platform/tree/main/examples/ecrecover-hooks) example demonstrates the full hint-and-verify flow: the host precomputes hints with `CapturingHooks`, the guest verifies them cheaply with `PrecomputedHintHooks`.
+
 ## Practical Tips
 
 - Write shared crypto code that runs on both host and guest. Test on the host first (faster iteration), then run guest execution/proof flows.

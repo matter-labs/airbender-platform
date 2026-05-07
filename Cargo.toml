@@ -23,6 +23,8 @@ exclude = [
     "examples/revm-basic/guest",
     "examples/revm-basic/host",
     "examples/revm-basic/shared",
+    "examples/ecrecover-hooks/guest",
+    "examples/ecrecover-hooks/host",
 ]
 resolver = "2"
 

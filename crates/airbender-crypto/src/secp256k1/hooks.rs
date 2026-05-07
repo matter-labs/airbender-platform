@@ -1,3 +1,8 @@
+//! Hooks for overriding expensive secp256k1 field operations during EC recovery.
+//!
+//! See the [Secp256k1 Hooks](https://matter-labs.github.io/airbender-platform/latest/04-crypto-on-guest-and-host.html#secp256k1-hooks)
+//! section of the book for usage details and examples.
+
 pub trait Secp256k1Hooks {
     fn fe_sqrt_and_assign(&mut self, fe: &mut super::field::FieldElement) -> bool;
     fn fe_invert_and_assign(&mut self, fe: &mut super::field::FieldElement);
