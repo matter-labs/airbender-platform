@@ -65,6 +65,11 @@ jobs:
           tool: nextest
       - name: Install cargo-binutils
         run: cargo install cargo-binutils --locked
+      - name: Install cargo-airbender
+        run: cargo install --path crates/cargo-airbender --locked --force
+      - name: Compile blake2s test programs for RISC-V
+        working-directory: ./crates/airbender-crypto/src/blake2s/test_program
+        run: ./dump_bin.sh
       - name: Build
         run: cargo build --workspace
       - name: Test

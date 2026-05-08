@@ -50,6 +50,7 @@ num-traits = { workspace = true }
 # ark-bls12-381 = { path = "../../git_copies/algebra/curves/bls12_381", default-features = false, features = ["curve", "scalar_field"] }
 
 [dev-dependencies]
+airbender-host = { path = "../airbender-host" }
 ruint = { workspace = true }
 ark-std = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }

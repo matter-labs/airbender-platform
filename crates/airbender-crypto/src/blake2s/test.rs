@@ -1,36 +1,39 @@
-// This file contains tests that compare the blake2 implemetnations with the native one and circuit based one.
-// They are designed to be run in riscV environment.
+// Tests that run the blake2s test program as a RISC-V binary and verify correctness.
+//
+// Prerequisites: build the test program binaries first:
+//   cd src/blake2s/test_program && ./dump_bin.sh
 
-// First - please run the ./dump.bin from test_program directory - it will compile a riscV program that will be calling
-// the run_tests() method below.
-// This script will produce 2 binaries - one using native riscV blake and one using a delegation (precompile) one.
+use airbender_host::{Program, Runner};
+use std::path::PathBuf;
 
-// Afterwards, you can run the tests below.
+fn test_program_dist_dir(app_name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/blake2s/test_program/dist")
+        .join(app_name)
+}
 
 #[test]
 pub fn run_naive_test() {
-    use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
-    let non_determinism_source = QuasiUARTSource::default();
-    let results = zksync_os_runner::run(
-        "src/blake2s/test_program/app_native_blake.bin".into(),
-        None,
-        1 << 25,
-        non_determinism_source,
-    );
-    // Make sure it is successful;
-    assert_eq!(results[0], 1);
+    let program = Program::load(test_program_dist_dir("app_native_blake"))
+        .expect("failed to load program — did you run dump_bin.sh?");
+    let runner = program
+        .transpiler_runner()
+        .with_cycles(1 << 25)
+        .build()
+        .expect("failed to build runner");
+    let result = runner.run(&[]).expect("execution failed");
+    assert_eq!(result.receipt.output[0], 1);
 }
 
 #[test]
 pub fn run_extended_delegation_test() {
-    use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
-    let non_determinism_source = QuasiUARTSource::default();
-    let results = zksync_os_runner::run(
-        "src/blake2s/test_program/app_extended_delegation_blake.bin".into(),
-        None,
-        1 << 25,
-        non_determinism_source,
-    );
-    // Make sure it is successful;
-    assert_eq!(results[0], 1);
+    let program = Program::load(test_program_dist_dir("app_extended_delegation_blake"))
+        .expect("failed to load program — did you run dump_bin.sh?");
+    let runner = program
+        .transpiler_runner()
+        .with_cycles(1 << 25)
+        .build()
+        .expect("failed to build runner");
+    let result = runner.run(&[]).expect("execution failed");
+    assert_eq!(result.receipt.output[0], 1);
 }

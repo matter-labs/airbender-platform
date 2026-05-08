@@ -86,5 +86,5 @@ pub mod blake2s_tests {
     }
 }
 
-// TODO: Port zksync_os_runner-based guest harness tests to an airbender-platform
-// harness before re-enabling the upstream test module.
+#[cfg(test)]
+mod test;
