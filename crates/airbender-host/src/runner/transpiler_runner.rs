@@ -1,12 +1,13 @@
 use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
 use crate::error::{HostError, Result};
+use crate::machine::{MachineProfile, TranspilerDecoderConfig};
 use crate::receipt::Receipt;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::{
     rom::ROM_SECOND_WORD_BITS, INITIAL_TIMESTAMP, TIMESTAMP_STEP,
 };
 use riscv_transpiler::cycle::CycleMarkerHooks;
-use riscv_transpiler::ir::{preprocess_bytecode, FullUnsignedMachineDecoderConfig};
+use riscv_transpiler::ir::DecodingOptions;
 #[cfg(target_arch = "x86_64")]
 use riscv_transpiler::jit::JittedCode;
 use riscv_transpiler::jit::RAM_SIZE;
@@ -23,6 +24,7 @@ pub struct TranspilerRunnerBuilder {
     cycles: Option<usize>,
     text_path: Option<PathBuf>,
     flamegraph: Option<FlamegraphConfig>,
+    decoder: TranspilerDecoderConfig,
     use_jit: bool,
 }
 
@@ -33,6 +35,7 @@ impl TranspilerRunnerBuilder {
             cycles: None,
             text_path: None,
             flamegraph: None,
+            decoder: TranspilerDecoderConfig::default(),
             use_jit: false,
         }
     }
@@ -66,12 +69,53 @@ impl TranspilerRunnerBuilder {
         self
     }
 
+    /// Selects one of the platform-supported machine profiles for bytecode preprocessing.
+    ///
+    /// The default is [`MachineProfile::FullUnsigned`], which preserves the historical
+    /// `airbender-host` transpiler behavior. Non-default profiles currently require
+    /// interpreter execution; combining them with [`Self::with_jit`] returns an error.
+    pub fn with_machine_profile(mut self, profile: MachineProfile) -> Self {
+        self.decoder = TranspilerDecoderConfig::from_profile(profile);
+        self
+    }
+
+    /// Selects a raw upstream decoder configuration.
+    ///
+    /// This method intentionally exposes `riscv_transpiler` internals and is not
+    /// covered by Airbender Platform's stability guarantees. It is intended for
+    /// advanced users who already accept that upstream Airbender APIs can change
+    /// without a platform-level compatibility layer. Raw decoders currently require
+    /// interpreter execution; combining them with [`Self::with_jit`] returns an error.
+    /// If the decoder emits instructions that the host runner does not implement,
+    /// execution may panic instead of returning a structured error.
+    ///
+    /// `name` is used only for diagnostics, so callers should pass a short domain
+    /// name that will make sense in error messages.
+    pub fn with_unstable_raw_decoder<D>(mut self, name: &'static str) -> Self
+    where
+        D: DecodingOptions,
+    {
+        self.decoder = TranspilerDecoderConfig::unstable_raw::<D>(name);
+        self
+    }
+
     pub fn with_jit(mut self) -> Self {
         self.use_jit = true;
         self
     }
 
     pub fn build(self) -> Result<TranspilerRunner> {
+        // Airbender's standalone JIT entry point accepts raw bytecode and is currently
+        // tailored for the full unsigned configuration. Enabling JIT for other profiles
+        // requires profile-aware support in Airbender itself so execution cannot bypass
+        // the decoder semantics that the interpreter path applies here.
+        if self.use_jit && self.decoder.stable_profile != Some(MachineProfile::FullUnsigned) {
+            return Err(HostError::Transpiler(format!(
+                "JIT execution is currently available only for the full unsigned machine profile; configured decoder is {}",
+                self.decoder.name()
+            )));
+        }
+
         if self.use_jit && cfg!(not(target_arch = "x86_64")) {
             return Err(HostError::Transpiler(
                 "JIT execution is only available on x86_64 targets".to_string(),
@@ -91,6 +135,7 @@ impl TranspilerRunnerBuilder {
             app_text_path,
             cycles,
             flamegraph: self.flamegraph,
+            decoder: self.decoder,
             use_jit: self.use_jit,
         })
     }
@@ -102,6 +147,7 @@ pub struct TranspilerRunner {
     app_text_path: PathBuf,
     cycles: usize,
     flamegraph: Option<FlamegraphConfig>,
+    decoder: TranspilerDecoderConfig,
     use_jit: bool,
 }
 
@@ -191,7 +237,7 @@ impl TranspilerRunner {
     ) -> Result<ExecutionResult> {
         let bin_words = read_u32_words(&self.app_bin_path)?;
         let text_words = read_u32_words(&self.app_text_path)?;
-        let instructions = preprocess_bytecode::<FullUnsignedMachineDecoderConfig>(&text_words);
+        let instructions = self.decoder.preprocess(&text_words);
         let instruction_tape = SimpleTape::new(&instructions);
         let mut ram =
             RamWithRomRegion::<{ ROM_SECOND_WORD_BITS }>::from_rom_content(&bin_words, RAM_SIZE);
@@ -313,6 +359,8 @@ fn read_u32_words(path: &Path) -> Result<Vec<u32>> {
 mod tests {
     use super::TranspilerRunnerBuilder;
     use crate::runner::Runner;
+    use crate::MachineProfile;
+    use riscv_transpiler::ir::DebugReducedMachineDecoderConfig;
     use std::path::Path;
 
     const MARKER_OPCODE: u32 = 0x7ff01073; // csrrw x0, 2047, x0
@@ -346,6 +394,27 @@ mod tests {
         assert!(diff.delegations.is_empty());
     }
 
+    #[test]
+    fn interpreter_runs_with_reduced_machine_profile() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let bin_path = dir.path().join("app.bin");
+        let text_path = dir.path().join("app.text");
+        let program = [ADDI_OPCODE, LOOP_OPCODE];
+        write_program(&bin_path, &program);
+        write_program(&text_path, &program);
+
+        let runner = TranspilerRunnerBuilder::new(&bin_path)
+            .with_text_path(&text_path)
+            .with_machine_profile(MachineProfile::Reduced)
+            .with_cycles(program.len())
+            .build()
+            .expect("build runner");
+        let execution = runner.run(&[]).expect("run program");
+
+        assert_eq!(execution.receipt.registers[1], 1);
+        assert!(execution.cycle_markers.is_some());
+    }
+
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn jit_runs_do_not_collect_cycle_markers() {
@@ -366,6 +435,42 @@ mod tests {
 
         assert_eq!(execution.receipt.registers[1], 1);
         assert!(execution.cycle_markers.is_none());
+    }
+
+    #[test]
+    fn jit_rejects_non_default_machine_profiles() {
+        let result = TranspilerRunnerBuilder::new("missing.bin")
+            .with_machine_profile(MachineProfile::Reduced)
+            .with_jit()
+            .build();
+        let err = match result {
+            Ok(_) => {
+                panic!("JIT should reject non-default machine profiles before path resolution")
+            }
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "transpiler error: JIT execution is currently available only for the full unsigned machine profile; configured decoder is reduced"
+        );
+    }
+
+    #[test]
+    fn jit_reports_raw_decoder_name() {
+        let result = TranspilerRunnerBuilder::new("missing.bin")
+            .with_unstable_raw_decoder::<DebugReducedMachineDecoderConfig>("debug reduced")
+            .with_jit()
+            .build();
+        let err = match result {
+            Ok(_) => panic!("JIT should reject raw decoders before path resolution"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "transpiler error: JIT execution is currently available only for the full unsigned machine profile; configured decoder is debug reduced"
+        );
     }
 
     fn write_program(path: &Path, program: &[u32]) {

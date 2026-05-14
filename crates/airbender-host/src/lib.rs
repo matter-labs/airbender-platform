@@ -9,6 +9,7 @@
 mod cycle_marker;
 mod error;
 mod inputs;
+mod machine;
 mod program;
 mod proof;
 mod prover;
@@ -22,6 +23,7 @@ pub use airbender_core::guest::Commit;
 pub use cycle_marker::{CycleMarker, Mark};
 pub use error::{HostError, Result};
 pub use inputs::Inputs;
+pub use machine::MachineProfile;
 pub use program::Program;
 pub use proof::{DevProof, Proof, RealProof};
 pub use prover::{
@@ -52,4 +54,8 @@ pub use vk::{
 /// direct Airbender crates at the same time.
 pub mod raw {
     pub use execution_utils::unrolled::UnrolledProgramProof;
+    pub use riscv_transpiler::ir::{
+        DecodingOptions, FullMachineDecoderConfig, FullUnsignedMachineDecoderConfig,
+        ReducedMachineDecoderConfig,
+    };
 }
