@@ -37,13 +37,16 @@ jobs:
     needs: release-please
     # Reusable workflows cannot elevate GITHUB_TOKEN permissions on their own.
     # Grant the scopes that ci-release.yaml needs to update releases, attest
-    # the Rust binaries, and rerun transient release failures.
+    # the Rust binaries, push the cargo-airbender images, and rerun transient
+    # release failures.
     permissions:
       contents: write
       id-token: write
       attestations: write
+      packages: write
       actions: write
     uses: ./.github/workflows/ci-release.yaml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
+      push_docker_image: true
     secrets: inherit

@@ -12,6 +12,11 @@ on:
         required: false
         type: string
         default: ''
+      push_docker_image:
+        description: 'Push the cargo-airbender Docker images to GHCR'
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       tag:
@@ -23,6 +28,11 @@ on:
         required: false
         type: string
         default: ''
+      push_docker_image:
+        description: 'Push the cargo-airbender Docker images to GHCR'
+        required: false
+        type: boolean
+        default: true
 
 permissions: {}
 
@@ -81,6 +91,43 @@ jobs:
           name: airbender-platform ${{ inputs.tag }}${{ inputs.prerelease_name && format(' {0}', inputs.prerelease_name) || '' }}
           target_commitish: ${{ github.sha }}
           prerelease: true
+
+  release-cargo-airbender-image:
+    name: Build ${{ matrix.image_name }} Docker image
+    runs-on: matterlabs-ci-runner-high-performance
+    needs:
+      - prepare-release
+    if: ${{ inputs.push_docker_image }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image_name: cargo-airbender
+            dockerfile: docker/cargo-airbender/Dockerfile
+            build_args: ''
+          - image_name: cargo-airbender-cuda
+            dockerfile: docker/cargo-airbender/Dockerfile.cuda
+            build_args: |
+              CUDA_ARCH=80;89;90
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag }}
+
+      - name: Build and push Docker image
+        uses: ./.github/actions/publish-docker-image
+        with:
+          image_name: ${{ matrix.image_name }}
+          dockerfile: ${{ matrix.dockerfile }}
+          tag: ${{ inputs.tag }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
+          build_args: ${{ matrix.build_args }}
 
   build-man:
     name: Build man page
@@ -271,6 +318,7 @@ jobs:
       - build-man
       - build-binaries
       - publish-release-assets
+      - release-cargo-airbender-image
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -288,6 +336,7 @@ jobs:
       - build-man
       - build-binaries
       - publish-release-assets
+      - release-cargo-airbender-image
     steps:
       - name: Send Slack notification
         uses: slackapi/slack-github-action@v2

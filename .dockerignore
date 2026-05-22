@@ -1,0 +1,10 @@
+.git
+.github
+target
+tmp
+issues
+docs/book
+**/dist
+**/target
+**/.cargo/registry
+**/.cargo/git

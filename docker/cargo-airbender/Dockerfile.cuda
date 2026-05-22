@@ -1,0 +1,66 @@
+FROM nvidia/cuda:12.9.1-devel-ubuntu22.04 AS rust-base
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG RUST_TOOLCHAIN=nightly-2026-02-10
+ARG CUDA_ARCH=80;89;90
+ARG CMAKE_VERSION=3.30.2
+
+ENV CUDAARCHS=${CUDA_ARCH} \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:${PATH} \
+    CARGO_TERM_COLOR=always
+
+# Keep the image useful as a cargo-airbender environment, not just as a
+# binary carrier. Guest build flows need Cargo, rust-src, cargo-binutils,
+# linker tooling, and the CUDA toolchain used by the default GPU-enabled CLI.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        cmake \
+        curl \
+        git \
+        libssl-dev \
+        lld \
+        pkg-config \
+        wget && \
+    rm -rf /var/lib/apt/lists/*
+
+# The CUDA native build requires newer CUDA language handling than Ubuntu
+# 22.04's packaged CMake provides, so keep this aligned with the GPU CI setup.
+RUN curl -LO "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh" && \
+    chmod +x "cmake-${CMAKE_VERSION}-linux-x86_64.sh" && \
+    "./cmake-${CMAKE_VERSION}-linux-x86_64.sh" --skip-license --prefix=/usr/local && \
+    rm "cmake-${CMAKE_VERSION}-linux-x86_64.sh"
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --no-modify-path --default-toolchain "${RUST_TOOLCHAIN}"
+
+RUN rustup component add llvm-tools-preview rust-src && \
+    cargo install cargo-binutils --locked
+
+FROM rust-base AS builder
+
+WORKDIR /usr/src/airbender-platform
+
+COPY . .
+
+RUN cargo build \
+        -p cargo-airbender \
+        --release \
+        --locked \
+        --target x86_64-unknown-linux-gnu
+
+FROM rust-base
+
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+COPY --from=builder /usr/src/airbender-platform/target/x86_64-unknown-linux-gnu/release/cargo-airbender /usr/local/bin/cargo-airbender
+
+WORKDIR /workspace
+
+ENTRYPOINT ["cargo-airbender"]
+CMD ["--help"]
