@@ -23,13 +23,14 @@ jobs:
     uses: matter-labs/zksync-ci-common/.github/workflows/release-please.yaml@v1
     secrets:
       gh_token: ${{ secrets.RELEASE_TOKEN }}
+      slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
     with:
       config: '.github/release-please/config.json'
       manifest: '.github/release-please/manifest.json'
       upgrade-dependencies: false
       update-cargo-lock: true
       publish-to-crates-io: false
-      notify-slack: false
+      notify-slack: true
 
   # Publish all Rust release artifacts for the shared repo version.
   release-artifacts:
