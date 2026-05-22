@@ -22,8 +22,8 @@ default = ["gpu-prover"]
 gpu-prover = ["airbender-host/gpu-prover"]
 
 [dependencies]
-airbender-build = { version = "0.1.0", path = "../airbender-build" }
-airbender-host = { version = "0.1.0", path = "../airbender-host", default-features = false }
+airbender-build = { path = "../airbender-build" }
+airbender-host = { path = "../airbender-host", default-features = false }
 anyhow = { workspace = true }
 anstream = { workspace = true }
 anstyle = { workspace = true }
