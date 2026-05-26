@@ -31,6 +31,22 @@ jobs:
       update-cargo-lock: true
       publish-to-crates-io: false
       notify-slack: true
+      # Excluded example projects each have their own Cargo.lock that the
+      # main workspace update does not touch. List them here so the reusable
+      # workflow runs `cargo update --workspace` in each and amends the PR.
+      workspace-dirs: >-
+        examples/cycle-markers/guest
+        examples/cycle-markers/host
+        examples/ecrecover-hooks/guest
+        examples/ecrecover-hooks/host
+        examples/fibonacci/guest
+        examples/fibonacci/host
+        examples/revm-basic/guest
+        examples/revm-basic/host
+        examples/std-btreemap/guest
+        examples/std-btreemap/host
+        examples/u256-add/guest
+        examples/u256-add/host
 
   # Publish all Rust release artifacts for the shared repo version.
   release-artifacts:
