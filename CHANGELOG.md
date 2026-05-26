@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/matter-labs/airbender-platform/compare/v0.2.0...v0.2.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **ci:** build release binaries without GPU prover ([#68](https://github.com/matter-labs/airbender-platform/issues/68)) ([fad001e](https://github.com/matter-labs/airbender-platform/commit/fad001ec0c23ba0b39587df3a7f745ff77949e4c))
+* **ci:** refresh example Cargo.lock files on release PRs ([#67](https://github.com/matter-labs/airbender-platform/issues/67)) ([87af040](https://github.com/matter-labs/airbender-platform/commit/87af040200eaec7b25f48bd0cd24b0ea9aa6537a))
+
 ## [0.2.0](https://github.com/matter-labs/airbender-platform/compare/v0.1.0...v0.2.0) (2026-05-22)
 
 
