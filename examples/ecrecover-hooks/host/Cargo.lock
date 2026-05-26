@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-codec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bincode 2.0.1",
  "serde",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror",
@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-crypto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "airbender-codec",
  "airbender-core",
