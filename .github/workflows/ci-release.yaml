@@ -152,7 +152,7 @@ jobs:
           cache: false
 
       - name: Build debug binary
-        run: cargo build --bin cargo-airbender
+        run: cargo build --no-default-features --bin cargo-airbender
 
       - name: Build man page
         id: man
@@ -235,7 +235,7 @@ jobs:
         run: |
           target="${{ matrix.target }}"
 
-          cargo build --release --target "${target}" --bin cargo-airbender
+          cargo build --release --no-default-features --target "${target}" --bin cargo-airbender
 
           bin="./target/${target}/release/cargo-airbender"
           file "${bin}" || true
