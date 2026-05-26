@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-build"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "airbender-codec",
  "airbender-core",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-codec"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bincode 2.0.1",
  "serde",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-crypto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "airbender-host",
  "ark-bls12-381",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-guest"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "airbender-codec",
  "airbender-core",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-host"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "airbender-codec",
  "airbender-core",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-macros"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-rt"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "getrandom 0.2.17",
  "riscv_common",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "airbender-codec",
  "airbender-crypto",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-airbender"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "airbender-build",
  "airbender-host",
