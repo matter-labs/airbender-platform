@@ -190,6 +190,32 @@ mod tests {
         })
     }
 
+    // Isogeny kernel values from EIP-2537 test fixtures: field elements where
+    // the denominator polynomial evaluates to zero. These exercise the
+    // Montgomery's trick fallback path.
+    #[test]
+    fn map_fp_to_g1_isogeny_kernel_values() {
+        use hex_literal::hex;
+        let kernel_values: [&[u8; 64]; 8] = [
+            &hex!("000000000000000000000000000000000b3f3f9519ff3ab349e4ffc214f99998a697b02358fcfe44830e29129f58d6f9154a23fd14dfa660a75d4aaec9b607c3"),
+            &hex!("000000000000000000000000000000000598c1367bbd9d3b73dfefb263a117bcdbcb4c7a282897d4a20589ad2ea80da73b23a465e2c291e7ef0fde593438f513"),
+            &hex!("00000000000000000000000000000000068951d10be6961019aa800a51cf48b707fc9e40700510406be9242d0c8dd866afdec0d66f9dc2cf1dc944702ec161bb"),
+            &hex!("000000000000000000000000000000000a2605e5991fcf3e63728a7a1468d79bacaa5f23f3816aadcd38efdd330c6d4f5bbf450f92156e0e23e16e3252bcd042"),
+            &hex!("000000000000000000000000000000000ec1d2551f80abe70136a7f42e52133ebddf9b619a88147ae422a98e57581f2b0961dc019c74599f12a1b5513649a2e8"),
+            &hex!("00000000000000000000000000000000146850b3bdc2495ed73bb803dfaa951a88abff0acb5c7aeac52b48f3c808e87ce3885b98ce916e17caef21a6cbc6b598"),
+            &hex!("000000000000000000000000000000001377c0192d99508a317127abf17c64205c7aad448380027efb47ae73ea231dbd6ecd3f2841b63d309c35bb8fd13e48f0"),
+            &hex!("000000000000000000000000000000000fdb0c04a060175be7a91d3c2ee2d53bb7ccec610003a81199f7e2c3c3a488d4c2ecbaef1f3e91f1961d91cdad42da69"),
+        ];
+        for input in kernel_values {
+            let element = parse_fq_bytes(input).unwrap();
+            let ours = map_fp_to_g1(element).unwrap().into_group();
+            let reference = WBMap::<g1::Config>::map_to_curve(element)
+                .unwrap()
+                .into_group();
+            assert_eq!(ours, reference);
+        }
+    }
+
     #[test]
     fn map_fp2_to_g2_matches_arkworks() {
         proptest!(|(bytes: [u8; 96])| {
