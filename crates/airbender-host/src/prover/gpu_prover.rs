@@ -277,14 +277,6 @@ fn gpu_worker_loop(
         return;
     }
 
-    // Distinct `batch_id_base` per job. `UnrolledProver::prove` derives its
-    // internal `batch_id` as `base * 10 + recursion_layer`, so a monotonic base
-    // keeps successive jobs from reusing the same `batch_id` sequence (0,1,2,…)
-    // — which was suspected of bleeding stale GPU state across back-to-back
-    // proofs and tripping `assert_caps_mach` around the third batch. The `*10`
-    // spacing assumes fewer than 10 recursion layers per job; jobs run
-    // sequentially here, so even an overflow only repeats an id the GPU manager
-    // has already flushed.
     let mut next_batch_id_base: u64 = 0;
 
     while let Ok(command) = command_rx.recv() {
