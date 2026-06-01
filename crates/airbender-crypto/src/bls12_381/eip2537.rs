@@ -217,6 +217,38 @@ mod tests {
     }
 
     #[test]
+    fn apply_isogeny_map_zero_denominator() {
+        // Craft an isogeny map where x_den is constant zero.
+        // Montgomery's trick: prod = 0 * y_den = 0 → fallback path.
+        let one = Fq::ONE;
+        let zero = Fq::ZERO;
+
+        // Use g1::Config as both Domain and Codomain (same BaseField).
+        let isogeny = IsogenyMap::<g1::Config, g1::Config> {
+            x_map_numerator: &[one],
+            x_map_denominator: &[zero], // always evaluates to zero
+            y_map_numerator: &[one],
+            y_map_denominator: &[one],
+        };
+
+        let input = G1Affine::generator();
+        let result = apply_isogeny_map(&isogeny, input).unwrap();
+        // x_den=0 → x_den_inv=0 → img_x=0
+        assert_eq!(result.x, Fq::ZERO);
+
+        // Both denominators zero
+        let isogeny_both_zero = IsogenyMap::<g1::Config, g1::Config> {
+            x_map_numerator: &[one],
+            x_map_denominator: &[zero],
+            y_map_numerator: &[one],
+            y_map_denominator: &[zero],
+        };
+        let result = apply_isogeny_map(&isogeny_both_zero, input).unwrap();
+        assert_eq!(result.x, Fq::ZERO);
+        assert_eq!(result.y, Fq::ZERO);
+    }
+
+    #[test]
     fn map_fp2_to_g2_matches_arkworks() {
         proptest!(|(bytes: [u8; 96])| {
             let mut repr0 = <Fq as PrimeField>::BigInt::zero();
