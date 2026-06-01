@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-codec"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bincode",
  "serde",
@@ -24,11 +24,11 @@ dependencies = [
 
 [[package]]
 name = "airbender-core"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "airbender-crypto"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-guest"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "airbender-codec",
  "airbender-core",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-macros"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-rt"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "getrandom",
  "riscv_common",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-sdk"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "airbender-codec",
  "airbender-crypto",
