@@ -167,3 +167,46 @@ pub fn map_fp2_to_g2(element: Fq2) -> Result<G2Affine, HashToCurveError> {
         SWUMap::<<g2::Config as WBConfig>::IsogenousCurve>::map_to_curve(element)?;
     apply_isogeny_map(&g2::Config::ISOGENY_MAP, point_on_iso_curve)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ark_ec::hashing::curve_maps::wb::WBMap;
+    use crate::ark_ec::CurveGroup;
+    use proptest::{prop_assert_eq, proptest};
+
+    #[test]
+    fn map_fp_to_g1_matches_arkworks() {
+        proptest!(|(bytes: [u8; 48])| {
+            let mut repr = <Fq as PrimeField>::BigInt::zero();
+            for (dst, src) in repr.as_mut().iter_mut().zip(bytes.chunks_exact(8)) {
+                *dst = u64::from_le_bytes(src.try_into().unwrap());
+            }
+            if let Some(element) = Fq::from_bigint(repr) {
+                let ours = map_fp_to_g1(element).unwrap().into_group();
+                let reference = WBMap::<g1::Config>::map_to_curve(element).unwrap().into_group();
+                prop_assert_eq!(ours, reference);
+            }
+        })
+    }
+
+    #[test]
+    fn map_fp2_to_g2_matches_arkworks() {
+        proptest!(|(bytes: [u8; 96])| {
+            let mut repr0 = <Fq as PrimeField>::BigInt::zero();
+            let mut repr1 = <Fq as PrimeField>::BigInt::zero();
+            for (dst, src) in repr0.as_mut().iter_mut().zip(bytes[..48].chunks_exact(8)) {
+                *dst = u64::from_le_bytes(src.try_into().unwrap());
+            }
+            for (dst, src) in repr1.as_mut().iter_mut().zip(bytes[48..].chunks_exact(8)) {
+                *dst = u64::from_le_bytes(src.try_into().unwrap());
+            }
+            if let (Some(c0), Some(c1)) = (Fq::from_bigint(repr0), Fq::from_bigint(repr1)) {
+                let element = Fq2 { c0, c1 };
+                let ours = map_fp2_to_g2(element).unwrap().into_group();
+                let reference = WBMap::<g2::Config>::map_to_curve(element).unwrap().into_group();
+                prop_assert_eq!(ours, reference);
+            }
+        })
+    }
+}
