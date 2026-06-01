@@ -19,6 +19,7 @@ pub struct GpuProverBuilder {
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
+    max_device_memory_bytes: Option<usize>,
 }
 
 impl GpuProverBuilder {
@@ -28,6 +29,7 @@ impl GpuProverBuilder {
             worker_threads: None,
             security: SecurityLevel::default(),
             level: ProverLevel::RecursionUnified,
+            max_device_memory_bytes: None,
         }
     }
 
@@ -41,6 +43,15 @@ impl GpuProverBuilder {
             Some(v) => self.with_worker_threads(v),
             None => self,
         }
+    }
+
+    /// Caps the GPU device allocator at `bytes`. By default the allocator grabs
+    /// all free VRAM, which leaves no room for a co-resident prover in the same
+    /// process (e.g. the SNARK wrapper). Capping the FRI prover leaves headroom
+    /// for it. A cap at or above the free amount is a no-op.
+    pub fn with_max_device_memory_bytes(mut self, bytes: usize) -> Self {
+        self.max_device_memory_bytes = Some(bytes);
+        self
     }
 
     pub fn with_level(mut self, level: ProverLevel) -> Self {
@@ -59,6 +70,7 @@ impl GpuProverBuilder {
             self.worker_threads,
             self.security,
             self.level,
+            self.max_device_memory_bytes,
         )
     }
 }
@@ -94,6 +106,7 @@ impl GpuProver {
         worker_threads: Option<usize>,
         security: SecurityLevel,
         level: ProverLevel,
+        max_device_memory_bytes: Option<usize>,
     ) -> Result<Self> {
         if matches!(worker_threads, Some(0)) {
             return Err(HostError::Prover(
@@ -102,8 +115,13 @@ impl GpuProver {
         }
 
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
-        let (command_tx, worker_handle) =
-            spawn_worker(app_bin_path, worker_threads, security, level)?;
+        let (command_tx, worker_handle) = spawn_worker(
+            app_bin_path,
+            worker_threads,
+            security,
+            level,
+            max_device_memory_bytes,
+        )?;
 
         Ok(Self {
             command_tx,
@@ -189,6 +207,7 @@ fn spawn_worker(
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
+    max_device_memory_bytes: Option<usize>,
 ) -> Result<(mpsc::Sender<WorkerCommand>, JoinHandle<()>)> {
     let (command_tx, command_rx) = mpsc::channel();
     let (init_tx, init_rx) = mpsc::channel();
@@ -203,6 +222,7 @@ fn spawn_worker(
                 worker_threads,
                 security,
                 level,
+                max_device_memory_bytes,
             )
         })
         .map_err(|err| {
@@ -235,6 +255,7 @@ fn gpu_worker_loop(
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
+    max_device_memory_bytes: Option<usize>,
 ) {
     // Keep all prover state inside this dedicated thread so a panic does not unwind
     // through host-call boundaries or require `AssertUnwindSafe`.
@@ -243,6 +264,7 @@ fn gpu_worker_loop(
         worker_threads,
         security,
         level.as_unrolled_level(),
+        max_device_memory_bytes,
     ) {
         Ok(prover) => prover,
         Err(err) => {
@@ -305,12 +327,29 @@ fn create_unrolled_prover(
     worker_threads: Option<usize>,
     security: SecurityLevel,
     level: execution_utils::unrolled_gpu::UnrolledProverLevel,
+    max_device_memory_bytes: Option<usize>,
 ) -> Result<UnrolledProver> {
     let base_path = base_path(app_bin_path)?;
     let mut configuration = ExecutionProverConfiguration::default();
     if let Some(threads) = worker_threads {
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
+    }
+    if let Some(bytes) = max_device_memory_bytes {
+        // The device allocator works in fixed-size blocks; translate the byte cap
+        // into a block count. A cap below one block is rejected rather than
+        // silently rounded to zero (which would mean "use all free memory").
+        let block_log = configuration.prover_context_config.allocator_block_log_size;
+        let blocks = bytes >> block_log;
+        if blocks == 0 {
+            return Err(HostError::Prover(format!(
+                "max device memory cap of {bytes} bytes is smaller than one allocator block ({} bytes)",
+                1usize << block_log,
+            )));
+        }
+        configuration
+            .prover_context_config
+            .max_device_allocation_blocks_count = Some(blocks);
     }
     Ok(UnrolledProver::new(
         security.into(),
