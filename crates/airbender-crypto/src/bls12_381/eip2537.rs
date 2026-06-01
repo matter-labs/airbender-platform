@@ -1,11 +1,18 @@
-// EIP-2537 serialization helpers
-// These are defined in the crypto crate to avoid ICE when compiling for RISC-V
+// EIP-2537 helpers for BLS12-381 precompiles.
+// These are defined in the crypto crate to avoid ICE when compiling for RISC-V.
 // The issue is that functions in external crates that use Fq/G1/G2 types trigger
 // compiler bugs during predicate checking for generic constants.
 
+use super::curves::{g1, g2};
 use super::{Fq, Fq2, G1Affine, G2Affine};
+use crate::ark_ec::hashing::curve_maps::swu::SWUMap;
+use crate::ark_ec::hashing::curve_maps::wb::{IsogenyMap, WBConfig};
+use crate::ark_ec::hashing::map_to_curve_hasher::MapToCurve;
+use crate::ark_ec::hashing::HashToCurveError;
+use crate::ark_ec::models::short_weierstrass::SWCurveConfig;
+use crate::ark_ec::short_weierstrass::Affine;
 use crate::ark_ec::AffineRepr;
-use crate::ark_ff::PrimeField;
+use crate::ark_ff::{AdditiveGroup, Field, PrimeField};
 
 const FIELD_ELEMENT_LEN: usize = 64;
 const G1_LEN: usize = 128;
@@ -102,4 +109,61 @@ pub fn serialize_g2_bytes(el: G2Affine, output: &mut [u8; G2_LEN]) {
     } else {
         output.fill(0);
     }
+}
+
+// Horner polynomial evaluation for isogeny map application.
+fn evaluate_polynomial<F: Field>(coeffs: &[F], x: &F) -> F {
+    let mut result = F::ZERO;
+    for c in coeffs.iter().rev() {
+        result *= x;
+        result += c;
+    }
+    result
+}
+
+// Heap-free `IsogenyMap::apply` using Horner evaluation + Montgomery's trick.
+fn apply_isogeny_map<
+    Domain: SWCurveConfig,
+    Codomain: SWCurveConfig<BaseField = Domain::BaseField>,
+>(
+    map: &IsogenyMap<'_, Domain, Codomain>,
+    domain_point: Affine<Domain>,
+) -> Result<Affine<Codomain>, HashToCurveError> {
+    match domain_point.xy() {
+        Some((x, y)) => {
+            let x_num = evaluate_polynomial(map.x_map_numerator, &x);
+            let x_den = evaluate_polynomial(map.x_map_denominator, &x);
+            let y_num = evaluate_polynomial(map.y_map_numerator, &x);
+            let y_den = evaluate_polynomial(map.y_map_denominator, &x);
+
+            let zero = Domain::BaseField::ZERO;
+            let prod = x_den * y_den;
+            let (x_den_inv, y_den_inv) = if let Some(prod_inv) = prod.inverse() {
+                (y_den * prod_inv, x_den * prod_inv)
+            } else {
+                (
+                    x_den.inverse().unwrap_or(zero),
+                    y_den.inverse().unwrap_or(zero),
+                )
+            };
+            let img_x = x_num * x_den_inv;
+            let img_y = (y_num * y) * y_den_inv;
+            Ok(Affine::<Codomain>::new_unchecked(img_x, img_y))
+        }
+        None => Ok(Affine::identity()),
+    }
+}
+
+#[inline(never)]
+pub fn map_fp_to_g1(element: Fq) -> Result<G1Affine, HashToCurveError> {
+    let point_on_iso_curve =
+        SWUMap::<<g1::Config as WBConfig>::IsogenousCurve>::map_to_curve(element)?;
+    apply_isogeny_map(&g1::Config::ISOGENY_MAP, point_on_iso_curve)
+}
+
+#[inline(never)]
+pub fn map_fp2_to_g2(element: Fq2) -> Result<G2Affine, HashToCurveError> {
+    let point_on_iso_curve =
+        SWUMap::<<g2::Config as WBConfig>::IsogenousCurve>::map_to_curve(element)?;
+    apply_isogeny_map(&g2::Config::ISOGENY_MAP, point_on_iso_curve)
 }
