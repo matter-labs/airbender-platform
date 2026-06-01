@@ -172,7 +172,6 @@ pub fn map_fp2_to_g2(element: Fq2) -> Result<G2Affine, HashToCurveError> {
 mod tests {
     use super::*;
     use crate::ark_ec::hashing::curve_maps::wb::WBMap;
-    use crate::ark_ec::CurveGroup;
     use proptest::{prop_assert_eq, proptest};
 
     #[test]
@@ -183,8 +182,8 @@ mod tests {
                 *dst = u64::from_le_bytes(src.try_into().unwrap());
             }
             if let Some(element) = Fq::from_bigint(repr) {
-                let ours = map_fp_to_g1(element).unwrap().into_group();
-                let reference = WBMap::<g1::Config>::map_to_curve(element).unwrap().into_group();
+                let ours = map_fp_to_g1(element).unwrap();
+                let reference = WBMap::<g1::Config>::map_to_curve(element).unwrap();
                 prop_assert_eq!(ours, reference);
             }
         })
@@ -236,8 +235,8 @@ mod tests {
             }
             if let (Some(c0), Some(c1)) = (Fq::from_bigint(repr0), Fq::from_bigint(repr1)) {
                 let element = Fq2 { c0, c1 };
-                let ours = map_fp2_to_g2(element).unwrap().into_group();
-                let reference = WBMap::<g2::Config>::map_to_curve(element).unwrap().into_group();
+                let ours = map_fp2_to_g2(element).unwrap();
+                let reference = WBMap::<g2::Config>::map_to_curve(element).unwrap();
                 prop_assert_eq!(ours, reference);
             }
         })
