@@ -114,12 +114,15 @@ pub fn serialize_g2_bytes(el: G2Affine, output: &mut [u8; G2_LEN]) {
 // Heap-free reimplementation of arkworks' IsogenyMap::apply + polynomial evaluation.
 // Original: https://github.com/arkworks-rs/algebra/blob/af564e48/ec/src/hashing/curve_maps/wb.rs#L42-L64
 fn evaluate_polynomial<F: Field>(coeffs: &[F], x: &F) -> F {
-    let mut result = F::ZERO;
-    for c in coeffs.iter().rev() {
-        result *= x;
-        result += c;
+    if coeffs.is_empty() {
+        return F::ZERO;
     }
-    result
+    if x.is_zero() {
+        return coeffs[0];
+    }
+    coeffs
+        .iter()
+        .rfold(F::ZERO, |result, coeff| result * x + coeff)
 }
 
 // Heap-free `IsogenyMap::apply` using Horner evaluation + Montgomery's trick.
