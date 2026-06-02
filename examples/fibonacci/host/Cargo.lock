@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-codec"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bincode 2.0.1",
  "serde",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "thiserror",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-host"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "airbender-codec",
  "airbender-core",

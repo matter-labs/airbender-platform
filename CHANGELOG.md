@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/matter-labs/airbender-platform/compare/v0.2.1...v0.2.2) (2026-06-01)
+
+
+### Features
+
+* **gpu-prover:** allow capping GPU device memory ([#72](https://github.com/matter-labs/airbender-platform/issues/72)) ([04c5b85](https://github.com/matter-labs/airbender-platform/commit/04c5b85185d24b98ed99e243fa8b4a528c018304))
+
 ## [0.2.1](https://github.com/matter-labs/airbender-platform/compare/v0.2.0...v0.2.1) (2026-05-26)
 
 
