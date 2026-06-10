@@ -13,6 +13,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread::JoinHandle;
 
+/// Overrides for the GPU FRI prover's pinned host transfer-buffer pool.
+///
+/// The pool is allocated up front as `per_job × concurrent_jobs + per_device ×
+/// device_count` buffers, each a 64 MiB `cudaHostAlloc` (page-locked, committed
+/// RAM). Upstream defaults are 256/job + 128/device — 24 GiB on a single-GPU,
+/// single-job box. The pool is only ever trimmed back to a small free reserve
+/// (32 buffers), so most of it is prefetch/caching headroom; lowering these
+/// reclaims committed RAM at the cost of less pipelining. `None` leaves the
+/// upstream default for that axis untouched.
+#[derive(Clone, Copy, Default)]
+pub struct HostBufferPoolConfig {
+    pub allocators_per_job: Option<usize>,
+    pub allocators_per_device: Option<usize>,
+}
+
 /// Builder for creating a configured cached GPU prover.
 pub struct GpuProverBuilder {
     app_bin_path: PathBuf,
@@ -20,6 +35,7 @@ pub struct GpuProverBuilder {
     security: SecurityLevel,
     level: ProverLevel,
     max_device_memory_bytes: Option<usize>,
+    host_pool: HostBufferPoolConfig,
 }
 
 impl GpuProverBuilder {
@@ -30,6 +46,7 @@ impl GpuProverBuilder {
             security: SecurityLevel::default(),
             level: ProverLevel::RecursionUnified,
             max_device_memory_bytes: None,
+            host_pool: HostBufferPoolConfig::default(),
         }
     }
 
@@ -64,6 +81,14 @@ impl GpuProverBuilder {
         self
     }
 
+    /// Overrides the pinned host transfer-buffer pool sizing. See
+    /// [`HostBufferPoolConfig`]; `None` on either axis keeps the upstream
+    /// default for that axis.
+    pub fn with_host_buffer_pool(mut self, host_pool: HostBufferPoolConfig) -> Self {
+        self.host_pool = host_pool;
+        self
+    }
+
     pub fn build(self) -> Result<GpuProver> {
         GpuProver::new(
             &self.app_bin_path,
@@ -71,6 +96,7 @@ impl GpuProverBuilder {
             self.security,
             self.level,
             self.max_device_memory_bytes,
+            self.host_pool,
         )
     }
 }
@@ -107,6 +133,7 @@ impl GpuProver {
         security: SecurityLevel,
         level: ProverLevel,
         max_device_memory_bytes: Option<usize>,
+        host_pool: HostBufferPoolConfig,
     ) -> Result<Self> {
         if matches!(worker_threads, Some(0)) {
             return Err(HostError::Prover(
@@ -121,6 +148,7 @@ impl GpuProver {
             security,
             level,
             max_device_memory_bytes,
+            host_pool,
         )?;
 
         Ok(Self {
@@ -208,6 +236,7 @@ fn spawn_worker(
     security: SecurityLevel,
     level: ProverLevel,
     max_device_memory_bytes: Option<usize>,
+    host_pool: HostBufferPoolConfig,
 ) -> Result<(mpsc::Sender<WorkerCommand>, JoinHandle<()>)> {
     let (command_tx, command_rx) = mpsc::channel();
     let (init_tx, init_rx) = mpsc::channel();
@@ -223,6 +252,7 @@ fn spawn_worker(
                 security,
                 level,
                 max_device_memory_bytes,
+                host_pool,
             )
         })
         .map_err(|err| {
@@ -256,6 +286,7 @@ fn gpu_worker_loop(
     security: SecurityLevel,
     level: ProverLevel,
     max_device_memory_bytes: Option<usize>,
+    host_pool: HostBufferPoolConfig,
 ) {
     // Keep all prover state inside this dedicated thread so a panic does not unwind
     // through host-call boundaries or require `AssertUnwindSafe`.
@@ -265,6 +296,7 @@ fn gpu_worker_loop(
         security,
         level.as_unrolled_level(),
         max_device_memory_bytes,
+        host_pool,
     ) {
         Ok(prover) => prover,
         Err(err) => {
@@ -320,21 +352,22 @@ fn create_unrolled_prover(
     security: SecurityLevel,
     level: execution_utils::unrolled_gpu::UnrolledProverLevel,
     max_device_memory_bytes: Option<usize>,
+    host_pool: HostBufferPoolConfig,
 ) -> Result<UnrolledProver> {
     let base_path = base_path(app_bin_path)?;
     let mut configuration = ExecutionProverConfiguration::default();
-    // Trim the pinned host transfer-buffer pool below the upstream defaults
-    // (256/job + 128/device, each backed by a 64 MiB cudaHostAlloc = 24 GiB on a
-    // single-GPU/single-job box). The pool feeds one `free_allocators` channel and
-    // is only trimmed back to `min_free_host_allocators_per_job` (32) buffers, so
-    // the bulk of it is prefetch/caching headroom rather than live working set.
-    // We cut the pure device-headroom term hardest (128 -> 64) and the per-job
-    // working term lightly (256 -> 224), leaving 288 buffers (= 18 GiB, still 9x
-    // the 32-buffer trim floor). Net: -6 GiB committed pinned RAM at startup.
-    // This is a memory/perf trade-off only (smaller cache => less pipelining), not
-    // a correctness change; revisit if proving time regresses or buffers starve.
-    configuration.host_allocators_per_job_count = 224;
-    configuration.host_allocators_per_device_count = 64;
+    // Optionally trim the pinned host transfer-buffer pool below the upstream
+    // defaults (256/job + 128/device, each a 64 MiB cudaHostAlloc = 24 GiB on a
+    // single-GPU/single-job box). The pool is only ever trimmed back to a small
+    // free reserve, so most of it is prefetch/caching headroom; lowering these
+    // reclaims committed RAM at the cost of less pipelining. Left at the upstream
+    // default unless the caller overrides an axis. See `HostBufferPoolConfig`.
+    if let Some(per_job) = host_pool.allocators_per_job {
+        configuration.host_allocators_per_job_count = per_job;
+    }
+    if let Some(per_device) = host_pool.allocators_per_device {
+        configuration.host_allocators_per_device_count = per_device;
+    }
     if let Some(threads) = worker_threads {
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
