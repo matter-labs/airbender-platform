@@ -323,6 +323,18 @@ fn create_unrolled_prover(
 ) -> Result<UnrolledProver> {
     let base_path = base_path(app_bin_path)?;
     let mut configuration = ExecutionProverConfiguration::default();
+    // Trim the pinned host transfer-buffer pool below the upstream defaults
+    // (256/job + 128/device, each backed by a 64 MiB cudaHostAlloc = 24 GiB on a
+    // single-GPU/single-job box). The pool feeds one `free_allocators` channel and
+    // is only trimmed back to `min_free_host_allocators_per_job` (32) buffers, so
+    // the bulk of it is prefetch/caching headroom rather than live working set.
+    // We cut the pure device-headroom term hardest (128 -> 64) and the per-job
+    // working term lightly (256 -> 224), leaving 288 buffers (= 18 GiB, still 9x
+    // the 32-buffer trim floor). Net: -6 GiB committed pinned RAM at startup.
+    // This is a memory/perf trade-off only (smaller cache => less pipelining), not
+    // a correctness change; revisit if proving time regresses or buffers starve.
+    configuration.host_allocators_per_job_count = 224;
+    configuration.host_allocators_per_device_count = 64;
     if let Some(threads) = worker_threads {
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
