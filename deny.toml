@@ -7,6 +7,7 @@ no-default-features = false
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
+unmaintained = "none" # This usually create a lot of non-actionable noise.
 ignore = [
     "RUSTSEC-2024-0436", # `paste` unmaintained, not a risk for us
     "RUSTSEC-2024-0388", # `derivative` unmaintained, not a risk for us
