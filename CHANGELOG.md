@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.3](https://github.com/matter-labs/airbender-platform/compare/v0.2.2...v0.2.3) (2026-06-11)
+
+
+### Features
+
+* **crypto:** add heap-free BLS12-381 map-to-curve functions ([#74](https://github.com/matter-labs/airbender-platform/issues/74)) ([80c0541](https://github.com/matter-labs/airbender-platform/commit/80c0541f62414dc7f21c200218686c4bef9458d4))
+* **host:** GpuProverConfig builder for the GPU prover ([#77](https://github.com/matter-labs/airbender-platform/issues/77)) ([1ae55ae](https://github.com/matter-labs/airbender-platform/commit/1ae55ae924ddff7751a9e93d76ae29cc82c6436d))
+
+
+### Bug Fixes
+
+* **cargo-deny:** Ignore unmaintained ([#78](https://github.com/matter-labs/airbender-platform/issues/78)) ([020db30](https://github.com/matter-labs/airbender-platform/commit/020db305e853e4ac490f789167e82abcef2c6482))
+* **crypto:** restore host bigint delegation support ([#76](https://github.com/matter-labs/airbender-platform/issues/76)) ([2418efa](https://github.com/matter-labs/airbender-platform/commit/2418efaafd96139723b51c6ba51ae48ffce5e06c))
+
 ## [0.2.2](https://github.com/matter-labs/airbender-platform/compare/v0.2.1...v0.2.2) (2026-06-01)
 
 
