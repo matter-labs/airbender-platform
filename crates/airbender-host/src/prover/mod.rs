@@ -12,9 +12,7 @@ mod gpu_prover;
 pub use self::cpu_prover::{CpuProver, CpuProverBuilder};
 pub use self::dev_prover::{DevProver, DevProverBuilder};
 #[cfg(feature = "gpu-prover")]
-pub use self::gpu_prover::{
-    ExecutionProverConfiguration, GpuProver, GpuProverBuilder, ProverContextConfig,
-};
+pub use self::gpu_prover::{GpuProver, GpuProverBuilder, GpuProverConfig};
 
 pub(super) const DEFAULT_RAM_BOUND_BYTES: usize = 1 << 30;
 pub(super) const DEFAULT_CPU_CYCLE_BOUND: usize = u32::MAX as usize;

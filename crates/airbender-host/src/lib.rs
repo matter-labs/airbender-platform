@@ -30,7 +30,7 @@ pub use prover::{
     CpuProver, CpuProverBuilder, DevProver, DevProverBuilder, ProveResult, Prover, ProverLevel,
 };
 #[cfg(feature = "gpu-prover")]
-pub use prover::{ExecutionProverConfiguration, GpuProver, GpuProverBuilder, ProverContextConfig};
+pub use prover::{GpuProver, GpuProverBuilder, GpuProverConfig};
 pub use receipt::Receipt;
 pub use runner::{
     resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, TranspilerRunner,

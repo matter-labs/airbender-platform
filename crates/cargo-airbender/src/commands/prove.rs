@@ -52,7 +52,10 @@ pub fn run(args: ProveArgs) -> Result<()> {
                 let prover = airbender_host::GpuProverBuilder::new(&args.app_bin)
                     .with_level(level)
                     .with_security(security)
-                    .maybe_worker_threads(args.threads)
+                    .with_config(
+                        airbender_host::GpuProverConfig::default()
+                            .maybe_worker_threads(args.threads),
+                    )
                     .build()
                     .map_err(|err| {
                     CliError::with_source(

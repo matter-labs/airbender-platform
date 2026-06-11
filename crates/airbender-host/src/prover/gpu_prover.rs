@@ -5,8 +5,7 @@ use crate::error::{HostError, Result};
 use crate::proof::{Proof, RealProof};
 use crate::security::SecurityLevel;
 use execution_utils::unrolled_gpu::UnrolledProver;
-pub use gpu_prover::execution::prover::ExecutionProverConfiguration;
-pub use gpu_prover::prover::context::ProverContextConfig;
+use gpu_prover::execution::prover::ExecutionProverConfiguration;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use std::any::Any;
 use std::path::{Path, PathBuf};
@@ -14,38 +13,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread::JoinHandle;
 
-/// Builder for creating a configured cached GPU prover.
-pub struct GpuProverBuilder {
-    app_bin_path: PathBuf,
+/// Low-level configuration for the GPU prover.
+///
+/// The default configuration is meant to be optimal in the vast majority of
+/// cases, so overriding it is only recommended if you either have specific
+/// constraints or you need to fine-tune the configuration for a specific and
+/// unusual workload. Each field left unset keeps the prover's own default.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GpuProverConfig {
     worker_threads: Option<usize>,
-    security: SecurityLevel,
-    level: ProverLevel,
     max_device_memory_bytes: Option<usize>,
-    execution_config: Option<ExecutionProverConfiguration>,
+    host_allocators_per_job: Option<usize>,
+    host_allocators_per_device: Option<usize>,
 }
 
-impl GpuProverBuilder {
-    pub fn new(app_bin_path: impl AsRef<Path>) -> Self {
-        Self {
-            app_bin_path: app_bin_path.as_ref().to_path_buf(),
-            worker_threads: None,
-            security: SecurityLevel::default(),
-            level: ProverLevel::RecursionUnified,
-            max_device_memory_bytes: None,
-            execution_config: None,
-        }
-    }
-
+impl GpuProverConfig {
+    /// Number of worker threads for the prover's thread pool and replay workers.
     pub fn with_worker_threads(mut self, worker_threads: usize) -> Self {
         self.worker_threads = Some(worker_threads);
         self
     }
 
-    pub fn maybe_worker_threads(self, worker_threads: Option<usize>) -> Self {
-        match worker_threads {
-            Some(v) => self.with_worker_threads(v),
-            None => self,
+    /// Like [`Self::with_worker_threads`] but a no-op when `None`.
+    pub fn maybe_worker_threads(mut self, worker_threads: Option<usize>) -> Self {
+        if let Some(worker_threads) = worker_threads {
+            self.worker_threads = Some(worker_threads);
         }
+        self
     }
 
     /// Caps the GPU device allocator at `bytes`. By default the allocator grabs
@@ -55,6 +49,40 @@ impl GpuProverBuilder {
     pub fn with_max_device_memory_bytes(mut self, bytes: usize) -> Self {
         self.max_device_memory_bytes = Some(bytes);
         self
+    }
+
+    /// Pinned host transfer buffers pre-allocated per concurrent job (64 MiB
+    /// each). Lowering this below the prover default reclaims committed RAM at
+    /// the cost of less host<->device pipelining.
+    pub fn with_host_allocators_per_job(mut self, count: usize) -> Self {
+        self.host_allocators_per_job = Some(count);
+        self
+    }
+
+    /// Pinned host transfer buffers pre-allocated per GPU device (64 MiB each).
+    /// See [`Self::with_host_allocators_per_job`].
+    pub fn with_host_allocators_per_device(mut self, count: usize) -> Self {
+        self.host_allocators_per_device = Some(count);
+        self
+    }
+}
+
+/// Builder for creating a configured cached GPU prover.
+pub struct GpuProverBuilder {
+    app_bin_path: PathBuf,
+    security: SecurityLevel,
+    level: ProverLevel,
+    config: GpuProverConfig,
+}
+
+impl GpuProverBuilder {
+    pub fn new(app_bin_path: impl AsRef<Path>) -> Self {
+        Self {
+            app_bin_path: app_bin_path.as_ref().to_path_buf(),
+            security: SecurityLevel::default(),
+            level: ProverLevel::RecursionUnified,
+            config: GpuProverConfig::default(),
+        }
     }
 
     pub fn with_level(mut self, level: ProverLevel) -> Self {
@@ -67,25 +95,17 @@ impl GpuProverBuilder {
         self
     }
 
-    /// Supplies the base [`ExecutionProverConfiguration`] for the underlying
-    /// prover (host buffer pool sizing, thread counts, concurrency, etc.).
-    /// When unset, the upstream `ExecutionProverConfiguration::default()` is
-    /// used. `with_worker_threads` and `with_max_device_memory_bytes` are
-    /// applied on top of this base, so they win if both are set.
-    pub fn with_execution_config(mut self, config: ExecutionProverConfiguration) -> Self {
-        self.execution_config = Some(config);
+    /// Applies low-level configuration for the GPU prover. See
+    /// [`GpuProverConfig`]; the default is optimal for the vast majority of
+    /// workloads, so this is only needed for specific constraints or unusual
+    /// workloads.
+    pub fn with_config(mut self, config: GpuProverConfig) -> Self {
+        self.config = config;
         self
     }
 
     pub fn build(self) -> Result<GpuProver> {
-        GpuProver::new(
-            &self.app_bin_path,
-            self.worker_threads,
-            self.security,
-            self.level,
-            self.max_device_memory_bytes,
-            self.execution_config,
-        )
+        GpuProver::new(&self.app_bin_path, self.security, self.level, self.config)
     }
 }
 
@@ -117,27 +137,18 @@ enum WorkerCommand {
 impl GpuProver {
     fn new(
         app_bin_path: &Path,
-        worker_threads: Option<usize>,
         security: SecurityLevel,
         level: ProverLevel,
-        max_device_memory_bytes: Option<usize>,
-        execution_config: Option<ExecutionProverConfiguration>,
+        config: GpuProverConfig,
     ) -> Result<Self> {
-        if matches!(worker_threads, Some(0)) {
+        if matches!(config.worker_threads, Some(0)) {
             return Err(HostError::Prover(
                 "worker thread count must be greater than zero".to_string(),
             ));
         }
 
         let app_bin_path = resolve_app_bin_path(app_bin_path)?;
-        let (command_tx, worker_handle) = spawn_worker(
-            app_bin_path,
-            worker_threads,
-            security,
-            level,
-            max_device_memory_bytes,
-            execution_config,
-        )?;
+        let (command_tx, worker_handle) = spawn_worker(app_bin_path, security, level, config)?;
 
         Ok(Self {
             command_tx,
@@ -220,29 +231,16 @@ impl Drop for GpuProver {
 
 fn spawn_worker(
     app_bin_path: PathBuf,
-    worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
-    max_device_memory_bytes: Option<usize>,
-    execution_config: Option<ExecutionProverConfiguration>,
+    config: GpuProverConfig,
 ) -> Result<(mpsc::Sender<WorkerCommand>, JoinHandle<()>)> {
     let (command_tx, command_rx) = mpsc::channel();
     let (init_tx, init_rx) = mpsc::channel();
 
     let worker_handle = std::thread::Builder::new()
         .name("airbender-gpu-prover".to_string())
-        .spawn(move || {
-            gpu_worker_loop(
-                command_rx,
-                init_tx,
-                app_bin_path,
-                worker_threads,
-                security,
-                level,
-                max_device_memory_bytes,
-                execution_config,
-            )
-        })
+        .spawn(move || gpu_worker_loop(command_rx, init_tx, app_bin_path, security, level, config))
         .map_err(|err| {
             HostError::Prover(format!("failed to spawn GPU prover worker thread: {err}"))
         })?;
@@ -270,28 +268,20 @@ fn gpu_worker_loop(
     command_rx: mpsc::Receiver<WorkerCommand>,
     init_tx: mpsc::Sender<Result<()>>,
     app_bin_path: PathBuf,
-    worker_threads: Option<usize>,
     security: SecurityLevel,
     level: ProverLevel,
-    max_device_memory_bytes: Option<usize>,
-    execution_config: Option<ExecutionProverConfiguration>,
+    config: GpuProverConfig,
 ) {
     // Keep all prover state inside this dedicated thread so a panic does not unwind
     // through host-call boundaries or require `AssertUnwindSafe`.
-    let prover = match create_unrolled_prover(
-        &app_bin_path,
-        worker_threads,
-        security,
-        level.as_unrolled_level(),
-        max_device_memory_bytes,
-        execution_config,
-    ) {
-        Ok(prover) => prover,
-        Err(err) => {
-            let _ = init_tx.send(Err(err));
-            return;
-        }
-    };
+    let prover =
+        match create_unrolled_prover(&app_bin_path, security, level.as_unrolled_level(), config) {
+            Ok(prover) => prover,
+            Err(err) => {
+                let _ = init_tx.send(Err(err));
+                return;
+            }
+        };
 
     if init_tx.send(Ok(())).is_err() {
         return;
@@ -336,23 +326,25 @@ fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
 
 fn create_unrolled_prover(
     app_bin_path: &Path,
-    worker_threads: Option<usize>,
     security: SecurityLevel,
     level: execution_utils::unrolled_gpu::UnrolledProverLevel,
-    max_device_memory_bytes: Option<usize>,
-    execution_config: Option<ExecutionProverConfiguration>,
+    config: GpuProverConfig,
 ) -> Result<UnrolledProver> {
     let base_path = base_path(app_bin_path)?;
-    // Start from the caller-supplied prover configuration (host buffer pool
-    // sizing, thread counts, concurrency, ...) or the upstream default when
-    // none was provided. The dedicated `worker_threads` and
-    // `max_device_memory_bytes` overrides below are applied on top of this base.
-    let mut configuration = execution_config.unwrap_or_default();
-    if let Some(threads) = worker_threads {
+    // Map the host-level GpuProverConfig onto the prover's own configuration,
+    // leaving any field the caller did not set at the prover default.
+    let mut configuration = ExecutionProverConfiguration::default();
+    if let Some(threads) = config.worker_threads {
         configuration.max_thread_pool_threads = Some(threads);
         configuration.replay_worker_threads_count = threads;
     }
-    if let Some(bytes) = max_device_memory_bytes {
+    if let Some(count) = config.host_allocators_per_job {
+        configuration.host_allocators_per_job_count = count;
+    }
+    if let Some(count) = config.host_allocators_per_device {
+        configuration.host_allocators_per_device_count = count;
+    }
+    if let Some(bytes) = config.max_device_memory_bytes {
         // The device allocator works in fixed-size blocks; translate the byte cap
         // into a block count. A cap below one block is rejected rather than
         // silently rounded to zero (which would mean "use all free memory").
