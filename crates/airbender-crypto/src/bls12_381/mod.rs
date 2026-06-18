@@ -36,9 +36,14 @@ pub fn verify_kzg_proof(
     // τ·G2 is the fixed trusted-setup point; its Miller-loop coefficients are
     // precomputed once into the PREPARED_G2_BY_TAU const rather than recomputed
     // on every call.
-    let neg_z = (-Fr::from_bigint(z)
-        .expect("z is canonical: the caller validates it via parse_scalar / Fr::into_bigint"))
-    .into_bigint();
+    // Reject a non-canonical evaluation point (z >= Fr::MODULUS) instead of
+    // panicking. `verify_kzg_proof` is a public API that may be reached with
+    // untrusted input (e.g. via the EIP-4844 point-evaluation precompile), so a
+    // malformed z must fail verification rather than abort the host/prover.
+    let Some(z_fr) = Fr::from_bigint(z) else {
+        return false;
+    };
+    let neg_z = (-z_fr).into_bigint();
 
     let bases = [G1Affine::generator(), proof];
     let scalars = [y, neg_z];
@@ -122,6 +127,27 @@ mod tests {
         // A zero claimed value y must be rejected.
         let zero_y = parse_scalar(&[0u8; 32]);
         assert!(!verify_kzg_proof(commitment, proof, z, zero_y));
+    }
+
+    /// A non-canonical evaluation point (z >= Fr::MODULUS) must be rejected,
+    /// not panic: `verify_kzg_proof` is reachable from untrusted input, so a
+    /// malformed z has to fail verification rather than abort the process.
+    #[test]
+    fn verify_kzg_proof_rejects_non_canonical_z() {
+        let commitment = parse_g1_compressed(&from_hex(
+            "8f59a8d2a1a625a17f3fea0fe5eb8c896db3764f3185481bc22f91b4aaffcca25f26936857bc3a7c2539ea8ec3a952b7",
+        ));
+        let proof = parse_g1_compressed(&from_hex(
+            "a62ad71d14c5719385c0686f1871430475bf3a00f0aa3f7b8dd99a9abc2160744faf0070725e00b60ad9a026a15b1a8c",
+        ));
+        let y = parse_scalar(&from_hex(
+            "1522a4a7f34e1ea350ae07c29c96c7e79655aa926122e95fe69fcbd932ca49e9",
+        ));
+
+        // z == Fr::MODULUS is the smallest non-canonical value; `Fr::from_bigint`
+        // returns `None` for it, so verification must return false (not panic).
+        let non_canonical_z = Fr::MODULUS;
+        assert!(!verify_kzg_proof(commitment, proof, non_canonical_z, y));
     }
 
     /// The precomputed PREPARED_G2_BY_TAU const must equal the runtime
