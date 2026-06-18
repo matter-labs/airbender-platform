@@ -269,8 +269,15 @@ impl Affine {
     /// Returns raw x||y coordinate bytes (64 bytes) without the 0x04 prefix byte
     /// and without the constant-time infinity check of `to_encoded_point`.
     ///
-    /// The caller must ensure the point is not at infinity before calling this.
+    /// The caller must ensure the point is not at infinity before calling this;
+    /// on an infinity point the raw coordinates would be all-zero, which is a
+    /// silent and easy-to-misread result. Guard with an assert instead (a plain
+    /// branch, far cheaper than the constant-time check this helper avoids).
     pub fn to_xy_bytes(self) -> [u8; 64] {
+        assert!(
+            !self.is_infinity(),
+            "to_xy_bytes called on the point at infinity"
+        );
         let x_bytes = self.x.to_bytes();
         let y_bytes = self.y.to_bytes();
         let mut result = [0u8; 64];
