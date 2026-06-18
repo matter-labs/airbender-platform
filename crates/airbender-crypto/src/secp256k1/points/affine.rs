@@ -265,6 +265,19 @@ impl Affine {
         result[..encoded.len()].copy_from_slice(encoded.as_bytes());
         result
     }
+
+    /// Returns raw x||y coordinate bytes (64 bytes) without the 0x04 prefix byte
+    /// and without the constant-time infinity check of `to_encoded_point`.
+    ///
+    /// The caller must ensure the point is not at infinity before calling this.
+    pub fn to_xy_bytes(self) -> [u8; 64] {
+        let x_bytes = self.x.to_bytes();
+        let y_bytes = self.y.to_bytes();
+        let mut result = [0u8; 64];
+        result[..32].copy_from_slice(&x_bytes);
+        result[32..].copy_from_slice(&y_bytes);
+        result
+    }
 }
 
 #[cfg(test)]
@@ -296,7 +309,7 @@ impl proptest::arbitrary::Arbitrary for Affine {
 mod tests {
     use super::Affine;
 
-    use proptest::{prop_assert_eq, proptest};
+    use proptest::{prop_assert_eq, prop_assume, proptest};
 
     #[test]
     fn test_set_xo() {
@@ -312,6 +325,18 @@ mod tests {
     fn jacobian_round_trip() {
         proptest!(|(x: Affine)| {
             prop_assert_eq!(x.to_jacobian().to_affine(), x);
+        });
+    }
+
+    #[test]
+    fn to_xy_bytes_matches_encoded_point() {
+        // For any non-infinity point, the raw x||y bytes must equal the body of
+        // the uncompressed encoded point (which is `0x04 || x || y`).
+        proptest!(|(p: Affine)| {
+            prop_assume!(!p.is_infinity());
+            let encoded = p.to_encoded_point(false);
+            let xy = p.to_xy_bytes();
+            prop_assert_eq!(&xy[..], &encoded.as_bytes()[1..]);
         });
     }
 }
