@@ -63,6 +63,7 @@ dependencies = [
 name = "airbender-codec"
 version = "0.2.3"
 dependencies = [
+ "airbender-core",
  "bincode 2.0.1",
  "serde",
 ]
