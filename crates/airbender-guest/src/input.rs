@@ -46,14 +46,25 @@ pub fn read<T: serde::de::DeserializeOwned>() -> Result<T, GuestError> {
 ///
 /// Decodes straight from the framed word transport without first buffering the
 /// serialized blob into a `Vec<u8>`, so peak memory is the decoded value alone
-/// (~1x) rather than blob-plus-value (~2x). The accept/reject set is identical
-/// to the buffered path: same bincode config, and a value that does not consume
-/// the whole frame is still a [`CodecError::TrailingBytes`].
+/// (~1x) rather than blob-plus-value (~2x).
+///
+/// For any input the buffered path could allocate, the accept/reject set is
+/// identical: same bincode config, and a value that does not consume the whole
+/// frame is still a [`CodecError::TrailingBytes`]. Streaming additionally
+/// succeeds on inputs so large the buffered path's up-front `Vec::with_capacity`
+/// would fail — which is the point of the change.
+///
+/// Like the buffered path, the whole frame is consumed from `transport` whether
+/// the decode succeeds or fails, so a subsequent `read_with` stays aligned.
 pub fn read_with<T: serde::de::DeserializeOwned>(
     transport: &mut impl Transport,
 ) -> Result<T, GuestError> {
     let mut reader = FramedReader::new(|| transport.read_word());
-    let value = AirbenderCodecV0::decode_from_reader(&mut reader).map_err(GuestError::Codec)?;
+    let result = AirbenderCodecV0::decode_from_reader(&mut reader);
+    // Drain any words the decoder left behind (on error, or trailing bytes)
+    // before returning, so the transport is positioned at the next frame.
+    reader.discard_rest_of_frame();
+    let value = result.map_err(GuestError::Codec)?;
     let remaining = reader.remaining();
     if remaining != 0 {
         let expected = reader.payload_len();
@@ -124,5 +135,36 @@ mod tests {
             err,
             GuestError::Codec(CodecError::TrailingBytes { .. })
         ));
+    }
+
+    #[test]
+    fn rejected_frame_does_not_desync_the_next_frame() {
+        // A frame that fails (trailing bytes) must still be fully drained, so a
+        // second frame on the same transport decodes correctly afterwards.
+        let bad = Payload {
+            counter: 1,
+            bytes: vec![9u8, 8, 7],
+        };
+        let good = Payload {
+            counter: 42,
+            bytes: vec![1u8, 2, 3, 4, 5],
+        };
+
+        let mut bad_encoded = AirbenderCodecV0::encode(&bad).expect("encode");
+        bad_encoded.extend_from_slice(&[0u8; 6]); // trailing bytes -> rejected frame
+        let good_encoded = AirbenderCodecV0::encode(&good).expect("encode");
+
+        let mut words = frame_words_from_bytes(&bad_encoded).expect("frame bad");
+        words.extend(frame_words_from_bytes(&good_encoded).expect("frame good"));
+        let mut transport = MockTransport::new(words);
+
+        let err = read_with::<Payload>(&mut transport).expect_err("first frame rejected");
+        assert!(matches!(
+            err,
+            GuestError::Codec(CodecError::TrailingBytes { .. })
+        ));
+        // The second frame is intact only if the first was fully consumed.
+        let decoded: Payload = read_with(&mut transport).expect("second frame decodes");
+        assert_eq!(decoded, good);
     }
 }

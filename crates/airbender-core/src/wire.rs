@@ -62,6 +62,9 @@ pub struct FramedReader<F: FnMut() -> u32> {
     read_word: F,
     len: usize,
     remaining: usize,
+    /// Payload words already pulled from the source, so [`Self::discard_rest_of_frame`]
+    /// can consume the rest of the frame without over- or under-reading.
+    pulled_words: usize,
     word: [u8; WORD_BYTES],
     /// Index of the next byte to hand out of `word`; `WORD_BYTES` means empty.
     word_pos: usize,
@@ -76,6 +79,7 @@ impl<F: FnMut() -> u32> FramedReader<F> {
             read_word,
             len,
             remaining: len,
+            pulled_words: 0,
             word: [0u8; WORD_BYTES],
             // Empty to start, so the first byte requested pulls a word.
             word_pos: WORD_BYTES,
@@ -92,23 +96,44 @@ impl<F: FnMut() -> u32> FramedReader<F> {
     pub fn remaining(&self) -> usize {
         self.remaining
     }
+
+    /// Total number of payload words in the frame.
+    fn frame_words(&self) -> usize {
+        self.len.div_ceil(WORD_BYTES)
+    }
+
+    /// Pull and discard any payload words the decoder did not consume, leaving
+    /// the source positioned at the next frame's length word. Buffered/decoded
+    /// data is not touched, so [`Self::remaining`] still reports trailing bytes.
+    ///
+    /// Callers should invoke this before returning — success or failure — so a
+    /// rejected frame does not desync a subsequent read, matching the buffered
+    /// [`read_framed_bytes_with`] which always consumes the whole frame.
+    pub fn discard_rest_of_frame(&mut self) {
+        let frame_words = self.frame_words();
+        while self.pulled_words < frame_words {
+            (self.read_word)();
+            self.pulled_words += 1;
+        }
+    }
 }
 
 #[cfg(feature = "stream")]
 impl<F: FnMut() -> u32> bincode::de::read::Reader for FramedReader<F> {
     fn read(&mut self, out: &mut [u8]) -> Result<(), bincode::error::DecodeError> {
+        // Reject an unsatisfiable request up front so a failed read never leaves
+        // the reader partially advanced.
+        if self.remaining < out.len() {
+            return Err(bincode::error::DecodeError::UnexpectedEnd {
+                additional: out.len() - self.remaining,
+            });
+        }
         let mut written = 0;
         while written < out.len() {
-            // Reject insufficient input before touching any state, so a failed
-            // read leaves the reader untouched.
-            if self.remaining == 0 {
-                return Err(bincode::error::DecodeError::UnexpectedEnd {
-                    additional: out.len() - written,
-                });
-            }
             if self.word_pos == WORD_BYTES {
                 self.word = (self.read_word)().to_be_bytes();
                 self.word_pos = 0;
+                self.pulled_words += 1;
             }
             // Bytes left in the current word, capped by unconsumed payload so
             // the final word's zero padding is never handed to the decoder.
@@ -200,5 +225,36 @@ mod tests {
             let mut extra = [0u8; 1];
             assert!(reader.read(&mut extra).is_err());
         }
+    }
+
+    #[cfg(feature = "stream")]
+    #[test]
+    fn discard_consumes_exactly_the_rest_of_the_frame() {
+        use super::FramedReader;
+        use bincode::de::read::Reader;
+
+        // Two frames back to back; partially read the first, then discard.
+        let first = frame_words_from_bytes(b"hello world").expect("frame 1"); // 11 bytes, 3 words
+        let second = frame_words_from_bytes(b"next").expect("frame 2");
+        let mut words = first.clone();
+        words.extend_from_slice(&second);
+
+        let mut cursor = 0;
+        let mut reader = FramedReader::new(|| {
+            let word = words[cursor];
+            cursor += 1;
+            word
+        });
+
+        // Read only the first 2 bytes, leaving the rest of frame 1 unread.
+        let mut out = [0u8; 2];
+        reader.read(&mut out).expect("partial read");
+        assert_eq!(&out, b"he");
+        reader.discard_rest_of_frame();
+
+        // The cursor must now sit exactly at frame 2's length word, i.e. all of
+        // frame 1's words (length + payload) have been consumed and no more.
+        assert_eq!(cursor, first.len());
+        assert_eq!(words[cursor], b"next".len() as u32);
     }
 }
