@@ -25,6 +25,9 @@ dependencies = [
 [[package]]
 name = "airbender-core"
 version = "0.2.3"
+dependencies = [
+ "bincode",
+]
 
 [[package]]
 name = "airbender-crypto"
