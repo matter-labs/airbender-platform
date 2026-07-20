@@ -15,7 +15,10 @@ readme = "README.md"
 serde = { workspace = true, default-features = false, features = ["derive"], optional = true }
 toml = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
+bincode = { workspace = true, default-features = false, optional = true }
 
 [features]
 default = ["host"]
 host = ["dep:serde", "dep:toml", "dep:thiserror"]
+# Streaming reader over the framed word transport (see `wire::FramedReader`).
+stream = ["dep:bincode"]

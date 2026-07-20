@@ -49,6 +49,80 @@ pub fn read_framed_bytes_with(mut read_word: impl FnMut() -> u32) -> Vec<u8> {
     bytes
 }
 
+/// Streaming counterpart to [`read_framed_bytes_with`]: a [`bincode`] reader
+/// that pulls framed words on demand instead of first materializing the whole
+/// payload into a `Vec<u8>`. Only a single word is buffered at a time, so it
+/// holds O(1) memory regardless of payload size — letting a decoder run at ~1x
+/// peak memory rather than the ~2x of "buffer the blob, then decode it".
+///
+/// The word source must yield the frame length word first, then payload words,
+/// exactly as [`frame_words_from_bytes`] lays them out.
+#[cfg(feature = "stream")]
+pub struct FramedReader<F: FnMut() -> u32> {
+    read_word: F,
+    len: usize,
+    remaining: usize,
+    word: [u8; WORD_BYTES],
+    /// Index of the next byte to hand out of `word`; `WORD_BYTES` means empty.
+    word_pos: usize,
+}
+
+#[cfg(feature = "stream")]
+impl<F: FnMut() -> u32> FramedReader<F> {
+    /// Consume the leading length word and prepare to stream the payload.
+    pub fn new(mut read_word: F) -> Self {
+        let len = read_word() as usize;
+        Self {
+            read_word,
+            len,
+            remaining: len,
+            word: [0u8; WORD_BYTES],
+            // Empty to start, so the first byte requested pulls a word.
+            word_pos: WORD_BYTES,
+        }
+    }
+
+    /// Total framed payload length in bytes (from the leading length word).
+    pub fn payload_len(&self) -> usize {
+        self.len
+    }
+
+    /// Payload bytes not yet handed to the decoder; zero once fully consumed.
+    /// A non-zero value after a successful decode means trailing bytes.
+    pub fn remaining(&self) -> usize {
+        self.remaining
+    }
+}
+
+#[cfg(feature = "stream")]
+impl<F: FnMut() -> u32> bincode::de::read::Reader for FramedReader<F> {
+    fn read(&mut self, out: &mut [u8]) -> Result<(), bincode::error::DecodeError> {
+        let mut written = 0;
+        while written < out.len() {
+            // Reject insufficient input before touching any state, so a failed
+            // read leaves the reader untouched.
+            if self.remaining == 0 {
+                return Err(bincode::error::DecodeError::UnexpectedEnd {
+                    additional: out.len() - written,
+                });
+            }
+            if self.word_pos == WORD_BYTES {
+                self.word = (self.read_word)().to_be_bytes();
+                self.word_pos = 0;
+            }
+            // Bytes left in the current word, capped by unconsumed payload so
+            // the final word's zero padding is never handed to the decoder.
+            let available = (WORD_BYTES - self.word_pos).min(self.remaining);
+            let n = available.min(out.len() - written);
+            out[written..written + n].copy_from_slice(&self.word[self.word_pos..self.word_pos + n]);
+            self.word_pos += n;
+            self.remaining -= n;
+            written += n;
+        }
+        Ok(())
+    }
+}
+
 /// Frame payload bytes into input words consumed by the runtime.
 pub fn frame_words_from_bytes(bytes: &[u8]) -> Result<Vec<u32>, WireError> {
     let len_word = frame_len_word(bytes.len())?;
@@ -98,5 +172,33 @@ mod tests {
     fn rejects_lengths_above_u32_max() {
         let err = frame_len_word(usize::MAX).expect_err("must reject oversized length");
         assert_eq!(err, WireError::PayloadTooLarge { len: usize::MAX });
+    }
+
+    #[cfg(feature = "stream")]
+    #[test]
+    fn framed_reader_streams_same_bytes_as_buffered() {
+        use super::FramedReader;
+        use bincode::de::read::Reader;
+
+        // Empty, aligned, and padded-final-word lengths.
+        for bytes in [b"".as_slice(), b"abcd", b"abcde", b"airbender!!"] {
+            let words = frame_words_from_bytes(bytes).expect("frame words");
+            let mut cursor = 0;
+            let mut reader = FramedReader::new(|| {
+                let word = words[cursor];
+                cursor += 1;
+                word
+            });
+            assert_eq!(reader.payload_len(), bytes.len());
+
+            let mut out = alloc::vec![0u8; bytes.len()];
+            reader.read(&mut out).expect("read payload");
+            assert_eq!(out, bytes);
+            assert_eq!(reader.remaining(), 0, "payload fully consumed");
+
+            // Reading past the frame errors rather than panicking or over-reading.
+            let mut extra = [0u8; 1];
+            assert!(reader.read(&mut extra).is_err());
+        }
     }
 }

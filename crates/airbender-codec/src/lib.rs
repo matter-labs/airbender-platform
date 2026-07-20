@@ -49,6 +49,25 @@ impl AirbenderCodec for AirbenderCodecV0 {
     }
 }
 
+impl AirbenderCodecV0 {
+    /// Decode a value from a streaming [`bincode`] reader using the same
+    /// configuration as [`AirbenderCodec::decode`].
+    ///
+    /// Unlike the slice-based `decode`, the end-of-input check is left to the
+    /// caller: a reader knows the frame bounds, bincode does not. Callers that
+    /// need the codec's trailing-byte strictness should verify the reader is
+    /// fully consumed and raise [`CodecError::TrailingBytes`] themselves (see
+    /// `airbender_core::wire::FramedReader::remaining`).
+    pub fn decode_from_reader<T, R>(reader: R) -> Result<T, CodecError>
+    where
+        T: serde::de::DeserializeOwned,
+        R: bincode::de::read::Reader,
+    {
+        bincode::serde::decode_from_reader(reader, bincode::config::standard())
+            .map_err(CodecError::Decode)
+    }
+}
+
 #[derive(Debug)]
 pub enum CodecError {
     Encode(bincode::error::EncodeError),
