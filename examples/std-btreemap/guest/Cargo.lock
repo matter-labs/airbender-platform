@@ -6,6 +6,7 @@ version = 4
 name = "airbender-codec"
 version = "0.2.3"
 dependencies = [
+ "airbender-core",
  "bincode",
  "serde",
 ]
@@ -13,9 +14,6 @@ dependencies = [
 [[package]]
 name = "airbender-core"
 version = "0.2.3"
-dependencies = [
- "bincode",
-]
 
 [[package]]
 name = "airbender-guest"

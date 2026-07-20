@@ -12,5 +12,6 @@ description = "Versioned serialization for Airbender host and guest communicatio
 readme = "README.md"
 
 [dependencies]
+airbender-core = { path = "../airbender-core", default-features = false }
 serde = { workspace = true, default-features = false, features = ["alloc", "derive"] }
 bincode = { workspace = true, default-features = false, features = ["alloc", "serde"] }

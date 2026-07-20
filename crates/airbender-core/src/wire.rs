@@ -49,7 +49,25 @@ pub fn read_framed_bytes_with(mut read_word: impl FnMut() -> u32) -> Vec<u8> {
     bytes
 }
 
-/// Streaming counterpart to [`read_framed_bytes_with`]: a [`bincode`] reader
+/// Error from [`FramedRead::read`]: the frame ran out before the request could
+/// be satisfied. `shortfall` is how many more bytes were requested than the
+/// frame still holds; on this error the reader is left unadvanced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndOfFrame {
+    pub shortfall: usize,
+}
+
+/// A source of framed payload bytes read on demand. This keeps the framing and
+/// word-transport concern in `core`, decoupled from any serializer — a bincode
+/// bridge over `FramedRead` lives in the codec crate, so `core` needs no
+/// dependency on bincode.
+pub trait FramedRead {
+    /// Fill `out` completely, or return [`EndOfFrame`] without advancing if the
+    /// frame does not hold that many more bytes.
+    fn read(&mut self, out: &mut [u8]) -> Result<(), EndOfFrame>;
+}
+
+/// Streaming counterpart to [`read_framed_bytes_with`]: a [`FramedRead`] source
 /// that pulls framed words on demand instead of first materializing the whole
 /// payload into a `Vec<u8>`. Only a single word is buffered at a time, so it
 /// holds O(1) memory regardless of payload size — letting a decoder run at ~1x
@@ -57,7 +75,6 @@ pub fn read_framed_bytes_with(mut read_word: impl FnMut() -> u32) -> Vec<u8> {
 ///
 /// The word source must yield the frame length word first, then payload words,
 /// exactly as [`frame_words_from_bytes`] lays them out.
-#[cfg(feature = "stream")]
 pub struct FramedReader<F: FnMut() -> u32> {
     read_word: F,
     len: usize,
@@ -70,7 +87,6 @@ pub struct FramedReader<F: FnMut() -> u32> {
     word_pos: usize,
 }
 
-#[cfg(feature = "stream")]
 impl<F: FnMut() -> u32> FramedReader<F> {
     /// Consume the leading length word and prepare to stream the payload.
     pub fn new(mut read_word: F) -> Self {
@@ -125,14 +141,13 @@ impl<F: FnMut() -> u32> FramedReader<F> {
     }
 }
 
-#[cfg(feature = "stream")]
-impl<F: FnMut() -> u32> bincode::de::read::Reader for FramedReader<F> {
-    fn read(&mut self, out: &mut [u8]) -> Result<(), bincode::error::DecodeError> {
+impl<F: FnMut() -> u32> FramedRead for FramedReader<F> {
+    fn read(&mut self, out: &mut [u8]) -> Result<(), EndOfFrame> {
         // Reject an unsatisfiable request up front so a failed read never leaves
         // the reader partially advanced.
         if self.remaining < out.len() {
-            return Err(bincode::error::DecodeError::UnexpectedEnd {
-                additional: out.len() - self.remaining,
+            return Err(EndOfFrame {
+                shortfall: out.len() - self.remaining,
             });
         }
         let mut written = 0;
@@ -206,11 +221,9 @@ mod tests {
         assert_eq!(err, WireError::PayloadTooLarge { len: usize::MAX });
     }
 
-    #[cfg(feature = "stream")]
     #[test]
     fn framed_reader_streams_same_bytes_as_buffered() {
-        use super::FramedReader;
-        use bincode::de::read::Reader;
+        use super::{FramedRead, FramedReader};
 
         // Empty, aligned, and padded-final-word lengths.
         for bytes in [b"".as_slice(), b"abcd", b"abcde", b"airbender!!"] {
@@ -234,11 +247,9 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "stream")]
     #[test]
     fn discard_consumes_exactly_the_rest_of_the_frame() {
-        use super::FramedReader;
-        use bincode::de::read::Reader;
+        use super::{FramedRead, FramedReader};
 
         // Two frames back to back; partially read the first, then discard.
         let first = frame_words_from_bytes(b"hello world").expect("frame 1"); // 11 bytes, 3 words

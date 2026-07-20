@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+use airbender_core::wire::FramedRead;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -49,8 +50,23 @@ impl AirbenderCodec for AirbenderCodecV0 {
     }
 }
 
+/// Bridges a [`FramedRead`] source (owned by `airbender-core`, bincode-free) to
+/// [`bincode`]'s reader trait, so the framing layer stays decoupled from the
+/// serializer. Maps frame exhaustion to bincode's `UnexpectedEnd`.
+struct FramedBincodeReader<'a, R: FramedRead>(&'a mut R);
+
+impl<R: FramedRead> bincode::de::read::Reader for FramedBincodeReader<'_, R> {
+    fn read(&mut self, bytes: &mut [u8]) -> Result<(), bincode::error::DecodeError> {
+        self.0
+            .read(bytes)
+            .map_err(|end| bincode::error::DecodeError::UnexpectedEnd {
+                additional: end.shortfall,
+            })
+    }
+}
+
 impl AirbenderCodecV0 {
-    /// Decode a value from a streaming [`bincode`] reader using the same
+    /// Decode a value from a streaming [`FramedRead`] source using the same
     /// configuration as [`AirbenderCodec::decode`].
     ///
     /// Unlike the slice-based `decode`, the end-of-input check is left to the
@@ -66,12 +82,12 @@ impl AirbenderCodecV0 {
     /// the claimed length up front — so a bogus inner length fails as an
     /// allocation abort rather than a clean `DecodeError`. Ordinary `Vec<u8>`
     /// and `String` fields are unaffected (both paths allocate up front).
-    pub fn decode_from_reader<T, R>(reader: R) -> Result<T, CodecError>
+    pub fn decode_from_reader<T, R>(reader: &mut R) -> Result<T, CodecError>
     where
         T: serde::de::DeserializeOwned,
-        R: bincode::de::read::Reader,
+        R: FramedRead,
     {
-        bincode::serde::decode_from_reader(reader, bincode::config::standard())
+        bincode::serde::decode_from_reader(FramedBincodeReader(reader), bincode::config::standard())
             .map_err(CodecError::Decode)
     }
 }
