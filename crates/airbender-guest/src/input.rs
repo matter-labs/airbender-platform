@@ -167,4 +167,35 @@ mod tests {
         let decoded: Payload = read_with(&mut transport).expect("second frame decodes");
         assert_eq!(decoded, good);
     }
+
+    #[test]
+    fn mid_decode_failure_does_not_desync_the_next_frame() {
+        // Exercises the `decode == Err -> discard_rest_of_frame` branch (the
+        // trailing-bytes test above hits the `decode == Ok` branch): a frame
+        // that fails *during* decode, with words still unread, must still be
+        // drained so the following frame decodes.
+        #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+        struct HasBool {
+            flag: bool,
+            rest: u32,
+        }
+
+        // 0x02 is not a valid bool discriminant, so decode fails after one byte,
+        // leaving the rest of this 8-byte (2-word) frame unread.
+        let bad_frame_bytes = [2u8, 0, 0, 0, 0, 0, 0, 0];
+        let good = Payload {
+            counter: 99,
+            bytes: vec![7u8, 7, 7],
+        };
+        let good_encoded = AirbenderCodecV0::encode(&good).expect("encode");
+
+        let mut words = frame_words_from_bytes(&bad_frame_bytes).expect("frame bad");
+        words.extend(frame_words_from_bytes(&good_encoded).expect("frame good"));
+        let mut transport = MockTransport::new(words);
+
+        let err = read_with::<HasBool>(&mut transport).expect_err("decode must fail");
+        assert!(matches!(err, GuestError::Codec(CodecError::Decode(_))));
+        let decoded: Payload = read_with(&mut transport).expect("second frame decodes");
+        assert_eq!(decoded, good);
+    }
 }

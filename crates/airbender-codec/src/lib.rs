@@ -58,6 +58,14 @@ impl AirbenderCodecV0 {
     /// need the codec's trailing-byte strictness should verify the reader is
     /// fully consumed and raise [`CodecError::TrailingBytes`] themselves (see
     /// `airbender_core::wire::FramedReader::remaining`).
+    ///
+    /// For `DeserializeOwned` types this consumes exactly the same bytes with
+    /// the same validation as `decode`. One failure-mode difference: a
+    /// `deserialize_bytes` visitor (e.g. `serde_bytes`) is served zero-copy by
+    /// the slice path but goes through `Vec<u8>::decode` here, which allocates
+    /// the claimed length up front — so a bogus inner length fails as an
+    /// allocation abort rather than a clean `DecodeError`. Ordinary `Vec<u8>`
+    /// and `String` fields are unaffected (both paths allocate up front).
     pub fn decode_from_reader<T, R>(reader: R) -> Result<T, CodecError>
     where
         T: serde::de::DeserializeOwned,

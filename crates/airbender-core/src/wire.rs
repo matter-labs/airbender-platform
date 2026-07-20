@@ -109,6 +109,13 @@ impl<F: FnMut() -> u32> FramedReader<F> {
     /// Callers should invoke this before returning — success or failure — so a
     /// rejected frame does not desync a subsequent read, matching the buffered
     /// [`read_framed_bytes_with`] which always consumes the whole frame.
+    ///
+    /// Cost is bounded by the frame's length word: draining an honestly-framed
+    /// frame reads only the words the source actually holds, but a frame whose
+    /// length word is far larger than its real content will issue that many
+    /// `read_word` calls. This is only reachable via a caller that recovers from
+    /// an error and keeps reading; it is not a concern for honestly-framed input
+    /// (as the guest's is) where the length word reflects the payload.
     pub fn discard_rest_of_frame(&mut self) {
         let frame_words = self.frame_words();
         while self.pulled_words < frame_words {
