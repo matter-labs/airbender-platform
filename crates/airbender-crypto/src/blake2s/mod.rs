@@ -22,6 +22,15 @@ mod delegated_extended;
 ))]
 pub use delegated_extended::{initialize_blake2s_delegation_context, Blake2s256};
 
+// Gated on the feature alone (not on riscv32): the underlying evaluator
+// computes the same function in software on other targets, which lets hosts
+// (and the byte-identity tests) run the exact code the guest delegates.
+#[cfg(feature = "single_round_with_control")]
+mod path_hasher;
+
+#[cfg(feature = "single_round_with_control")]
+pub use path_hasher::Blake2sPathHasher;
+
 // Multiple tests to compare delegation blake with external implementation.
 // To run - please execute the run_tests inside the main workload method.
 // Then compile the zksync_os (dump_bin.sh) - and run it (cargo test from zksync_os_runner)
