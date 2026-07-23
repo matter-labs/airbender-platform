@@ -21,7 +21,30 @@
 //! software, so hosts can run this code (and its tests) natively.
 
 use blake2s_u32::state_with_extended_control::Blake2RoundFunctionEvaluator;
-use blake2s_u32::{BLAKE2S_BLOCK_SIZE_BYTES, BLAKE2S_BLOCK_SIZE_U32_WORDS};
+use blake2s_u32::{
+    AlignedArray64, BLAKE2S_BLOCK_SIZE_BYTES, BLAKE2S_BLOCK_SIZE_U32_WORDS,
+    BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS, BLAKE2S_STATE_WIDTH_IN_U32_WORDS,
+};
+
+/// Soundly constructs the evaluator in the state
+/// [`Blake2RoundFunctionEvaluator::new`] produces on the RISC-V machine.
+///
+/// `new()` itself does `MaybeUninit::uninit().assume_init()`, which is sound
+/// only on the guest (zero-by-default memory) and is UB on native hosts. All
+/// evaluator fields are public, so we build the exact same value explicitly:
+/// every field zero — which is what the guest's `assume_init` yields on zeroed
+/// memory — then `reset()` loads `CONFIGURED_IV` into `state`, precisely as
+/// `new()` does. Byte-identical to the guest, without the `assume_init` UB.
+fn zeroed_evaluator() -> Blake2RoundFunctionEvaluator {
+    let mut evaluator = Blake2RoundFunctionEvaluator {
+        state: [0u32; BLAKE2S_STATE_WIDTH_IN_U32_WORDS],
+        extended_state: [0u32; BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS],
+        input_buffer: AlignedArray64::from_value(0u32),
+        t: 0,
+    };
+    evaluator.reset();
+    evaluator
+}
 
 /// A running blake2s-256 hash folded along a Merkle path.
 ///
@@ -46,7 +69,7 @@ impl Blake2sPathHasher {
             "single-block input must be <= {BLAKE2S_BLOCK_SIZE_BYTES} bytes, got {}",
             bytes.len(),
         );
-        let mut evaluator = Blake2RoundFunctionEvaluator::new();
+        let mut evaluator = zeroed_evaluator();
 
         let mut block = [0u8; BLAKE2S_BLOCK_SIZE_BYTES];
         block[..bytes.len()].copy_from_slice(bytes);
