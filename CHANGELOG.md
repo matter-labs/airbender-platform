@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.4](https://github.com/matter-labs/airbender-platform/compare/v0.2.3...v0.2.4) (2026-07-24)
+
+
+### Features
+
+* **crypto:** safe fused blake2s Merkle path hasher ([#83](https://github.com/matter-labs/airbender-platform/issues/83)) ([17e1e1c](https://github.com/matter-labs/airbender-platform/commit/17e1e1c88b1cf92c4be839b54f386662a89e32e3))
+* **guest:** stream-decode framed input to halve peak memory ([#81](https://github.com/matter-labs/airbender-platform/issues/81)) ([3a2f433](https://github.com/matter-labs/airbender-platform/commit/3a2f43334511d54a77cc57663443c9201d66811e))
+
 ## [0.2.3](https://github.com/matter-labs/airbender-platform/compare/v0.2.2...v0.2.3) (2026-06-11)
 
 
