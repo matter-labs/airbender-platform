@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "airbender-codec"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "airbender-core",
  "bincode",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-core"
-version = "0.2.3"
+version = "0.2.4"
 
 [[package]]
 name = "airbender-fibonacci"
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-guest"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "airbender-codec",
  "airbender-core",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-macros"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-rt"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "getrandom",
  "riscv_common",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-sdk"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "airbender-codec",
  "airbender-guest",
