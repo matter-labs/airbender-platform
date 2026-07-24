@@ -22,9 +22,6 @@ mod delegated_extended;
 ))]
 pub use delegated_extended::{initialize_blake2s_delegation_context, Blake2s256};
 
-// Gated on the feature alone (not on riscv32): the underlying evaluator
-// computes the same function in software on other targets, which lets hosts
-// (and the byte-identity tests) run the exact code the guest delegates.
 #[cfg(feature = "single_round_with_control")]
 mod path_hasher;
 

@@ -1,24 +1,20 @@
-//! Safe fused blake2s "running path hasher" over the `blake2_with_compression`
+//! A fused blake2s-256 Merkle path hasher over the `blake2_with_compression`
 //! delegation primitive.
 //!
-//! Folding a Merkle path with the generic [`Blake2s256`](super::Blake2s256)
-//! digest costs, per level: a fresh hasher init, two 32-byte operand copies
-//! into the block buffer, and a digest finalize/unwrap. The delegation circuit
-//! exposes a *fused* two-to-one node compression
-//! ([`Blake2RoundFunctionEvaluator::compress_node`]) that keeps the running
-//! hash inside the evaluator's state across folds, so each level only marshals
-//! the 32-byte sibling and issues one delegated compression. This module wraps
-//! that primitive — including all of its `unsafe` buffer contracts — behind a
-//! safe API.
+//! [`Blake2RoundFunctionEvaluator::compress_node`] is a fused two-to-one node
+//! compression: it keeps the running hash inside the evaluator across folds, so
+//! each level marshals only the 32-byte sibling and issues one delegated
+//! compression (no per-level hasher init or finalize). This module wraps that
+//! primitive — and its `unsafe` buffer contracts — behind a safe API.
 //!
-//! The output is byte-for-byte identical to chaining the plain digest:
-//! `compress_node::<false>` starts every compression from the blake2s IV with
-//! `t = 64` and the final-block flag set, i.e. a fresh single-block
-//! `blake2s256(left || right)`. Byte-identity against the external RustCrypto
-//! implementation is pinned by the tests below.
+//! Folding is byte-identical to plain digest chaining:
 //!
-//! On non-RISC-V targets the underlying evaluator computes the same function in
-//! software, so hosts can run this code (and its tests) natively.
+//! ```text
+//! fold(h, sibling, on_left) == blake2s256(on_left ? sibling || h : h || sibling)
+//! ```
+//!
+//! (`compress_node::<false>` starts each compression from the blake2s IV with
+//! `t = 64` and the final-block flag set — a fresh single-block hash.)
 
 use blake2s_u32::state_with_extended_control::Blake2RoundFunctionEvaluator;
 use blake2s_u32::{
@@ -26,15 +22,10 @@ use blake2s_u32::{
     BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS, BLAKE2S_STATE_WIDTH_IN_U32_WORDS,
 };
 
-/// Soundly constructs the evaluator in the state
-/// [`Blake2RoundFunctionEvaluator::new`] produces on the RISC-V machine.
-///
-/// `new()` itself does `MaybeUninit::uninit().assume_init()`, which is sound
-/// only on the guest (zero-by-default memory) and is UB on native hosts. All
-/// evaluator fields are public, so we build the exact same value explicitly:
-/// every field zero — which is what the guest's `assume_init` yields on zeroed
-/// memory — then `reset()` loads `CONFIGURED_IV` into `state`, precisely as
-/// `new()` does. Byte-identical to the guest, without the `assume_init` UB.
+/// [`Blake2RoundFunctionEvaluator::new`] is sound only on RISC-V: it relies on
+/// zero-initialized memory via `assume_init`, which is UB on native hosts. This
+/// reproduces the same value by zeroing every (public) field explicitly, then
+/// calling `reset()` just as `new()` does.
 fn zeroed_evaluator() -> Blake2RoundFunctionEvaluator {
     let mut evaluator = Blake2RoundFunctionEvaluator {
         state: [0u32; BLAKE2S_STATE_WIDTH_IN_U32_WORDS],
@@ -123,7 +114,7 @@ mod tests {
         out
     }
 
-    /// Deterministic xorshift bytes, no extra dev-dependencies.
+    /// Deterministic pseudo-random test bytes (seeded xorshift).
     fn pseudo_random_bytes(seed: u64, len: usize) -> Vec<u8> {
         let mut state = seed | 1;
         (0..len)
@@ -204,18 +195,15 @@ mod tests {
             let mut hasher = Blake2sPathHasher::from_single_block(&leaf);
             hasher.fold(&sibling, sibling_on_left);
             let mut concat = [0u8; 64];
+            let leaf_hash = reference_hash(&leaf);
             if sibling_on_left {
                 concat[..32].copy_from_slice(&sibling);
-                concat[32..].copy_from_slice(&leaf_hash_of(&leaf));
+                concat[32..].copy_from_slice(&leaf_hash);
             } else {
-                concat[..32].copy_from_slice(&leaf_hash_of(&leaf));
+                concat[..32].copy_from_slice(&leaf_hash);
                 concat[32..].copy_from_slice(&sibling);
             }
             assert_eq!(hasher.finalize(), reference_hash(&concat));
         }
-    }
-
-    fn leaf_hash_of(leaf: &[u8]) -> [u8; 32] {
-        reference_hash(leaf)
     }
 }
