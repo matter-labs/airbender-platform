@@ -91,6 +91,7 @@ proptest = { version = "1.0.0", default-features = false }
 hex-literal = { version = "0.4.1", default-features = false }
 ark-test-curves = { version = "0.5", default-features = false }
 rand_core = { version = "0.6.4", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
 
 # Airbender dependencies
 riscv_common = { git = "https://github.com/matter-labs/zksync-airbender", rev = "73d69b5" }
