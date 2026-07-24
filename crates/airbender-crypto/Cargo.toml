@@ -61,6 +61,7 @@ proptest = { workspace = true, features = ["std"] }
 hex-literal = { workspace = true }
 ark-test-curves = { workspace = true, features = ["secp256k1", "bls12_381_curve"] }
 rand_core = { workspace = true, features = ["getrandom"] }
+rand_chacha = "0.3"
 
 [features]
 # forward = ["blake2"]

@@ -107,6 +107,8 @@ impl Blake2sPathHasher {
 mod tests {
     use super::*;
     use crate::blake2_ext::{Blake2s256 as ReferenceBlake2s, Digest};
+    use rand_chacha::ChaCha8Rng;
+    use rand_core::{RngCore, SeedableRng};
 
     fn reference_hash(bytes: &[u8]) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -114,17 +116,12 @@ mod tests {
         out
     }
 
-    /// Deterministic pseudo-random test bytes (seeded xorshift).
+    /// Deterministic pseudo-random test bytes (seeded ChaCha8).
     fn pseudo_random_bytes(seed: u64, len: usize) -> Vec<u8> {
-        let mut state = seed | 1;
-        (0..len)
-            .map(|_| {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                (state >> 24) as u8
-            })
-            .collect()
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let mut bytes = vec![0u8; len];
+        rng.fill_bytes(&mut bytes);
+        bytes
     }
 
     #[test]
