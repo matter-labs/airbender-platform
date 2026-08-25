@@ -33,7 +33,7 @@ jobs:
       CARGO_TERM_COLOR: always
       REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_type == 'tag' && github.ref_name || 'latest' }}
       PUBLISH_API: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-      RUST_TOOLCHAIN: nightly-2026-02-10
+      RUST_TOOLCHAIN: nightly-2026-08-09
       ZKSYNC_USE_CUDA_STUBS: "true"
     steps:
       - name: Checkout source code

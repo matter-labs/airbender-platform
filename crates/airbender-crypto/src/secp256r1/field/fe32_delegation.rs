@@ -49,6 +49,7 @@ impl FieldElement {
     pub(crate) const ONE: Self =
         Self::from_words_unchecked([1, 18446744069414584320, 18446744073709551615, 4294967294]);
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn to_representation(mut self) -> Self {
         unsafe {
             u256::mul_assign_montgomery::<FieldParams>(&mut self.0, &R2);
@@ -56,6 +57,7 @@ impl FieldElement {
         self
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn to_integer(mut self) -> Self {
         unsafe {
             u256::mul_assign_montgomery::<FieldParams>(&mut self.0, &BigInt::one());
@@ -72,10 +74,12 @@ impl FieldElement {
         Self(BigInt::<4>(words))
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn from_words(words: [u64; 4]) -> Self {
         Self::from_words_unchecked(words).to_representation()
     }
 
+    #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(crate) fn to_be_bytes(self) -> [u8; 32] {
         u256::to_be_bytes(self.to_integer().0)
     }
