@@ -24,6 +24,12 @@ impl TransitionMatrix {
     }
 
     /// Compute the transition matrix and eta for 62 divsteps
+    // `w` and `m` are declared before the branch and assigned in both arms, which
+    // `needless_late_init` wants folded into a `let w = if ..`. This is a line-for-line
+    // port of libsecp256k1's `secp256k1_modinv64_divsteps_62`; keeping the shape lets it
+    // be diffed against the original, and `m` has to stay late-initialized regardless
+    // because the post-branch `debug_assert!` reads it.
+    #[allow(clippy::needless_late_init)]
     fn divsteps62(eta: &mut i64, f0: Wrapping<u64>, g0: Wrapping<u64>) -> Self {
         let mut u = Wrapping(1u64);
         let mut v = Wrapping(0u64);

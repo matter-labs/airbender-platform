@@ -759,7 +759,7 @@ dependencies = [
 [[package]]
 name = "common_constants"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5#73d69b5346b3c2350fa104a56ec4df78840cea99"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=67ee094#67ee094449abaebc77e58435f130ce6ea27721e5"
 dependencies = [
  "seq-macro",
 ]
@@ -2189,7 +2189,7 @@ dependencies = [
 [[package]]
 name = "riscv_common"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5#73d69b5346b3c2350fa104a56ec4df78840cea99"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=67ee094#67ee094449abaebc77e58435f130ce6ea27721e5"
 dependencies = [
  "common_constants",
  "seq-macro",

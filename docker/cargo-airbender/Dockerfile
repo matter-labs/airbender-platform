@@ -1,7 +1,7 @@
 FROM ubuntu:22.04 AS rust-base
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG RUST_TOOLCHAIN=nightly-2026-02-10
+ARG RUST_TOOLCHAIN=nightly-2026-08-09
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \

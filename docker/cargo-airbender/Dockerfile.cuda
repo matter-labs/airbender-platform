@@ -1,7 +1,7 @@
 FROM nvidia/cuda:12.9.1-devel-ubuntu22.04 AS rust-base
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG RUST_TOOLCHAIN=nightly-2026-02-10
+ARG RUST_TOOLCHAIN=nightly-2026-08-09
 ARG CUDA_ARCH=80;89;90
 ARG CMAKE_VERSION=3.30.2
 
