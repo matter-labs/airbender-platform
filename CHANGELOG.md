@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/matter-labs/airbender-platform/compare/v0.2.4...v0.3.0) (2026-08-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* bump zksync-airbender to 67ee094 and the toolchain to nightly-2026-08-09 ([#86](https://github.com/matter-labs/airbender-platform/issues/86))
+
+### Features
+
+* bump zksync-airbender to 67ee094 and the toolchain to nightly-2026-08-09 ([#86](https://github.com/matter-labs/airbender-platform/issues/86)) ([31c0811](https://github.com/matter-labs/airbender-platform/commit/31c08112b1976b7ae2d9ce0517ece7e308a7252a))
+
 ## [0.2.4](https://github.com/matter-labs/airbender-platform/compare/v0.2.3...v0.2.4) (2026-07-24)
 
 
