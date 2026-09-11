@@ -71,8 +71,8 @@ tera = { version = "1", default-features = false }
 # (eravm-airbender-verifier there, zksync-airbender-prover) pins the same tag, so
 # the graph carries one `execution_utils` and FRI proof types cross between
 # `airbender-host` and the wrapper. Move all of them together.
-common_constants = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.1-private", default-features = false }
-blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.1-private", default-features = false }
+common_constants = { git = "https://github.com/matter-labs/zksync-airbender-private.git", rev = "a4fc9b1950ff0115643178624904c170e89bbbf7", default-features = false }
+blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender-private.git", rev = "a4fc9b1950ff0115643178624904c170e89bbbf7", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 k256 = { version = "0.13", default-features = false }
@@ -101,11 +101,11 @@ rand_core = { version = "0.6.4", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 
 # Airbender dependencies
-riscv_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.1-private" }
-execution_utils = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.1-private" }
-gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.1-private" }
-riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.1-private" }
-verifier_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.1-private" }
+riscv_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", rev = "a4fc9b1950ff0115643178624904c170e89bbbf7" }
+execution_utils = { git = "https://github.com/matter-labs/zksync-airbender-private.git", rev = "a4fc9b1950ff0115643178624904c170e89bbbf7" }
+gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender-private.git", rev = "a4fc9b1950ff0115643178624904c170e89bbbf7" }
+riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender-private.git", rev = "a4fc9b1950ff0115643178624904c170e89bbbf7" }
+verifier_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", rev = "a4fc9b1950ff0115643178624904c170e89bbbf7" }
 
 # These packages can require too much stack space to compile,
 # which can be increased with `RUST_MIN_STACK=16777216` environment variable.
