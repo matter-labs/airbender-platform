@@ -2,6 +2,7 @@ use riscv_transpiler::ir::{
     preprocess_bytecode, DecodingOptions, FullUnsignedMachineDecoderConfig, Instruction,
     ReducedMachineDecoderConfig,
 };
+use riscv_transpiler::jit::JitRunnerRam;
 
 /// Airbender Platform machine profiles with stable host-side semantics.
 ///
@@ -21,6 +22,30 @@ pub enum MachineProfile {
     FullUnsigned,
     /// Reduced machine used by recursive verifier workloads.
     Reduced,
+}
+
+/// Size of the RAM image the machine runs with.
+///
+/// Upstream Airbender offers smaller images as well, but they are only useful for its
+/// own tests, so this is the set `airbender-host` is willing to name and keep stable.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RamSize {
+    /// 1 GiB.
+    #[default]
+    OneGb,
+    /// 4 GiB. Costs 12 GiB of host memory per simulator instance, since every word of
+    /// the image carries a timestamp alongside it.
+    FourGb,
+}
+
+impl RamSize {
+    pub(crate) fn to_jit(self) -> JitRunnerRam {
+        match self {
+            RamSize::OneGb => JitRunnerRam::Medium,
+            RamSize::FourGb => JitRunnerRam::Full,
+        }
+    }
 }
 
 type PreprocessBytecodeFn = fn(&[u32]) -> Vec<Instruction>;

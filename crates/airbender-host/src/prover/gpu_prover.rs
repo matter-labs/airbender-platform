@@ -2,6 +2,7 @@ use super::{
     base_path, receipt_from_real_proof, resolve_app_bin_path, ProveResult, Prover, ProverLevel,
 };
 use crate::error::{HostError, Result};
+use crate::machine::RamSize;
 use crate::proof::{Proof, RealProof};
 use crate::security::SecurityLevel;
 use execution_utils::unrolled_gpu::UnrolledProver;
@@ -25,6 +26,7 @@ pub struct GpuProverConfig {
     max_device_memory_bytes: Option<usize>,
     host_allocators_per_job: Option<usize>,
     host_allocators_per_device: Option<usize>,
+    ram_size: Option<RamSize>,
 }
 
 impl GpuProverConfig {
@@ -63,6 +65,15 @@ impl GpuProverConfig {
     /// See [`Self::with_host_allocators_per_job`].
     pub fn with_host_allocators_per_device(mut self, count: usize) -> Self {
         self.host_allocators_per_device = Some(count);
+        self
+    }
+
+    /// Size of the RAM image the simulator runs with. Defaults to 1 GiB.
+    ///
+    /// [`RamSize::FourGb`] page-locks 12 GiB of host memory per cached simulator
+    /// instance, so raise it only where the host has the headroom.
+    pub fn with_ram_size(mut self, ram_size: RamSize) -> Self {
+        self.ram_size = Some(ram_size);
         self
     }
 }
@@ -343,6 +354,9 @@ fn create_unrolled_prover(
     }
     if let Some(count) = config.host_allocators_per_device {
         configuration.host_allocators_per_device_count = count;
+    }
+    if let Some(ram_size) = config.ram_size {
+        configuration.ram_config = ram_size.to_jit();
     }
     if let Some(bytes) = config.max_device_memory_bytes {
         // The device allocator works in fixed-size blocks; translate the byte cap

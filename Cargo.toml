@@ -64,19 +64,6 @@ insta = "1"
 tera = { version = "1", default-features = false }
 
 # Dependencies for airbender-crypto
-#
-# The zksync-airbender-private crates here and under "Airbender dependencies" are
-# pinned by tag, not branch: cargo keys git sources by URL *and* ref, and every
-# consumer that combines them with zksync-protocol-private's vendored zkos-wrapper
-# (eravm-airbender-verifier there, zksync-airbender-prover) pins the same tag, so
-# the graph carries one `execution_utils` and FRI proof types cross between
-# `airbender-host` and the wrapper. Move all of them together.
-#
-# `v0.6.4-private` is `v0.6.3-private` plus the audit fixes (zksync-airbender-private
-# #18). They change the unified and unrolled circuits and rebuild the recursion
-# verifier binaries, so verifier binaries, program commitments and VKs all move.
-common_constants = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.4-private", default-features = false }
-blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.4-private", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 k256 = { version = "0.13", default-features = false }
@@ -105,11 +92,21 @@ rand_core = { version = "0.6.4", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 
 # Airbender dependencies
-riscv_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.4-private" }
-execution_utils = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.4-private" }
-gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.4-private" }
-riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.4-private" }
-verifier_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.4-private" }
+#
+# Every consumer that combines these with zksync-protocol-private's vendored
+# zkos-wrapper -- eravm-airbender-verifier there, and zksync-airbender-prover -- has to
+# name the same tag, so move all of them together.
+#
+# `v0.6.5-private` is `v0.6.4-private` plus the configurable JIT RAM size. It touches
+# only `riscv_transpiler` and `gpu_prover`, so no verifier binary, program commitment
+# or VK moves with it.
+common_constants = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.5-private", default-features = false }
+blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.5-private", default-features = false }
+riscv_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.5-private" }
+execution_utils = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.5-private" }
+gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.5-private" }
+riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.5-private" }
+verifier_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.5-private" }
 
 # These packages can require too much stack space to compile,
 # which can be increased with `RUST_MIN_STACK=16777216` environment variable.
