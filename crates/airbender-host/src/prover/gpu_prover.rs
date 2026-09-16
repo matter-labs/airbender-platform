@@ -1,12 +1,9 @@
 use super::{
-    base_path, receipt_from_real_proof, resolve_app_bin_path, ProveResult, Prover, ProverLevel,
+    ensure_supported_security, program_source, real_prove_result, ProveResult, Prover, ProverLevel,
 };
 use crate::error::{HostError, Result};
-use crate::proof::{Proof, RealProof};
 use crate::security::SecurityLevel;
-use execution_utils::unrolled_gpu::UnrolledProver;
-use gpu_prover::execution::prover::ExecutionProverConfiguration;
-use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
+use prover_pipeline::{CpuConfig, GpuConfig, ProgramProver, ProgramProverConfig, ProverBackend};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,13 +19,10 @@ use std::thread::JoinHandle;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GpuProverConfig {
     worker_threads: Option<usize>,
-    max_device_memory_bytes: Option<usize>,
-    host_allocators_per_job: Option<usize>,
-    host_allocators_per_device: Option<usize>,
 }
 
 impl GpuProverConfig {
-    /// Number of worker threads for the prover's thread pool and replay workers.
+    /// Number of CPU replay worker threads feeding the GPU pipeline.
     pub fn with_worker_threads(mut self, worker_threads: usize) -> Self {
         self.worker_threads = Some(worker_threads);
         self
@@ -39,30 +33,6 @@ impl GpuProverConfig {
         if let Some(worker_threads) = worker_threads {
             self.worker_threads = Some(worker_threads);
         }
-        self
-    }
-
-    /// Caps the GPU device allocator at `bytes`. By default the allocator grabs
-    /// all free VRAM, which leaves no room for a co-resident prover in the same
-    /// process (e.g. the SNARK wrapper). Capping the FRI prover leaves headroom
-    /// for it. A cap at or above the free amount is a no-op.
-    pub fn with_max_device_memory_bytes(mut self, bytes: usize) -> Self {
-        self.max_device_memory_bytes = Some(bytes);
-        self
-    }
-
-    /// Pinned host transfer buffers pre-allocated per concurrent job (64 MiB
-    /// each). Lowering this below the prover default reclaims committed RAM at
-    /// the cost of less host<->device pipelining.
-    pub fn with_host_allocators_per_job(mut self, count: usize) -> Self {
-        self.host_allocators_per_job = Some(count);
-        self
-    }
-
-    /// Pinned host transfer buffers pre-allocated per GPU device (64 MiB each).
-    /// See [`Self::with_host_allocators_per_job`].
-    pub fn with_host_allocators_per_device(mut self, count: usize) -> Self {
-        self.host_allocators_per_device = Some(count);
         self
     }
 }
@@ -109,7 +79,8 @@ impl GpuProverBuilder {
     }
 }
 
-/// GPU prover wrapper that owns and reuses a single `UnrolledProver` instance.
+/// GPU prover wrapper that owns and reuses a single `prover_pipeline::ProgramProver`
+/// on the GPU backend (per-binary GPU precomputations are cached across proofs).
 ///
 /// ## Poisoning
 ///
@@ -146,8 +117,9 @@ impl GpuProver {
                 "worker thread count must be greater than zero".to_string(),
             ));
         }
+        ensure_supported_security(security)?;
 
-        let app_bin_path = resolve_app_bin_path(app_bin_path)?;
+        let app_bin_path = app_bin_path.to_path_buf();
         let (command_tx, worker_handle) = spawn_worker(app_bin_path, security, level, config)?;
 
         Ok(Self {
@@ -240,6 +212,9 @@ fn spawn_worker(
 
     let worker_handle = std::thread::Builder::new()
         .name("airbender-gpu-prover".to_string())
+        // The recursion pipeline runs the embedded verifiers natively for
+        // self-checks; those need a much bigger stack than the default.
+        .stack_size(1 << 30)
         .spawn(move || gpu_worker_loop(command_rx, init_tx, app_bin_path, security, level, config))
         .map_err(|err| {
             HostError::Prover(format!("failed to spawn GPU prover worker thread: {err}"))
@@ -274,20 +249,19 @@ fn gpu_worker_loop(
 ) {
     // Keep all prover state inside this dedicated thread so a panic does not unwind
     // through host-call boundaries or require `AssertUnwindSafe`.
-    let prover =
-        match create_unrolled_prover(&app_bin_path, security, level.as_unrolled_level(), config) {
-            Ok(prover) => prover,
-            Err(err) => {
-                let _ = init_tx.send(Err(err));
-                return;
-            }
-        };
+    let mut prover = match create_program_prover(&app_bin_path, level, config) {
+        Ok(prover) => prover,
+        Err(err) => {
+            let _ = init_tx.send(Err(err));
+            return;
+        }
+    };
 
     if init_tx.send(Ok(())).is_err() {
         return;
     }
 
-    let mut next_batch_id_base: u64 = 0;
+    let mut next_batch_id: u64 = 0;
 
     while let Ok(command) = command_rx.recv() {
         match command {
@@ -295,17 +269,12 @@ fn gpu_worker_loop(
                 input_words,
                 response_tx,
             } => {
-                let oracle = QuasiUARTSource::new_with_reads(input_words);
-                let batch_id_base = next_batch_id_base;
-                next_batch_id_base += 1;
-                let (inner_proof, cycles) = prover.prove(batch_id_base, oracle);
-                let receipt = receipt_from_real_proof(&inner_proof);
-                let proof = Proof::Real(RealProof::new(security, level, inner_proof));
-                let result = Ok(ProveResult {
-                    proof,
-                    cycles,
-                    receipt,
-                });
+                let batch_id = next_batch_id;
+                next_batch_id += 1;
+                let result = prover
+                    .prove_words(batch_id, input_words)
+                    .map(|artifact| real_prove_result(artifact, security, level))
+                    .map_err(HostError::Prover);
                 let _ = response_tx.send(result);
             }
             WorkerCommand::Shutdown => break,
@@ -324,46 +293,21 @@ fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
     "unknown panic payload".to_string()
 }
 
-fn create_unrolled_prover(
+fn create_program_prover(
     app_bin_path: &Path,
-    security: SecurityLevel,
-    level: execution_utils::unrolled_gpu::UnrolledProverLevel,
+    level: ProverLevel,
     config: GpuProverConfig,
-) -> Result<UnrolledProver> {
-    let base_path = base_path(app_bin_path)?;
-    // Map the host-level GpuProverConfig onto the prover's own configuration,
-    // leaving any field the caller did not set at the prover default.
-    let mut configuration = ExecutionProverConfiguration::default();
+) -> Result<ProgramProver> {
+    let source = program_source(app_bin_path)?;
+    let mut gpu = GpuConfig::default();
     if let Some(threads) = config.worker_threads {
-        configuration.max_thread_pool_threads = Some(threads);
-        configuration.replay_worker_threads_count = threads;
+        gpu.replay_worker_threads_count = threads;
     }
-    if let Some(count) = config.host_allocators_per_job {
-        configuration.host_allocators_per_job_count = count;
-    }
-    if let Some(count) = config.host_allocators_per_device {
-        configuration.host_allocators_per_device_count = count;
-    }
-    if let Some(bytes) = config.max_device_memory_bytes {
-        // The device allocator works in fixed-size blocks; translate the byte cap
-        // into a block count. A cap below one block is rejected rather than
-        // silently rounded to zero (which would mean "use all free memory").
-        let block_log = configuration.prover_context_config.allocator_block_log_size;
-        let blocks = bytes >> block_log;
-        if blocks == 0 {
-            return Err(HostError::Prover(format!(
-                "max device memory cap of {bytes} bytes is smaller than one allocator block ({} bytes)",
-                1usize << block_log,
-            )));
-        }
-        configuration
-            .prover_context_config
-            .max_device_allocation_blocks_count = Some(blocks);
-    }
-    Ok(UnrolledProver::new(
-        security.into(),
-        &base_path,
-        configuration,
-        level,
-    ))
+    let config = ProgramProverConfig {
+        target: level.as_proof_target(),
+        backend: ProverBackend::Gpu,
+        cpu: CpuConfig::default(),
+        gpu,
+    };
+    ProgramProver::new(source, config).map_err(HostError::Prover)
 }

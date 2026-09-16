@@ -182,7 +182,7 @@ pub struct ProveArgs {
         long,
         value_enum,
         default_value_t = SecurityLevelArg::default(),
-        help = "Security level recorded in proof artifacts (80 or 100 bits; default: 100)"
+        help = "Security level recorded in proof artifacts (currently only 100 bits)"
     )]
     pub security: SecurityLevelArg,
 }
@@ -198,7 +198,7 @@ pub struct GenerateVkArgs {
         long,
         value_enum,
         default_value_t = SecurityLevelArg::default(),
-        help = "Security level for verification keys (80 or 100 bits; default: 100)"
+        help = "Security level for verification keys (currently only 100 bits)"
     )]
     pub security: SecurityLevelArg,
 }
@@ -208,6 +208,11 @@ pub struct VerifyProofArgs {
     pub proof: PathBuf,
     #[arg(long)]
     pub vk: PathBuf,
+    #[arg(
+        long,
+        help = "Path to the program's app.bin (its app.text sibling is resolved automatically); real proofs are verified against the program itself"
+    )]
+    pub app_bin: PathBuf,
     #[arg(
         long,
         value_name = "WORDS",
@@ -232,8 +237,6 @@ pub enum ProverLevelArg {
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityLevelArg {
-    #[value(name = "80")]
-    Bits80,
     #[value(name = "100")]
     Bits100,
 }
@@ -247,7 +250,6 @@ impl Default for SecurityLevelArg {
 impl From<airbender_host::SecurityLevel> for SecurityLevelArg {
     fn from(security: airbender_host::SecurityLevel) -> Self {
         match security {
-            airbender_host::SecurityLevel::Bits80 => Self::Bits80,
             airbender_host::SecurityLevel::Bits100 => Self::Bits100,
         }
     }
@@ -256,7 +258,6 @@ impl From<airbender_host::SecurityLevel> for SecurityLevelArg {
 impl From<SecurityLevelArg> for airbender_host::SecurityLevel {
     fn from(security: SecurityLevelArg) -> Self {
         match security {
-            SecurityLevelArg::Bits80 => Self::Bits80,
             SecurityLevelArg::Bits100 => Self::Bits100,
         }
     }
@@ -530,23 +531,6 @@ mod tests {
         match cli.command {
             Commands::Prove(args) => {
                 assert_eq!(args.security, SecurityLevelArg::Bits100);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_generate_vk_security_80() {
-        let cli = Cli::parse_from([
-            "cargo-airbender",
-            "generate-vk",
-            "app.bin",
-            "--security",
-            "80",
-        ]);
-        match cli.command {
-            Commands::GenerateVk(args) => {
-                assert_eq!(args.security, SecurityLevelArg::Bits80);
             }
             other => panic!("unexpected command: {other:?}"),
         }

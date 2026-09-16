@@ -1,15 +1,13 @@
 /// Cryptographic security target for real Airbender proofs.
 ///
-/// Airbender exposes 80-bit and 100-bit security as independent proving modes.
-/// The host SDK keeps that choice explicit in the proof and verification-key
-/// envelopes so callers cannot accidentally verify a proof with artifacts built
-/// for a different security target.
+/// The GKR-based prover stack ships a single 100-bit configuration. The level
+/// is still recorded in proof and verification-key envelopes so artifacts
+/// produced by a different configuration cannot be mixed up silently, and so
+/// callers keep an explicit knob once more configurations exist again.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum SecurityLevel {
-    /// Use the 80-bit security configuration.
-    Bits80,
     /// Use the 100-bit security configuration.
     #[default]
     Bits100,
@@ -18,17 +16,19 @@ pub enum SecurityLevel {
 impl SecurityLevel {
     pub fn bits(self) -> u16 {
         match self {
-            Self::Bits80 => 80,
             Self::Bits100 => 100,
         }
     }
-}
 
-impl From<SecurityLevel> for verifier_common::SecurityModel {
-    fn from(security: SecurityLevel) -> Self {
-        match security {
-            SecurityLevel::Bits80 => Self::Security80,
-            SecurityLevel::Bits100 => Self::Security100,
+    pub(crate) fn to_pipeline(self) -> prover_pipeline::SecurityLevel {
+        match self {
+            Self::Bits100 => prover_pipeline::SecurityLevel::Sec100,
+        }
+    }
+
+    pub(crate) fn from_pipeline(level: prover_pipeline::SecurityLevel) -> Self {
+        match level {
+            prover_pipeline::SecurityLevel::Sec100 => Self::Bits100,
         }
     }
 }

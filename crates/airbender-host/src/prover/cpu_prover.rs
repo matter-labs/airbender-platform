@@ -14,19 +14,16 @@
 //! specific reason to use the CPU prover before choosing it over the alternatives.
 
 use super::{
-    receipt_from_real_proof, resolve_app_bin_path, resolve_text_path, resolve_worker_threads,
-    ProveResult, Prover, DEFAULT_CPU_CYCLE_BOUND, DEFAULT_RAM_BOUND_BYTES,
+    ensure_supported_security, program_source, real_prove_result, ProveResult, Prover, ProverLevel,
+    DEFAULT_CPU_CYCLE_BOUND, DEFAULT_RAM_BOUND_BYTES,
 };
 use crate::error::{HostError, Result};
-use crate::proof::{Proof, RealProof};
-use crate::runner::{Runner, TranspilerRunnerBuilder};
 use crate::security::SecurityLevel;
-use execution_utils::setups;
-use execution_utils::unrolled;
-use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
+use prover_pipeline::{CpuConfig, GpuConfig, ProgramProver, ProgramProverConfig, ProverBackend};
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
-use riscv_transpiler::cycle::IMStandardIsaConfigWithUnsignedMulDiv;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// Minimum system RAM (in GB) required to run CPU proving without crashing.
 const MIN_RAM_GB: u64 = 96;
@@ -65,6 +62,7 @@ pub struct CpuProverBuilder {
     cycles: Option<usize>,
     ram_bound: Option<usize>,
     security: SecurityLevel,
+    level: ProverLevel,
 }
 
 impl CpuProverBuilder {
@@ -75,6 +73,7 @@ impl CpuProverBuilder {
             cycles: None,
             ram_bound: None,
             security: SecurityLevel::default(),
+            level: ProverLevel::Base,
         }
     }
 
@@ -90,6 +89,7 @@ impl CpuProverBuilder {
         }
     }
 
+    /// Upper bound on the cycles a single proof may replay (default `1 << 31`).
     pub fn with_cycles(mut self, cycles: usize) -> Self {
         self.cycles = Some(cycles);
         self
@@ -119,6 +119,13 @@ impl CpuProverBuilder {
         self
     }
 
+    /// Proof layer to produce. Defaults to [`ProverLevel::Base`]; recursion
+    /// levels are supported but very slow on the CPU backend.
+    pub fn with_level(mut self, level: ProverLevel) -> Self {
+        self.level = level;
+        self
+    }
+
     pub fn build(self) -> Result<CpuProver> {
         CpuProver::new(
             &self.app_bin_path,
@@ -126,20 +133,18 @@ impl CpuProverBuilder {
             self.cycles,
             self.ram_bound,
             self.security,
+            self.level,
         )
     }
 }
 
-/// CPU prover wrapper that caches padded artifacts and worker threads.
+/// CPU prover wrapper that owns a `prover_pipeline::ProgramProver` on the CPU
+/// backend and reuses its worker pool across proofs.
 pub struct CpuProver {
-    app_bin_path: PathBuf,
-    app_text_path: PathBuf,
-    binary_u32: Vec<u32>,
-    text_u32: Vec<u32>,
-    cycles: Option<usize>,
-    ram_bound: usize,
     security: SecurityLevel,
-    worker: execution_utils::prover_examples::prover::worker::Worker,
+    level: ProverLevel,
+    prover: Mutex<ProgramProver>,
+    next_batch_id: AtomicU64,
 }
 
 impl CpuProver {
@@ -149,8 +154,10 @@ impl CpuProver {
         cycles: Option<usize>,
         ram_bound: Option<usize>,
         security: SecurityLevel,
+        level: ProverLevel,
     ) -> Result<Self> {
         check_system_ram()?;
+        ensure_supported_security(security)?;
 
         if matches!(worker_threads, Some(0)) {
             return Err(HostError::Prover(
@@ -158,10 +165,12 @@ impl CpuProver {
             ));
         }
 
-        let app_bin_path = resolve_app_bin_path(app_bin_path)?;
-        let app_text_path = resolve_text_path(&app_bin_path)?;
-        let (_, binary_u32) = setups::read_and_pad_binary(&app_bin_path);
-        let (_, text_u32) = setups::read_and_pad_binary(&app_text_path);
+        let cycles_bound = cycles.unwrap_or(DEFAULT_CPU_CYCLE_BOUND);
+        if cycles_bound == 0 {
+            return Err(HostError::Prover(
+                "cycles bound must be greater than zero".to_string(),
+            ));
+        }
 
         let ram_bound = ram_bound.unwrap_or(DEFAULT_RAM_BOUND_BYTES);
         if ram_bound < ROM_BYTE_SIZE {
@@ -171,71 +180,38 @@ impl CpuProver {
             )));
         }
 
-        let threads = resolve_worker_threads(worker_threads);
-        let worker =
-            execution_utils::prover_examples::prover::worker::Worker::new_with_num_threads(threads);
+        let source = program_source(app_bin_path)?;
+        let config = ProgramProverConfig {
+            target: level.as_proof_target(),
+            backend: ProverBackend::Cpu,
+            cpu: CpuConfig {
+                cycles_bound,
+                ram_bound,
+                worker_threads,
+            },
+            gpu: GpuConfig::default(),
+        };
+        let prover = ProgramProver::new(source, config).map_err(HostError::Prover)?;
 
         Ok(Self {
-            app_bin_path,
-            app_text_path,
-            binary_u32,
-            text_u32,
-            cycles,
-            ram_bound,
             security,
-            worker,
+            level,
+            prover: Mutex::new(prover),
+            next_batch_id: AtomicU64::new(0),
         })
     }
 }
 
 impl Prover for CpuProver {
     fn prove(&self, input_words: &[u32]) -> Result<ProveResult> {
-        let cycles_bound = match self.cycles {
-            Some(value) => value,
-            None => {
-                let cycle_estimator = TranspilerRunnerBuilder::new(&self.app_bin_path)
-                    .with_cycles(DEFAULT_CPU_CYCLE_BOUND)
-                    .with_text_path(&self.app_text_path)
-                    .build()?;
-                let outcome = cycle_estimator.run(input_words)?;
-                if !outcome.reached_end {
-                    return Err(HostError::Prover(format!(
-                        "automatic cycle estimation did not reach program end after {} cycles; provide explicit cycles to prove a bounded run",
-                        outcome.cycles_executed
-                    )));
-                }
-                outcome.cycles_executed
-            }
-        };
-        if cycles_bound == 0 {
-            return Err(HostError::Prover(
-                "cycles bound must be greater than zero".to_string(),
-            ));
-        }
-
-        let oracle = QuasiUARTSource::new_with_reads(input_words.to_vec());
-        let inner_proof = unrolled::prove_unrolled_for_machine_configuration_into_program_proof::<
-            IMStandardIsaConfigWithUnsignedMulDiv,
-        >(
-            &self.binary_u32,
-            &self.text_u32,
-            cycles_bound,
-            oracle,
-            self.ram_bound,
-            &self.worker,
-            self.security.into(),
-        );
-        let receipt = receipt_from_real_proof(&inner_proof);
-        let proof = Proof::Real(RealProof::new(
-            self.security,
-            super::ProverLevel::Base,
-            inner_proof,
-        ));
-
-        Ok(ProveResult {
-            proof,
-            cycles: cycles_bound as u64,
-            receipt,
-        })
+        let batch_id = self.next_batch_id.fetch_add(1, Ordering::SeqCst);
+        let mut prover = self
+            .prover
+            .lock()
+            .map_err(|_| HostError::Prover("CPU prover mutex is poisoned".to_string()))?;
+        let artifact = prover
+            .prove_words(batch_id, input_words.to_vec())
+            .map_err(HostError::Prover)?;
+        Ok(real_prove_result(artifact, self.security, self.level))
     }
 }

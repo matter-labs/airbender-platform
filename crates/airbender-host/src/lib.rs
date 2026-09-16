@@ -39,13 +39,10 @@ pub use runner::{
 pub use security::SecurityLevel;
 pub use verifier::{
     verify_real_proof_with_vk, DevVerificationKey, DevVerifier, DevVerifierBuilder,
-    RealUnifiedVerificationKey, RealUnrolledVerificationKey, RealVerifier, RealVerifierBuilder,
-    VerificationKey, VerificationRequest, Verifier,
+    RealVerificationKey, RealVerifier, RealVerifierBuilder, VerificationKey, VerificationRequest,
+    Verifier,
 };
-pub use vk::{
-    compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
-    UnrolledVk,
-};
+pub use vk::{compute_real_vk, verify_proof, RealVk};
 
 /// Raw Airbender re-exports without stability guarantees.
 ///
@@ -53,9 +50,14 @@ pub use vk::{
 /// cases, for example when a project depends on both `airbender-host` and
 /// direct Airbender crates at the same time.
 pub mod raw {
-    pub use execution_utils::unrolled::UnrolledProgramProof;
+    pub use prover_pipeline::{
+        verify_artifact, ProgramSource, ProofArtifact, ProofCounts, ProofTarget, ProofTimingsMs,
+        ProverBackend,
+    };
+    pub use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
     pub use riscv_transpiler::ir::{
         DecodingOptions, FullMachineDecoderConfig, FullUnsignedMachineDecoderConfig,
         ReducedMachineDecoderConfig,
     };
+    pub use riscv_transpiler::vm::{NonDeterminismCSRSource, RamPeek};
 }

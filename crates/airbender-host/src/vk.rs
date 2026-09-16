@@ -2,231 +2,92 @@ use crate::error::{HostError, Result};
 use crate::prover::ProverLevel;
 use crate::security::SecurityLevel;
 use airbender_core::guest::Commit;
-use execution_utils::setups;
-use execution_utils::unified_circuit::verify_proof_in_unified_layer;
-use execution_utils::unrolled::{
-    compute_setup_for_machine_configuration, get_unrolled_circuits_artifacts_for_machine_type,
-    verify_unrolled_layer_proof, UnrolledProgramProof, UnrolledProgramSetup,
-};
-use riscv_transpiler::cycle::{
-    IMStandardIsaConfigWithUnsignedMulDiv, IWithoutByteAccessIsaConfigWithDelegation,
-};
+use prover_pipeline::{verify_artifact, ProgramSource, ProofArtifact};
 use sha3::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Unified verification key bundle for recursion.
+/// Verification key for real proofs.
+///
+/// With the GKR-based recursion pipeline the trusted per-layer parameters are
+/// recomputed at verification time from the program itself (`app.bin` /
+/// `app.text`) and the checked-in recursion verifier binaries, so the key only
+/// pins *which* program and pipeline shape a proof must attest to.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct UnifiedVk {
+pub struct RealVk {
     pub security: SecurityLevel,
+    pub level: ProverLevel,
+    /// keccak256 of `app.bin`.
     pub app_bin_hash: [u8; 32],
-    pub unified_setup: UnrolledProgramSetup,
-    pub unified_layouts: setups::CompiledCircuitsSet,
+    /// keccak256 of `app.text`.
+    pub app_text_hash: [u8; 32],
 }
 
-/// Unrolled verification key bundle for base or recursion-unrolled layers.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct UnrolledVk {
-    pub security: SecurityLevel,
-    pub app_bin_hash: [u8; 32],
-    pub setup: UnrolledProgramSetup,
-    pub compiled_layouts: setups::CompiledCircuitsSet,
-}
-
-pub fn compute_unified_vk(app_bin_path: &Path, security: SecurityLevel) -> Result<UnifiedVk> {
-    #[cfg(not(feature = "gpu-prover"))]
-    {
-        let _ = (app_bin_path, security);
-        return Err(HostError::Verification(
-            "recursion-unified verification key generation requires the `gpu-prover` feature"
-                .to_string(),
-        ));
-    }
-
-    #[cfg(feature = "gpu-prover")]
-    {
-        let app_bin_hash = hash_app_bin(app_bin_path)?;
-
-        // TODO: cache unified setup/layout artifacts on disk to avoid recomputing on every run.
-        let security_model = security.into();
-        let (binary, binary_u32) = setups::pad_binary(
-            execution_utils::verifier_binaries::recursion_artifact(
-                security_model,
-                execution_utils::RecursionLayer::Unified,
-                execution_utils::RecursionArtifact::Bin,
-            )
-            .to_vec(),
-        );
-        let (text, _) = setups::pad_binary(
-            execution_utils::verifier_binaries::recursion_artifact(
-                security_model,
-                execution_utils::RecursionLayer::Unified,
-                execution_utils::RecursionArtifact::Txt,
-            )
-            .to_vec(),
-        );
-
-        let unified_setup =
-            execution_utils::unified_circuit::compute_unified_setup_for_machine_configuration::<
-                IWithoutByteAccessIsaConfigWithDelegation,
-            >(&binary, &text);
-        let unified_layouts =
-            execution_utils::setups::get_unified_circuit_artifact_for_machine_type::<
-                IWithoutByteAccessIsaConfigWithDelegation,
-            >(&binary_u32);
-
-        Ok(UnifiedVk {
-            security,
-            app_bin_hash,
-            unified_setup,
-            unified_layouts,
-        })
-    }
-}
-
-pub fn compute_unrolled_vk(
+pub fn compute_real_vk(
     app_bin_path: &Path,
     level: ProverLevel,
     security: SecurityLevel,
-) -> Result<UnrolledVk> {
-    if level == ProverLevel::RecursionUnified {
-        return Err(HostError::Verification(
-            "unified verification keys must be generated with compute_unified_vk".to_string(),
-        ));
-    }
-
+) -> Result<RealVk> {
     let resolved_bin_path = resolve_bin_path(app_bin_path)?;
-    let app_bin_hash = hash_app_bin(&resolved_bin_path)?;
-
-    let (binary, binary_u32, text) = match level {
-        ProverLevel::Base => {
-            let app_text_path = resolve_text_path(&resolved_bin_path)?;
-            let (binary, binary_u32) = setups::read_and_pad_binary(&resolved_bin_path);
-            let (text, _) = setups::read_and_pad_binary(&app_text_path);
-            (binary, binary_u32, text)
-        }
-        ProverLevel::RecursionUnrolled => {
-            #[cfg(not(feature = "gpu-prover"))]
-            {
-                return Err(HostError::Verification(
-                    "recursion-unrolled verification key generation requires the `gpu-prover` feature"
-                        .to_string(),
-                ));
-            }
-
-            #[cfg(feature = "gpu-prover")]
-            {
-                let security_model = security.into();
-                let (binary, binary_u32) = setups::pad_binary(
-                    execution_utils::verifier_binaries::recursion_artifact(
-                        security_model,
-                        execution_utils::RecursionLayer::Unrolled,
-                        execution_utils::RecursionArtifact::Bin,
-                    )
-                    .to_vec(),
-                );
-                let (text, _) = setups::pad_binary(
-                    execution_utils::verifier_binaries::recursion_artifact(
-                        security_model,
-                        execution_utils::RecursionLayer::Unrolled,
-                        execution_utils::RecursionArtifact::Txt,
-                    )
-                    .to_vec(),
-                );
-                (binary, binary_u32, text)
-            }
-        }
-        ProverLevel::RecursionUnified => {
-            return Err(HostError::Verification(
-                "unified verification keys must be generated with compute_unified_vk".to_string(),
-            ));
-        }
-    };
-
-    let (setup, compiled_layouts) = match level {
-        ProverLevel::Base => {
-            let setup = compute_setup_for_machine_configuration::<
-                IMStandardIsaConfigWithUnsignedMulDiv,
-            >(&binary, &text);
-            let compiled_layouts = get_unrolled_circuits_artifacts_for_machine_type::<
-                IMStandardIsaConfigWithUnsignedMulDiv,
-            >(&binary_u32);
-            (setup, compiled_layouts)
-        }
-        ProverLevel::RecursionUnrolled => {
-            let setup = compute_setup_for_machine_configuration::<
-                IWithoutByteAccessIsaConfigWithDelegation,
-            >(&binary, &text);
-            let compiled_layouts = get_unrolled_circuits_artifacts_for_machine_type::<
-                IWithoutByteAccessIsaConfigWithDelegation,
-            >(&binary_u32);
-            (setup, compiled_layouts)
-        }
-        ProverLevel::RecursionUnified => {
-            return Err(HostError::Verification(
-                "unified verification keys must be generated with compute_unified_vk".to_string(),
-            ));
-        }
-    };
-
-    Ok(UnrolledVk {
+    let resolved_text_path = resolve_text_path(&resolved_bin_path)?;
+    Ok(RealVk {
         security,
-        app_bin_hash,
-        setup,
-        compiled_layouts,
+        level,
+        app_bin_hash: hash_file(&resolved_bin_path)?,
+        app_text_hash: hash_file(&resolved_text_path)?,
     })
 }
 
+/// Verify a real proof artifact for the program at `app_bin_path` (its
+/// `app.text` sibling is resolved automatically) against `vk`.
+///
+/// Returns the verifier's public output (`x10..x25`): the first 8 words are the
+/// program output, the last 8 the authenticated recursion chain.
 pub fn verify_proof(
-    proof: &UnrolledProgramProof,
-    vk: &UnifiedVk,
+    proof: &ProofArtifact,
+    vk: &RealVk,
+    app_bin_path: &Path,
     expected_app_bin_hash: Option<[u8; 32]>,
     expected_output: Option<&dyn Commit>,
-) -> Result<()> {
+) -> Result<[u32; 16]> {
     verify_app_bin_hash(expected_app_bin_hash, vk.app_bin_hash)?;
 
-    let verifier_output = verify_proof_in_unified_layer(
-        proof,
-        &vk.unified_setup,
-        &vk.unified_layouts,
-        false,
-        vk.security.into(),
-    )
-    .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
+    let resolved_bin_path = resolve_bin_path(app_bin_path)?;
+    let resolved_text_path = resolve_text_path(&resolved_bin_path)?;
+    if hash_file(&resolved_bin_path)? != vk.app_bin_hash {
+        return Err(HostError::Verification(
+            "app.bin hash does not match verification key".to_string(),
+        ));
+    }
+    if hash_file(&resolved_text_path)? != vk.app_text_hash {
+        return Err(HostError::Verification(
+            "app.text hash does not match verification key".to_string(),
+        ));
+    }
+
+    let proof_level = ProverLevel::from_proof_target(proof.target);
+    if proof_level != vk.level {
+        return Err(HostError::Verification(format!(
+            "proof level {proof_level:?} does not match verification key level {:?}",
+            vk.level
+        )));
+    }
+    let proof_security = SecurityLevel::from_pipeline(proof.security_level);
+    if proof_security != vk.security {
+        return Err(HostError::Verification(format!(
+            "proof security {proof_security} bits does not match verification key security {} bits",
+            vk.security
+        )));
+    }
+
+    let source = ProgramSource::from_paths(
+        path_to_string(&resolved_bin_path)?,
+        Some(path_to_string(&resolved_text_path)?),
+    );
+    let verifier_output = verify_artifact(proof, &source)
+        .map_err(|err| HostError::Verification(format!("proof verification failed: {err}")))?;
     verify_expected_output(expected_output, verifier_output)?;
-    Ok(())
-}
-
-pub fn verify_unrolled_proof(
-    proof: &UnrolledProgramProof,
-    vk: &UnrolledVk,
-    level: ProverLevel,
-    expected_app_bin_hash: Option<[u8; 32]>,
-    expected_output: Option<&dyn Commit>,
-) -> Result<()> {
-    verify_app_bin_hash(expected_app_bin_hash, vk.app_bin_hash)?;
-
-    let is_base_layer = match level {
-        ProverLevel::Base => true,
-        ProverLevel::RecursionUnrolled => false,
-        ProverLevel::RecursionUnified => {
-            return Err(HostError::Verification(
-                "recursion-unified proofs must be verified with unified verification keys"
-                    .to_string(),
-            ));
-        }
-    };
-
-    let verifier_output = verify_unrolled_layer_proof(
-        proof,
-        &vk.setup,
-        &vk.compiled_layouts,
-        is_base_layer,
-        vk.security.into(),
-    )
-    .map_err(|_| HostError::Verification("proof verification failed".to_string()))?;
-    verify_expected_output(expected_output, verifier_output)?;
-    Ok(())
+    Ok(verifier_output)
 }
 
 fn verify_expected_output(
@@ -264,9 +125,15 @@ fn verify_app_bin_hash(
     Ok(())
 }
 
-fn hash_app_bin(path: &Path) -> Result<[u8; 32]> {
-    let app_bin_bytes = fs::read(path)?;
-    Ok(sha3::Keccak256::digest(&app_bin_bytes).into())
+fn hash_file(path: &Path) -> Result<[u8; 32]> {
+    let bytes = fs::read(path)?;
+    Ok(sha3::Keccak256::digest(&bytes).into())
+}
+
+fn path_to_string(path: &Path) -> Result<String> {
+    path.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| HostError::Verification("app path is not valid UTF-8".to_string()))
 }
 
 fn resolve_bin_path(path: &Path) -> Result<PathBuf> {

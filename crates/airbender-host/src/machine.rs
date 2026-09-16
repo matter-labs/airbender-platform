@@ -1,6 +1,6 @@
+use riscv_transpiler::ir::simple_instruction_set::{preprocess_bytecode, Instruction};
 use riscv_transpiler::ir::{
-    preprocess_bytecode, DecodingOptions, FullUnsignedMachineDecoderConfig, Instruction,
-    ReducedMachineDecoderConfig,
+    DecodingOptions, FullUnsignedMachineDecoderConfig, ReducedMachineDecoderConfig,
 };
 
 /// Airbender Platform machine profiles with stable host-side semantics.
@@ -25,6 +25,10 @@ pub enum MachineProfile {
 
 type PreprocessBytecodeFn = fn(&[u32]) -> Vec<Instruction>;
 
+/// Mirrors the proving path: instruction decoding protects against jumps
+/// landing in the middle of a delegation sequence.
+const PROTECT_AGAINST_MID_DELEGATION_JUMPS: bool = true;
+
 #[derive(Clone, Copy)]
 pub(crate) struct TranspilerDecoderConfig {
     name: &'static str,
@@ -37,12 +41,18 @@ impl TranspilerDecoderConfig {
         match profile {
             MachineProfile::FullUnsigned => Self {
                 name: "full unsigned",
-                preprocess_bytecode: preprocess_bytecode::<FullUnsignedMachineDecoderConfig>,
+                preprocess_bytecode: preprocess_bytecode::<
+                    FullUnsignedMachineDecoderConfig,
+                    PROTECT_AGAINST_MID_DELEGATION_JUMPS,
+                >,
                 stable_profile: Some(profile),
             },
             MachineProfile::Reduced => Self {
                 name: "reduced",
-                preprocess_bytecode: preprocess_bytecode::<ReducedMachineDecoderConfig>,
+                preprocess_bytecode: preprocess_bytecode::<
+                    ReducedMachineDecoderConfig,
+                    PROTECT_AGAINST_MID_DELEGATION_JUMPS,
+                >,
                 stable_profile: Some(profile),
             },
         }
@@ -54,7 +64,7 @@ impl TranspilerDecoderConfig {
     {
         Self {
             name,
-            preprocess_bytecode: preprocess_bytecode::<D>,
+            preprocess_bytecode: preprocess_bytecode::<D, PROTECT_AGAINST_MID_DELEGATION_JUMPS>,
             stable_profile: None,
         }
     }
@@ -87,9 +97,8 @@ impl std::fmt::Debug for TranspilerDecoderConfig {
 #[cfg(test)]
 mod tests {
     use super::{MachineProfile, TranspilerDecoderConfig};
-    use riscv_transpiler::ir::{
-        DebugReducedMachineDecoderConfig, FullMachineDecoderConfig, InstructionName,
-    };
+    use riscv_transpiler::ir::simple_instruction_set::InstructionName;
+    use riscv_transpiler::ir::{DebugReducedMachineDecoderConfig, FullMachineDecoderConfig};
 
     const DIV_X3_X1_X2: u32 = 0x0220c1b3;
     const LBU_X1_FROM_X0: u32 = 0x00004083;

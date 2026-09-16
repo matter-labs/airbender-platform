@@ -2,6 +2,7 @@ use crate::error::Result;
 use crate::prover::ProverLevel;
 use crate::receipt::Receipt;
 use crate::security::SecurityLevel;
+use prover_pipeline::ProofArtifact;
 use sha3::Digest;
 use std::path::Path;
 
@@ -27,13 +28,11 @@ impl Proof {
                 "dev proof: security={} bits, cycles={}, output={:?}",
                 proof.security, proof.cycles, proof.receipt.output
             ),
-            Self::Real(proof) => {
-                format!(
-                    "real proof: security={} bits, {}",
-                    proof.security,
-                    proof.inner.debug_info()
-                )
-            }
+            Self::Real(proof) => format!(
+                "real proof: security={} bits, {}",
+                proof.security,
+                proof.debug_info()
+            ),
         }
     }
 }
@@ -49,19 +48,19 @@ pub struct DevProof {
 }
 
 /// Real cryptographic proof emitted by CPU/GPU provers.
+///
+/// Wraps the `prover_pipeline` proof artifact: the final-layer `ProgramProof`
+/// together with its setup caps, the recursion-chain history and the program
+/// binding (keccak of `app.bin` / `app.text`).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RealProof {
     security: SecurityLevel,
     level: ProverLevel,
-    inner: execution_utils::unrolled::UnrolledProgramProof,
+    inner: ProofArtifact,
 }
 
 impl RealProof {
-    pub(crate) fn new(
-        security: SecurityLevel,
-        level: ProverLevel,
-        inner: execution_utils::unrolled::UnrolledProgramProof,
-    ) -> Self {
+    pub(crate) fn new(security: SecurityLevel, level: ProverLevel, inner: ProofArtifact) -> Self {
         Self {
             security,
             level,
@@ -77,18 +76,39 @@ impl RealProof {
         self.level
     }
 
-    /// Returns the wrapped unrolled proof.
+    /// Cycles executed by the final proven layer (the program itself for
+    /// [`ProverLevel::Base`], the last recursion verifier otherwise).
+    pub fn cycles(&self) -> u64 {
+        self.inner.cycles
+    }
+
+    /// Returns the wrapped proof artifact.
     ///
-    /// Using the raw proof directly is not recommended and is not covered by
+    /// Using the raw artifact directly is not recommended and is not covered by
     /// the stable `airbender-host` public API. This is exposed for rare cases,
     /// for example when a project depends on both `airbender-host` and direct
     /// Airbender crates at the same time.
-    pub fn into_inner(self) -> execution_utils::unrolled::UnrolledProgramProof {
+    pub fn into_inner(self) -> ProofArtifact {
         self.inner
     }
 
-    pub(crate) fn inner(&self) -> &execution_utils::unrolled::UnrolledProgramProof {
+    pub(crate) fn inner(&self) -> &ProofArtifact {
         &self.inner
+    }
+
+    pub(crate) fn debug_info(&self) -> String {
+        let counts = &self.inner.proof_counts;
+        format!(
+            "level={:?}, backend={:?}, cycles={}, layers={}, riscv_proofs={}, inits_and_teardowns_proofs={}, delegation_proofs={}, total_ms={}",
+            self.level,
+            self.inner.backend,
+            self.inner.cycles,
+            self.inner.chain_end_params.len(),
+            counts.riscv_proof_count,
+            counts.inits_and_teardowns_proof_count,
+            counts.delegation_proof_count,
+            self.inner.timings_ms.total_ms,
+        )
     }
 }
 

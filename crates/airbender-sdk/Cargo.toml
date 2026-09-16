@@ -22,7 +22,11 @@ airbender-macros = { path = "../airbender-macros" }
 airbender-rt = { path = "../airbender-rt", default-features = false }
 
 [features]
-default = ["allocator-talc"]
+default = ["allocator-talc", "ram-1gb"]
+# Total guest memory layout; see `airbender-rt`.
+ram-32mb-no-heap = ["airbender-rt/ram-32mb-no-heap"]
+ram-1gb = ["airbender-rt/ram-1gb"]
+ram-4gb = ["airbender-rt/ram-4gb"]
 std = ["airbender-guest/std", "airbender-rt/std"]
 crypto = ["dep:airbender-crypto", "airbender-crypto/proving"]
 allocator-bump = ["airbender-guest/allocator-bump", "airbender-rt/allocator-bump"]

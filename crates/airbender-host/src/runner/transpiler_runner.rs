@@ -2,21 +2,26 @@ use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
 use crate::error::{HostError, Result};
 use crate::machine::{MachineProfile, TranspilerDecoderConfig};
 use crate::receipt::Receipt;
+use field::baby_bear::base::BabyBearField;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
 use riscv_transpiler::common_constants::{
     rom::ROM_SECOND_WORD_BITS, INITIAL_TIMESTAMP, TIMESTAMP_STEP,
 };
 use riscv_transpiler::cycle::CycleMarkerHooks;
 use riscv_transpiler::ir::DecodingOptions;
+use riscv_transpiler::jit::JitRunnerRam;
 #[cfg(target_arch = "x86_64")]
-use riscv_transpiler::jit::JittedCode;
-use riscv_transpiler::jit::RAM_SIZE;
+use riscv_transpiler::jit::{DefaultContextImpl, JittedCode};
 use riscv_transpiler::vm::{
-    DelegationsCounters, FlamegraphConfig as VmFlamegraphConfig, RamWithRomRegion, SimpleTape,
-    State, VmFlamegraphProfiler, VM,
+    DelegationsCounters, FlamegraphConfig as VmFlamegraphConfig, NonDeterminismCSRSource,
+    RamWithRomRegion, SimpleTape, State, VmFlamegraphProfiler, VM,
 };
 use std::io::Read;
 use std::path::{Path, PathBuf};
+
+/// Default RAM size (bytes) the transpiler VM is given; matches the prover's
+/// default `JitRunnerRam::Medium` configuration.
+pub const DEFAULT_RAM_BOUND_BYTES: usize = JitRunnerRam::Medium as u64 as usize;
 
 /// Builder for creating a configured transpiler runner.
 pub struct TranspilerRunnerBuilder {
@@ -26,6 +31,7 @@ pub struct TranspilerRunnerBuilder {
     flamegraph: Option<FlamegraphConfig>,
     decoder: TranspilerDecoderConfig,
     use_jit: bool,
+    ram_bound: usize,
 }
 
 impl TranspilerRunnerBuilder {
@@ -37,6 +43,7 @@ impl TranspilerRunnerBuilder {
             flamegraph: None,
             decoder: TranspilerDecoderConfig::default(),
             use_jit: false,
+            ram_bound: DEFAULT_RAM_BOUND_BYTES,
         }
     }
 
@@ -66,6 +73,14 @@ impl TranspilerRunnerBuilder {
 
     pub fn with_flamegraph(mut self, flamegraph: FlamegraphConfig) -> Self {
         self.flamegraph = Some(flamegraph);
+        self
+    }
+
+    /// Total RAM (in bytes, power of two) available to the program. Defaults to
+    /// 1 GiB. The JIT path rounds the value up to the nearest supported
+    /// configuration (32 MiB, 128 MiB, 1 GiB or 4 GiB).
+    pub fn with_ram_bound(mut self, ram_bound: usize) -> Self {
+        self.ram_bound = ram_bound;
         self
     }
 
@@ -122,6 +137,13 @@ impl TranspilerRunnerBuilder {
             ));
         }
 
+        if !self.ram_bound.is_power_of_two() {
+            return Err(HostError::Transpiler(format!(
+                "ram bound must be a power of two, got {}",
+                self.ram_bound
+            )));
+        }
+
         let app_bin_path = resolve_app_bin_path(&self.app_bin_path)?;
         let app_text_path = self
             .text_path
@@ -137,6 +159,7 @@ impl TranspilerRunnerBuilder {
             flamegraph: self.flamegraph,
             decoder: self.decoder,
             use_jit: self.use_jit,
+            ram_bound: self.ram_bound,
         })
     }
 }
@@ -149,28 +172,46 @@ pub struct TranspilerRunner {
     flamegraph: Option<FlamegraphConfig>,
     decoder: TranspilerDecoderConfig,
     use_jit: bool,
+    ram_bound: usize,
 }
 
 impl Runner for TranspilerRunner {
     fn run(&self, input_words: &[u32]) -> Result<ExecutionResult> {
-        if self.flamegraph.is_some() {
-            return self.run_without_jit_with_flamegraph(input_words);
-        }
-
-        if self.use_jit {
-            return self.run_with_jit(input_words);
-        }
-
-        self.run_without_jit(input_words)
+        self.run_with_source(QuasiUARTSource::new_with_reads(input_words.to_vec()))
     }
 }
 
 impl TranspilerRunner {
+    /// Execute the program against an arbitrary non-determinism source instead
+    /// of a pre-recorded word stream.
+    ///
+    /// This intentionally exposes the `riscv_transpiler` non-determinism trait
+    /// (re-exported as [`crate::raw::NonDeterminismCSRSource`]) and is not
+    /// covered by Airbender Platform's stability guarantees. It is meant for
+    /// hosts whose oracle answers guest queries on the fly (for example while
+    /// recording the word stream a later proving run replays).
+    pub fn run_with_source<ND: NonDeterminismCSRSource>(
+        &self,
+        mut source: ND,
+    ) -> Result<ExecutionResult> {
+        if self.flamegraph.is_some() {
+            return self.run_without_jit_with_flamegraph(&mut source);
+        }
+
+        if self.use_jit {
+            return self.run_with_jit(&mut source);
+        }
+
+        self.run_without_jit_internal(&mut source, None)
+    }
+
     #[cfg(target_arch = "x86_64")]
-    fn run_with_jit(&self, input_words: &[u32]) -> Result<ExecutionResult> {
+    fn run_with_jit<ND: NonDeterminismCSRSource>(
+        &self,
+        non_determinism_source: &mut ND,
+    ) -> Result<ExecutionResult> {
         let bin_words = read_u32_words(&self.app_bin_path)?;
         let text_words = read_u32_words(&self.app_text_path)?;
-        let mut non_determinism_source = QuasiUARTSource::new_with_reads(input_words.to_vec());
 
         let cycles_bound = match u32::try_from(self.cycles) {
             Ok(value) => Some(value),
@@ -183,16 +224,17 @@ impl TranspilerRunner {
             }
         };
 
-        let (state, _memory) = JittedCode::run_alternative_simulator(
+        let (state, _memory) = JittedCode::<DefaultContextImpl<ND>>::run_alternative_simulator(
             &text_words,
-            &mut non_determinism_source,
+            non_determinism_source,
             &bin_words,
             cycles_bound,
+            jit_ram_config(self.ram_bound),
         );
         let cycles_executed = ((state.timestamp - INITIAL_TIMESTAMP) / TIMESTAMP_STEP) as usize;
 
         Ok(ExecutionResult {
-            receipt: Receipt::from_registers(state.registers),
+            receipt: Receipt::from_registers(state.materialized_registers()),
             cycles_executed,
             reached_end: true,
             cycle_markers: None,
@@ -200,17 +242,19 @@ impl TranspilerRunner {
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    fn run_with_jit(&self, _input_words: &[u32]) -> Result<ExecutionResult> {
+    fn run_with_jit<ND: NonDeterminismCSRSource>(
+        &self,
+        _non_determinism_source: &mut ND,
+    ) -> Result<ExecutionResult> {
         Err(HostError::Transpiler(
             "JIT execution is only available on x86_64 targets".to_string(),
         ))
     }
 
-    fn run_without_jit(&self, input_words: &[u32]) -> Result<ExecutionResult> {
-        self.run_without_jit_internal(input_words, None)
-    }
-
-    fn run_without_jit_with_flamegraph(&self, input_words: &[u32]) -> Result<ExecutionResult> {
+    fn run_without_jit_with_flamegraph<ND: NonDeterminismCSRSource>(
+        &self,
+        non_determinism_source: &mut ND,
+    ) -> Result<ExecutionResult> {
         let flamegraph = self
             .flamegraph
             .as_ref()
@@ -227,22 +271,23 @@ impl TranspilerRunner {
             HostError::Transpiler(format!("failed to initialize flamegraph profiler: {err}"))
         })?;
 
-        self.run_without_jit_internal(input_words, Some(&mut profiler))
+        self.run_without_jit_internal(non_determinism_source, Some(&mut profiler))
     }
 
-    fn run_without_jit_internal(
+    fn run_without_jit_internal<ND: NonDeterminismCSRSource>(
         &self,
-        input_words: &[u32],
+        non_determinism_source: &mut ND,
         profiler: Option<&mut VmFlamegraphProfiler>,
     ) -> Result<ExecutionResult> {
         let bin_words = read_u32_words(&self.app_bin_path)?;
         let text_words = read_u32_words(&self.app_text_path)?;
         let instructions = self.decoder.preprocess(&text_words);
         let instruction_tape = SimpleTape::new(&instructions);
-        let mut ram =
-            RamWithRomRegion::<{ ROM_SECOND_WORD_BITS }>::from_rom_content(&bin_words, RAM_SIZE);
+        let mut ram = RamWithRomRegion::<{ ROM_SECOND_WORD_BITS }>::from_rom_content(
+            &bin_words,
+            self.ram_bound,
+        );
         let mut state = State::initial_with_counters(DelegationsCounters::default());
-        let mut non_determinism_source = QuasiUARTSource::new_with_reads(input_words.to_vec());
 
         let (reached_end, cycle_markers) = CycleMarkerHooks::with(|| match profiler {
             Some(profiler) => {
@@ -250,13 +295,14 @@ impl TranspilerRunner {
                     _,
                     _,
                     _,
+                    BabyBearField,
                 >(
                     &mut state,
                     &mut ram,
                     &mut (),
                     &instruction_tape,
                     self.cycles,
-                    &mut non_determinism_source,
+                    non_determinism_source,
                     profiler,
                 )
                 .map_err(|err| {
@@ -264,13 +310,18 @@ impl TranspilerRunner {
                 })
             }
             None => Ok(
-                VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled::<_, _, _>(
+                VM::<DelegationsCounters, CycleMarkerHooks>::run_basic_unrolled::<
+                    _,
+                    _,
+                    _,
+                    BabyBearField,
+                >(
                     &mut state,
                     &mut ram,
                     &mut (),
                     &instruction_tape,
                     self.cycles,
-                    &mut non_determinism_source,
+                    non_determinism_source,
                 ),
             ),
         });
@@ -286,6 +337,21 @@ impl TranspilerRunner {
             cycle_markers: Some(cycle_markers.into()),
         })
     }
+}
+
+/// Smallest JIT RAM configuration that fits `ram_bound` bytes.
+#[cfg(target_arch = "x86_64")]
+fn jit_ram_config(ram_bound: usize) -> JitRunnerRam {
+    const CONFIGS: [JitRunnerRam; 4] = [
+        JitRunnerRam::Tiny,
+        JitRunnerRam::Small,
+        JitRunnerRam::Medium,
+        JitRunnerRam::Full,
+    ];
+    CONFIGS
+        .into_iter()
+        .find(|config| (*config as u64 as usize) >= ram_bound)
+        .unwrap_or(JitRunnerRam::Full)
 }
 
 fn resolve_app_bin_path(path: &Path) -> Result<PathBuf> {
