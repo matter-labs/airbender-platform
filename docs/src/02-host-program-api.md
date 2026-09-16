@@ -97,15 +97,20 @@ let prover = program.gpu_prover()
     .with_level(ProverLevel::RecursionUnified)
     .build()?;
 
-// CPU - base layer only, mainly for debugging circuits.
-// Use 80-bit security only when producing legacy-compatible artifacts.
+// CPU - mainly for debugging circuits (base layer by default; recursion
+// levels are supported but very slow).
 let prover = program.cpu_prover()
-    .with_security(SecurityLevel::Bits80)
     .with_worker_threads(8)
     .build()?;
 ```
 
-Real CPU and GPU provers default to 100-bit security. Use `.with_security(SecurityLevel::Bits80)` only when you need legacy 80-bit artifacts. All provers share the same interface: `prover.prove(inputs.words())`.
+Real CPU and GPU provers run the GKR-based `prover_pipeline` from `zksync-airbender`
+(`av_gkr_compiler`); only the 100-bit security configuration ships, so
+`SecurityLevel::default()` is the single accepted value. All provers share the same
+interface: `prover.prove(inputs.words())`. `ProveResult::cycles` is the cycle count of the
+final proven layer (the program itself for `ProverLevel::Base`, the last recursion verifier
+otherwise); use a transpiler run when you need the program's own cycle count next to a
+recursion proof.
 
 ## Verification
 
@@ -121,7 +126,9 @@ let vk = verifier.generate_vk(SecurityLevel::default())?;
 verifier.verify(&proof, &vk, VerificationRequest::real(&expected))?;
 ```
 
-Verification can optionally enforce expected public outputs (`x10..x17`) in addition to proof validity. Proofs and verification keys encode their security level, and verification rejects mismatched 80-bit/100-bit artifacts. Verification-key generation takes `SecurityLevel` explicitly so generic dev/real flows do not rely on hidden verifier-side defaults.
+Verification can optionally enforce expected public outputs (`x10..x17`) in addition to proof validity. Proofs and verification keys encode their security level and proof level, and verification rejects mismatched artifacts. Verification-key generation takes `SecurityLevel` explicitly so generic dev/real flows do not rely on hidden verifier-side defaults.
+
+A real verification key (`RealVk`) only pins the program (keccak of `app.bin` / `app.text`) and the proof level: the recursion pipeline recomputes the trusted per-layer parameters from the program and the checked-in recursion verifier binaries at verification time, so real verification always needs the program's `dist/` next to the proof (`cargo airbender verify-proof --app-bin ...`).
 
 ## Receipt Output
 

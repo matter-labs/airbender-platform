@@ -1,7 +1,8 @@
 use crate::error::{HostError, Result};
-use crate::proof::Proof;
+use crate::proof::{Proof, RealProof};
 use crate::receipt::Receipt;
-use execution_utils::unrolled::UnrolledProgramProof;
+use crate::security::SecurityLevel;
+use prover_pipeline::{ProgramSource, ProofArtifact, ProofTarget};
 use std::path::{Path, PathBuf};
 
 mod cpu_prover;
@@ -15,7 +16,8 @@ pub use self::dev_prover::{DevProver, DevProverBuilder};
 pub use self::gpu_prover::{GpuProver, GpuProverBuilder, GpuProverConfig};
 
 pub(super) const DEFAULT_RAM_BOUND_BYTES: usize = 1 << 30;
-pub(super) const DEFAULT_CPU_CYCLE_BOUND: usize = u32::MAX as usize;
+/// Upper bound on cycles the CPU prover is willing to replay for one proof.
+pub(super) const DEFAULT_CPU_CYCLE_BOUND: usize = 1 << 31;
 
 /// Host prover interface.
 pub trait Prover {
@@ -32,16 +34,19 @@ pub enum ProverLevel {
 }
 
 impl ProverLevel {
-    #[cfg(feature = "gpu-prover")]
-    pub fn as_unrolled_level(self) -> execution_utils::unrolled_gpu::UnrolledProverLevel {
+    pub(crate) fn as_proof_target(self) -> ProofTarget {
         match self {
-            ProverLevel::Base => execution_utils::unrolled_gpu::UnrolledProverLevel::Base,
-            ProverLevel::RecursionUnrolled => {
-                execution_utils::unrolled_gpu::UnrolledProverLevel::RecursionUnrolled
-            }
-            ProverLevel::RecursionUnified => {
-                execution_utils::unrolled_gpu::UnrolledProverLevel::RecursionUnified
-            }
+            ProverLevel::Base => ProofTarget::Base,
+            ProverLevel::RecursionUnrolled => ProofTarget::RecursionUnrolled,
+            ProverLevel::RecursionUnified => ProofTarget::RecursionUnified,
+        }
+    }
+
+    pub(crate) fn from_proof_target(target: ProofTarget) -> Self {
+        match target {
+            ProofTarget::Base => ProverLevel::Base,
+            ProofTarget::RecursionUnrolled => ProverLevel::RecursionUnrolled,
+            ProofTarget::RecursionUnified => ProverLevel::RecursionUnified,
         }
     }
 }
@@ -50,6 +55,11 @@ impl ProverLevel {
 #[derive(Clone, Debug)]
 pub struct ProveResult {
     pub proof: Proof,
+    /// Cycles executed by the final proven layer. For [`ProverLevel::Base`]
+    /// this is the program's own cycle count; for recursion levels it is the
+    /// cycle count of the last recursion verifier run. Use a transpiler run
+    /// (`Program::transpiler_runner`) when the program's cycle count is needed
+    /// alongside a recursion proof.
     pub cycles: u64,
     pub receipt: Receipt,
 }
@@ -103,19 +113,37 @@ pub(super) fn base_path(app_bin_path: &Path) -> Result<String> {
     }
 }
 
-pub(super) fn resolve_worker_threads(worker_threads: Option<usize>) -> usize {
-    worker_threads
-        .or_else(|| {
-            std::thread::available_parallelism()
-                .ok()
-                .map(|count| count.get())
-        })
-        .unwrap_or(1)
+/// Resolve `app.bin` + the sibling `app.text` into a pipeline program source.
+pub(super) fn program_source(app_bin_path: &Path) -> Result<ProgramSource> {
+    let app_bin_path = resolve_app_bin_path(app_bin_path)?;
+    let app_text_path = resolve_text_path(&app_bin_path)?;
+    let to_string = |path: &Path| -> Result<String> {
+        path.to_str()
+            .map(str::to_string)
+            .ok_or_else(|| HostError::Prover("app path is not valid UTF-8".to_string()))
+    };
+    Ok(ProgramSource::from_paths(
+        to_string(&app_bin_path)?,
+        Some(to_string(&app_text_path)?),
+    ))
 }
 
-pub(super) fn receipt_from_real_proof(proof: &UnrolledProgramProof) -> Receipt {
+/// The pipeline only supports one compiled security level; reject anything else
+/// up front so the mismatch is not discovered after a long proving run.
+pub(super) fn ensure_supported_security(security: SecurityLevel) -> Result<()> {
+    if security.to_pipeline() != prover_pipeline::COMPILED_SECURITY_LEVEL {
+        return Err(HostError::Prover(format!(
+            "security level {security} bits is not supported by the compiled prover ({:?})",
+            prover_pipeline::COMPILED_SECURITY_LEVEL
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn receipt_from_artifact(artifact: &ProofArtifact) -> Receipt {
     let mut registers = [0u32; 32];
-    for (idx, reg) in proof
+    for (idx, reg) in artifact
+        .proof
         .register_final_values
         .iter()
         .take(registers.len())
@@ -124,4 +152,19 @@ pub(super) fn receipt_from_real_proof(proof: &UnrolledProgramProof) -> Receipt {
         registers[idx] = reg.value;
     }
     Receipt::from_registers(registers)
+}
+
+pub(super) fn real_prove_result(
+    artifact: ProofArtifact,
+    security: SecurityLevel,
+    level: ProverLevel,
+) -> ProveResult {
+    let receipt = receipt_from_artifact(&artifact);
+    let cycles = artifact.cycles;
+    let proof = Proof::Real(RealProof::new(security, level, artifact));
+    ProveResult {
+        proof,
+        cycles,
+        receipt,
+    }
 }

@@ -2,10 +2,7 @@ use crate::error::{HostError, Result};
 use crate::proof::{hash_app_bin, hash_input_words, Proof, RealProof};
 use crate::prover::ProverLevel;
 use crate::security::SecurityLevel;
-use crate::vk::{
-    compute_unified_vk, compute_unrolled_vk, verify_proof, verify_unrolled_proof, UnifiedVk,
-    UnrolledVk,
-};
+use crate::vk::{compute_real_vk, verify_proof, RealVk};
 use airbender_core::guest::Commit;
 use std::path::{Path, PathBuf};
 
@@ -13,16 +10,14 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum VerificationKey {
     Dev(DevVerificationKey),
-    RealUnified(RealUnifiedVerificationKey),
-    RealUnrolled(RealUnrolledVerificationKey),
+    Real(RealVerificationKey),
 }
 
 impl VerificationKey {
     pub fn security(&self) -> SecurityLevel {
         match self {
             Self::Dev(vk) => vk.security,
-            Self::RealUnified(vk) => vk.vk.security,
-            Self::RealUnrolled(vk) => vk.vk.security,
+            Self::Real(vk) => vk.vk.security,
         }
     }
 }
@@ -34,17 +29,16 @@ pub struct DevVerificationKey {
     pub app_bin_hash: [u8; 32],
 }
 
-/// Unified (recursion) verification key wrapper.
+/// Real verification key wrapper (base / recursion-unrolled / recursion-unified).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct RealUnifiedVerificationKey {
-    pub vk: UnifiedVk,
+pub struct RealVerificationKey {
+    pub vk: RealVk,
 }
 
-/// Unrolled (base / recursion-unrolled) verification key wrapper.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct RealUnrolledVerificationKey {
-    pub level: ProverLevel,
-    pub vk: UnrolledVk,
+impl RealVerificationKey {
+    pub fn level(&self) -> ProverLevel {
+        self.vk.level
+    }
 }
 
 /// Verification checks requested by the caller.
@@ -177,7 +171,7 @@ impl Verifier for DevVerifier {
         };
         let vk = match vk {
             VerificationKey::Dev(vk) => vk,
-            VerificationKey::RealUnified(_) | VerificationKey::RealUnrolled(_) => {
+            VerificationKey::Real(_) => {
                 return Err(HostError::Verification(
                     "dev verifier requires a dev verification key".to_string(),
                 ));
@@ -242,21 +236,8 @@ impl RealVerifier {
     }
 
     pub fn generate_vk(&self, security: SecurityLevel) -> Result<VerificationKey> {
-        match self.level {
-            ProverLevel::RecursionUnified => {
-                let vk = compute_unified_vk(&self.app_bin_path, security)?;
-                Ok(VerificationKey::RealUnified(RealUnifiedVerificationKey {
-                    vk,
-                }))
-            }
-            ProverLevel::Base | ProverLevel::RecursionUnrolled => {
-                let vk = compute_unrolled_vk(&self.app_bin_path, self.level, security)?;
-                Ok(VerificationKey::RealUnrolled(RealUnrolledVerificationKey {
-                    level: self.level,
-                    vk,
-                }))
-            }
-        }
+        let vk = compute_real_vk(&self.app_bin_path, self.level, security)?;
+        Ok(VerificationKey::Real(RealVerificationKey { vk }))
     }
 }
 
@@ -285,105 +266,66 @@ impl Verifier for RealVerifier {
                 ));
             }
         };
+        let vk = match vk {
+            VerificationKey::Real(RealVerificationKey { vk }) => vk,
+            VerificationKey::Dev(_) => {
+                return Err(HostError::Verification(
+                    "real verifier requires a real verification key".to_string(),
+                ));
+            }
+        };
 
-        match (proof.level(), vk) {
-            (
-                ProverLevel::RecursionUnified,
-                VerificationKey::RealUnified(RealUnifiedVerificationKey { vk }),
-            ) => {
-                ensure_proof_vk_security_matches(proof.security(), vk.security)?;
-                verify_proof(
-                    proof.inner(),
-                    vk,
-                    Some(self.app_bin_hash),
-                    request.expected_output(),
-                )
-            }
-            (
-                ProverLevel::Base | ProverLevel::RecursionUnrolled,
-                VerificationKey::RealUnrolled(RealUnrolledVerificationKey { level, vk }),
-            ) => {
-                if *level != proof.level() {
-                    return Err(HostError::Verification(format!(
-                        "proof level {:?} does not match verification key level {:?}",
-                        proof.level(),
-                        level
-                    )));
-                }
-                ensure_proof_vk_security_matches(proof.security(), vk.security)?;
-
-                verify_unrolled_proof(
-                    proof.inner(),
-                    vk,
-                    proof.level(),
-                    Some(self.app_bin_hash),
-                    request.expected_output(),
-                )
-            }
-            (_, VerificationKey::Dev(_)) => Err(HostError::Verification(
-                "real verifier requires a real verification key".to_string(),
-            )),
-            (ProverLevel::RecursionUnified, VerificationKey::RealUnrolled(_)) => {
-                Err(HostError::Verification(
-                    "recursion-unified proofs require unified verification keys".to_string(),
-                ))
-            }
-            (
-                ProverLevel::Base | ProverLevel::RecursionUnrolled,
-                VerificationKey::RealUnified(_),
-            ) => Err(HostError::Verification(
-                "base and recursion-unrolled proofs require unrolled verification keys".to_string(),
-            )),
+        if vk.level != proof.level() || self.level != proof.level() {
+            return Err(HostError::Verification(format!(
+                "proof level {:?} does not match verification key level {:?} / verifier level {:?}",
+                proof.level(),
+                vk.level,
+                self.level
+            )));
         }
+        ensure_proof_vk_security_matches(proof.security(), vk.security)?;
+
+        verify_proof(
+            proof.inner(),
+            vk,
+            &self.app_bin_path,
+            Some(self.app_bin_hash),
+            request.expected_output(),
+        )?;
+        Ok(())
     }
 }
 
 /// Verify a real proof envelope against a real verification key.
 ///
-/// This helper validates proof/VK compatibility and optional expected public output.
-/// It intentionally does not enforce app.bin hash checks.
+/// The recursion pipeline recomputes the trusted per-layer parameters from the
+/// program, so the program's `app.bin` (with its `app.text` sibling) must be
+/// supplied. This helper validates proof/VK compatibility, that the program
+/// matches the key, and optional expected public output.
 pub fn verify_real_proof_with_vk(
     proof: &RealProof,
     vk: &VerificationKey,
+    app_bin_path: &Path,
     expected_output: Option<&dyn Commit>,
 ) -> Result<()> {
-    match (proof.level(), vk) {
-        (
-            ProverLevel::RecursionUnified,
-            VerificationKey::RealUnified(RealUnifiedVerificationKey { vk }),
-        ) => {
-            ensure_proof_vk_security_matches(proof.security(), vk.security)?;
-            verify_proof(proof.inner(), vk, None, expected_output)
+    let vk = match vk {
+        VerificationKey::Real(RealVerificationKey { vk }) => vk,
+        VerificationKey::Dev(_) => {
+            return Err(HostError::Verification(
+                "real proofs require real verification keys".to_string(),
+            ));
         }
-        (
-            ProverLevel::Base | ProverLevel::RecursionUnrolled,
-            VerificationKey::RealUnrolled(RealUnrolledVerificationKey { level, vk }),
-        ) => {
-            if *level != proof.level() {
-                return Err(HostError::Verification(format!(
-                    "proof level {:?} does not match verification key level {:?}",
-                    proof.level(),
-                    level
-                )));
-            }
-            ensure_proof_vk_security_matches(proof.security(), vk.security)?;
-
-            verify_unrolled_proof(proof.inner(), vk, proof.level(), None, expected_output)
-        }
-        (_, VerificationKey::Dev(_)) => Err(HostError::Verification(
-            "real proofs require real verification keys".to_string(),
-        )),
-        (ProverLevel::RecursionUnified, VerificationKey::RealUnrolled(_)) => {
-            Err(HostError::Verification(
-                "recursion-unified proof requires a unified verification key".to_string(),
-            ))
-        }
-        (ProverLevel::Base | ProverLevel::RecursionUnrolled, VerificationKey::RealUnified(_)) => {
-            Err(HostError::Verification(
-                "base/recursion-unrolled proof requires an unrolled verification key".to_string(),
-            ))
-        }
+    };
+    if vk.level != proof.level() {
+        return Err(HostError::Verification(format!(
+            "proof level {:?} does not match verification key level {:?}",
+            proof.level(),
+            vk.level
+        )));
     }
+    ensure_proof_vk_security_matches(proof.security(), vk.security)?;
+    verify_proof(proof.inner(), vk, app_bin_path, None, expected_output)?;
+    Ok(())
 }
 
 fn ensure_proof_vk_security_matches(
@@ -400,66 +342,16 @@ fn ensure_proof_vk_security_matches(
 }
 
 fn resolve_app_bin_path(path: &Path) -> Result<PathBuf> {
-    if path.exists() {
-        return path.canonicalize().map_err(|err| {
-            HostError::Verification(format!(
-                "failed to canonicalize binary path {}: {err}",
-                path.display()
-            ))
-        });
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| HostError::Verification("app path is not valid UTF-8".to_string()))?;
+    let base = path_str.strip_suffix(".bin").unwrap_or(path_str);
+    let app_bin_path = PathBuf::from(format!("{base}.bin"));
+    if !app_bin_path.exists() {
+        return Err(HostError::Verification(format!(
+            "binary not found: {}",
+            app_bin_path.display()
+        )));
     }
-
-    let mut candidate = path.to_path_buf();
-    candidate.set_extension("bin");
-    if candidate.exists() {
-        return candidate.canonicalize().map_err(|err| {
-            HostError::Verification(format!(
-                "failed to canonicalize binary path {}: {err}",
-                candidate.display()
-            ))
-        });
-    }
-
-    Err(HostError::Verification(format!(
-        "binary not found: {}",
-        path.display()
-    )))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::proof::DevProof;
-    use crate::receipt::Receipt;
-
-    #[test]
-    fn dev_verifier_rejects_security_mismatch() {
-        let app_bin_hash = [7u8; 32];
-        let input_words = [1u32, 10u32];
-        let receipt = receipt_with_output(55);
-        let proof = Proof::Dev(DevProof {
-            security: SecurityLevel::Bits100,
-            app_bin_hash,
-            input_words_hash: hash_input_words(&input_words),
-            receipt,
-            cycles: 100,
-        });
-        let vk = VerificationKey::Dev(DevVerificationKey {
-            security: SecurityLevel::Bits80,
-            app_bin_hash,
-        });
-        let verifier = DevVerifier { app_bin_hash };
-
-        let err = verifier
-            .verify(&proof, &vk, VerificationRequest::dev(&input_words, &55u32))
-            .expect_err("mismatched dev proof/VK security must fail verification");
-
-        assert!(err.to_string().contains("proof security 100 bits"));
-    }
-
-    fn receipt_with_output(output: u32) -> Receipt {
-        let mut registers = [0u32; 32];
-        registers[10] = output;
-        Receipt::from_registers(registers)
-    }
+    Ok(app_bin_path)
 }

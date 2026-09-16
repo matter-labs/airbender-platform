@@ -84,14 +84,14 @@ pub fn run(args: ProveArgs) -> Result<()> {
             let level = as_host_level(args.level);
             let security = security.into();
             if level != airbender_host::ProverLevel::Base {
-                return Err(
-                    CliError::new("CPU backend currently supports only `--level base`")
-                        .with_hint("use `--backend gpu` for recursion levels"),
+                tracing::warn!(
+                    "CPU recursion proving is extremely slow; consider `--backend gpu` for recursion levels"
                 );
             }
 
             let prover = airbender_host::CpuProverBuilder::new(&args.app_bin)
                 .with_security(security)
+                .with_level(level)
                 .maybe_worker_threads(args.threads)
                 .maybe_cycles(args.cycles)
                 .maybe_ram_bound(args.ram_bound)
