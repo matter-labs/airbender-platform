@@ -33,7 +33,7 @@ pub use prover::{
 pub use prover::{GpuProver, GpuProverBuilder, GpuProverConfig};
 pub use receipt::Receipt;
 pub use runner::{
-    resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, TranspilerRunner,
+    find_exit_pc, resolve_cycles, ExecutionResult, FlamegraphConfig, Runner, TranspilerRunner,
     TranspilerRunnerBuilder, DEFAULT_CYCLES,
 };
 pub use security::SecurityLevel;

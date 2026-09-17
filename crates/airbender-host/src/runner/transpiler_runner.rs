@@ -237,6 +237,7 @@ impl TranspilerRunner {
             receipt: Receipt::from_registers(state.materialized_registers()),
             cycles_executed,
             reached_end: true,
+            final_pc: state.pc,
             cycle_markers: None,
         })
     }
@@ -334,6 +335,7 @@ impl TranspilerRunner {
             receipt: Receipt::from_registers(registers),
             cycles_executed,
             reached_end,
+            final_pc: state.pc,
             cycle_markers: Some(cycle_markers.into()),
         })
     }
