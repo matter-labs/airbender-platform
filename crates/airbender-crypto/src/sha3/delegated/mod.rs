@@ -47,113 +47,152 @@ pub type Keccak256 = Keccak256Core<false>;
 #[allow(dead_code)]
 pub type Sha3_256 = Keccak256Core<true>;
 
+// Absorbing is XOR of the input into the rate part of the state, and it is organized the way
+// `memcpy` of `riscv_common` is: there are no unaligned loads of words on our machine, so we
+// consume bytes until the *source* is word-aligned, and then go by words of the source.
+// A word of the source lands either exactly on a word of the state, or (if the absorbed length
+// is not a multiple of 4 at that moment) on two neighbours, shifted. The rest (less than a word)
+// goes by bytes again.
+
+const WORD_SIZE: usize = core::mem::size_of::<u32>();
+
+/// `dst[i] ^= src[i]`, unrolled
+///
+/// # Safety
+/// `dst` and `src` should be valid for `len` words
+#[inline(always)]
+unsafe fn xor_words(mut dst: *mut u32, mut src: *const u32, mut len: usize) {
+    while len >= 4 {
+        seq_macro::seq!(N in 0..4 {
+            dst.add(N).write(dst.add(N).read() ^ src.add(N).read());
+        });
+        dst = dst.add(4);
+        src = src.add(4);
+        len -= 4;
+    }
+    if len & 2 > 0 {
+        seq_macro::seq!(N in 0..2 {
+            dst.add(N).write(dst.add(N).read() ^ src.add(N).read());
+        });
+        dst = dst.add(2);
+        src = src.add(2);
+    }
+    if len & 1 > 0 {
+        dst.write(dst.read() ^ src.read());
+    }
+}
+
+/// XORs `len` words of `src` into `len + 1` words of `dst`, shifted by `SHIFT` bits up, unrolled
+///
+/// # Safety
+/// `dst` should be valid for `len + 1` words, and `src` for `len` words
+#[inline(always)]
+unsafe fn xor_words_shifted<const SHIFT: u32>(
+    mut dst: *mut u32,
+    mut src: *const u32,
+    mut len: usize,
+) {
+    let mut carry = 0u32;
+    while len >= 2 {
+        let word_0 = src.read();
+        let word_1 = src.add(1).read();
+        dst.write(dst.read() ^ (word_0 << SHIFT | carry));
+        dst.add(1)
+            .write(dst.add(1).read() ^ (word_1 << SHIFT | word_0 >> (u32::BITS - SHIFT)));
+        carry = word_1 >> (u32::BITS - SHIFT);
+        dst = dst.add(2);
+        src = src.add(2);
+        len -= 2;
+    }
+    if len > 0 {
+        let word = src.read();
+        dst.write(dst.read() ^ (word << SHIFT | carry));
+        carry = word >> (u32::BITS - SHIFT);
+        dst = dst.add(1);
+    }
+    // there is always a place for it: the buffer is a whole number of words
+    dst.write(dst.read() ^ carry);
+}
+
 impl<const SHA3: bool> Keccak256Core<SHA3> {
-    #[inline(always)]
-    unsafe fn absorb_unaligned(&mut self, input: &mut &[u8]) {
-        let unalignment = self.filled_bytes % core::mem::size_of::<u32>();
-        if unalignment == 0 {
-            return;
+    /// Same as `MiniDigest::new`, but usable for statics
+    pub const fn const_new() -> Self {
+        Self {
+            state: AlignedState::zeroed(),
+            filled_bytes: 0,
         }
-        let to_absorb: usize =
-            core::cmp::min(core::mem::size_of::<u32>() - unalignment, input.len());
-        let (slice_to_absorb, rest) = input.split_at_unchecked(to_absorb);
-        *input = rest;
-
-        let mut buffer = [0u8; core::mem::size_of::<u32>()];
-        let dst = buffer
-            .get_unchecked_mut(unalignment..)
-            .get_unchecked_mut(..to_absorb);
-        core::hint::assert_unchecked(slice_to_absorb.len() == dst.len());
-        dst.copy_from_slice(slice_to_absorb);
-
-        let u32_word_idx = self.filled_bytes / core::mem::size_of::<u32>();
-        let dst_word = self.state.0.as_mut_ptr().cast::<u32>().add(u32_word_idx);
-        dst_word.write(dst_word.read() ^ u32::from_le_bytes(buffer));
-
-        self.filled_bytes += to_absorb;
     }
 
     #[inline(always)]
-    unsafe fn absorb_aligned(&mut self, input: &mut &[u8]) {
-        if input.is_empty() {
-            return;
-        }
-        debug_assert_eq!(self.filled_bytes % core::mem::size_of::<u32>(), 0);
-        debug_assert_ne!(self.filled_bytes, BUFFER_SIZE_BYTES);
-        debug_assert_eq!(
-            (BUFFER_SIZE_BYTES - self.filled_bytes) % core::mem::size_of::<u32>(),
-            0
-        );
+    fn state_words(&mut self) -> *mut u32 {
+        self.state.0.as_mut_ptr().cast::<u32>()
+    }
 
-        let (u32_chunks, rest) = input.as_chunks::<4>();
-        *input = rest;
-        let max_words_to_absorb =
-            (BUFFER_SIZE_BYTES - self.filled_bytes) / core::mem::size_of::<u32>();
-
-        let words_to_absorb = core::cmp::min(max_words_to_absorb, u32_chunks.len());
-        let u32_word_idx = self.filled_bytes / core::mem::size_of::<u32>();
-
-        let mut dst = self.state.0.as_mut_ptr().cast::<u32>().add(u32_word_idx);
-
-        let (fill_to_end_maybe, more) = u32_chunks.split_at_unchecked(words_to_absorb);
-        let mut it = fill_to_end_maybe.iter();
-        for _ in 0..words_to_absorb {
-            dst.write(dst.read() ^ u32::from_le_bytes(*it.next().unwrap_unchecked()));
-            dst = dst.add(1);
-        }
-        self.filled_bytes += words_to_absorb * core::mem::size_of::<u32>();
+    #[inline(always)]
+    unsafe fn permute_if_full(&mut self) {
         if self.filled_bytes == BUFFER_SIZE_BYTES {
             self.filled_bytes = 0;
             keccak_f1600(&mut self.state);
         }
-
-        // then as many full fills as possible
-        let (full_buffer_fills, partial_fills) = more.as_chunks::<BUFFER_SIZE_U32_WORDS>();
-        for src in full_buffer_fills.iter() {
-            debug_assert_eq!(self.filled_bytes, 0);
-            let dst = self
-                .state
-                .0
-                .as_mut_ptr()
-                .cast::<[u32; BUFFER_SIZE_U32_WORDS]>()
-                .as_mut_unchecked();
-            core::hint::assert_unchecked(src.len() == dst.len());
-            for (src, dst) in src.iter().zip(dst.iter_mut()) {
-                *dst ^= u32::from_le_bytes(*src);
-            }
-            keccak_f1600(&mut self.state);
-        }
-
-        // and partial fill again
-        let words_to_absorb = partial_fills.len();
-        if words_to_absorb > 0 {
-            debug_assert_eq!(self.filled_bytes, 0);
-        }
-        debug_assert!(words_to_absorb < BUFFER_SIZE_U32_WORDS);
-        let mut it = partial_fills.iter();
-        let mut dst = self.state.0.as_mut_ptr().cast::<u32>();
-        for _ in 0..words_to_absorb {
-            dst.write(dst.read() ^ u32::from_le_bytes(*it.next().unwrap_unchecked()));
-            dst = dst.add(1);
-        }
-        self.filled_bytes += words_to_absorb * core::mem::size_of::<u32>();
-        // can not trigger a permutation
     }
 
     #[inline(always)]
-    unsafe fn absorb_tail(&mut self, input: &[u8]) {
-        if input.is_empty() {
-            return;
+    unsafe fn absorb_byte(&mut self, byte: u8) {
+        debug_assert!(self.filled_bytes < BUFFER_SIZE_BYTES);
+        let dst = self.state_words().add(self.filled_bytes / WORD_SIZE);
+        // the machine is little-endian (see the top of the file)
+        dst.write(dst.read() ^ ((byte as u32) << (8 * (self.filled_bytes % WORD_SIZE))));
+        self.filled_bytes += 1;
+        self.permute_if_full();
+    }
+
+    /// # Safety
+    /// `src` should be aligned and valid for `len` words
+    #[inline(always)]
+    unsafe fn absorb_words(&mut self, mut src: *const u32, mut len: usize) {
+        debug_assert!(len == 0 || src.is_aligned());
+
+        while len > 0 {
+            debug_assert!(self.filled_bytes < BUFFER_SIZE_BYTES);
+            let byte_in_word = self.filled_bytes % WORD_SIZE;
+            let mut dst = self.state_words().add(self.filled_bytes / WORD_SIZE);
+            // whole words of the source that fit into the buffer
+            let to_absorb =
+                core::cmp::min(len, (BUFFER_SIZE_BYTES - self.filled_bytes) / WORD_SIZE);
+            len -= to_absorb;
+            self.filled_bytes += to_absorb * WORD_SIZE;
+
+            if byte_in_word == 0 {
+                xor_words(dst, src, to_absorb);
+                src = src.add(to_absorb);
+                self.permute_if_full();
+            } else {
+                // a word of the source covers the upper bytes of one word of the state,
+                // and the lower bytes of the next one
+                let shift = 8 * byte_in_word as u32;
+                match byte_in_word {
+                    1 => xor_words_shifted::<8>(dst, src, to_absorb),
+                    2 => xor_words_shifted::<16>(dst, src, to_absorb),
+                    3 => xor_words_shifted::<24>(dst, src, to_absorb),
+                    _ => core::hint::unreachable_unchecked(),
+                }
+                src = src.add(to_absorb);
+                dst = dst.add(to_absorb);
+
+                if len > 0 && BUFFER_SIZE_BYTES - self.filled_bytes < WORD_SIZE {
+                    // and this one covers the end of the buffer, and the beginning of the next one
+                    debug_assert_eq!(dst, self.state_words().add(BUFFER_SIZE_U32_WORDS - 1));
+                    let word = src.read();
+                    dst.write(dst.read() ^ (word << shift));
+                    keccak_f1600(&mut self.state);
+                    let dst = self.state_words();
+                    dst.write(dst.read() ^ (word >> (u32::BITS - shift)));
+                    self.filled_bytes = byte_in_word;
+                    src = src.add(1);
+                    len -= 1;
+                }
+            }
         }
-        debug_assert!(input.len() < core::mem::size_of::<u32>());
-        debug_assert_eq!(self.filled_bytes % core::mem::size_of::<u32>(), 0);
-        let to_absorb = input.len();
-        let mut buffer = [0u8; core::mem::size_of::<u32>()];
-        buffer.get_unchecked_mut(..to_absorb).copy_from_slice(input);
-        let u32_word_idx = self.filled_bytes / core::mem::size_of::<u32>();
-        let dst = self.state.0.as_mut_ptr().cast::<u32>().add(u32_word_idx);
-        dst.write(dst.read() ^ u32::from_le_bytes(buffer));
-        self.filled_bytes += to_absorb;
     }
 }
 
@@ -177,20 +216,22 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
             return;
         }
 
-        // NOTE: reading unaligned u64/u32 to XOR bytes with the state is the same as copying it into aligned
-        // buffer first and then XORing anyway, so we will do it on the fly
-
         unsafe {
-            self.absorb_unaligned(&mut input);
-            if self.filled_bytes == BUFFER_SIZE_BYTES {
-                self.filled_bytes = 0;
-                keccak_f1600(&mut self.state);
+            // align the source
+            while let Some((byte, rest)) = input.split_first() {
+                if input.as_ptr().cast::<u32>().is_aligned() {
+                    break;
+                }
+                self.absorb_byte(*byte);
+                input = rest;
             }
-            // absorb aligned will permut internellay if needed
-            self.absorb_aligned(&mut input);
 
-            // final absorb unaligned can not trigger permutation
-            self.absorb_tail(input);
+            let (words, tail) = input.as_chunks::<WORD_SIZE>();
+            self.absorb_words(words.as_ptr().cast::<u32>(), words.len());
+
+            for byte in tail.iter() {
+                self.absorb_byte(*byte);
+            }
 
             debug_assert_ne!(self.filled_bytes, BUFFER_SIZE_BYTES);
         };
@@ -221,6 +262,18 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
         let mut hasher = Self::new();
         hasher.update(input);
         hasher.finalize()
+    }
+
+    #[inline(always)]
+    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput) -> ()>(&mut self, closure: FN) {
+        keccak_pad::<SHA3>(&mut self.state.0, self.filled_bytes);
+        keccak_f1600(&mut self.state);
+        let output = unsafe { self.state.0.as_ptr().cast::<[u8; 32]>().as_ref_unchecked() };
+        (closure)(output);
+        for dst in self.state.0.iter_mut() {
+            *dst = 0;
+        }
+        self.filled_bytes = 0;
     }
 }
 
@@ -406,10 +459,12 @@ pub mod tests {
                 for byte in msg.iter_mut().take(len) {
                     *byte = rng.r#gen::<u8>();
                 }
-                sha3::Digest::update(&mut formal_keccak256, &msg[..len]);
-                sha3::Digest::update(&mut formal_sha3, &msg[..len]);
-                my_keccak256.update(&msg[..len]);
-                my_sha3.update(&msg[..len]);
+                // inputs at all the alignments
+                let start = core::cmp::min(rng.r#gen::<u8>() as usize % 8, len);
+                sha3::Digest::update(&mut formal_keccak256, &msg[start..len]);
+                sha3::Digest::update(&mut formal_sha3, &msg[start..len]);
+                my_keccak256.update(&msg[start..len]);
+                my_sha3.update(&msg[start..len]);
             }
             assert!(
                 sha3::Digest::finalize_reset(&mut formal_keccak256)[..]

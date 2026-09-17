@@ -102,6 +102,14 @@ pub trait MiniDigest: Sized {
     fn update(&mut self, input: impl AsRef<[u8]>);
     fn finalize(self) -> Self::HashOutput;
     fn finalize_reset(&mut self) -> Self::HashOutput;
+
+    // Allow to reorder and avoid copying in finalize - output - reset operations sequence if hasher supports
+    // such case due to it's internal structure
+    #[inline(always)]
+    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput) -> ()>(&mut self, closure: FN) {
+        let t = self.finalize_reset();
+        (closure)(&t);
+    }
 }
 
 ///
