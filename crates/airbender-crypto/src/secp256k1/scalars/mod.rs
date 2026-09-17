@@ -196,6 +196,8 @@ mod tests {
 
     #[test]
     fn test_zero() {
+        // The delegation scalar compares representations, and `ORDER` is not reduced.
+        #[cfg(not(feature = "bigint_ops"))]
         assert_eq!(Scalar::ZERO, Scalar::ORDER);
         assert!(Scalar::ZERO.is_zero());
         assert!(Scalar::ORDER.is_zero());
@@ -226,7 +228,8 @@ mod tests {
     #[test]
     fn test_decompose() {
         proptest!(|(k: Scalar)| {
-            let (r1, r2) = k.decompose();
+            #[allow(unused_mut)]
+            let (mut r1, mut r2) = k.decompose();
             let lambda = -Scalar::MINUS_LAMBDA;
 
             #[cfg(feature = "bigint_ops")]

@@ -7,11 +7,9 @@ use crate::k256::{
 };
 
 use super::{
-    context::{
-        ECMultContext, ECMULT_TABLE_SIZE_A, ECMULT_TABLE_SIZE_G, WINDOW_A, WINDOW_G, WNAF_BITS,
-    },
+    context::{ECMultContext, ECMULT_TABLE_SIZE_A, WINDOW_A, WINDOW_G, WNAF_BITS},
     field::FieldElement,
-    points::{Affine, AffineStorage, Jacobian},
+    points::{Affine, Jacobian},
     scalars::Scalar,
     Secp256k1Err,
 };
@@ -91,7 +89,7 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     sigr *= message;
     sigr.negate_in_place();
 
-    let mut pk = ecmult(&xj, &sigs, &sigr, context).to_affine_with_hooks(hooks);
+    let mut pk = ecmult_with_hooks(&xj, &sigs, &sigr, context, hooks).to_affine_with_hooks(hooks);
     pk.normalize_in_place();
 
     if pk.is_infinity() {
@@ -101,9 +99,70 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     Ok(pk)
 }
 
-/// Compute na*a+ng*g where g is the generator.
-/// Algorithm adapted from https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h#L237
+/// Runs both flavours (with and without cheap inversions) and checks that they agree
+#[cfg(test)]
 fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Jacobian {
+    use super::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
+
+    struct CheapInversionHooks;
+
+    impl Secp256k1Hooks for CheapInversionHooks {
+        const FE_INVERT_IS_CHEAP: bool = true;
+
+        fn fe_sqrt_and_assign(&mut self, fe: &mut FieldElement) -> bool {
+            DefaultSecp256k1Hooks.fe_sqrt_and_assign(fe)
+        }
+
+        fn fe_invert_and_assign(&mut self, fe: &mut FieldElement) {
+            DefaultSecp256k1Hooks.fe_invert_and_assign(fe)
+        }
+
+        fn scalar_invert_and_assign(&mut self, scalar: &mut Scalar) {
+            DefaultSecp256k1Hooks.scalar_invert_and_assign(scalar)
+        }
+    }
+
+    let ret = ecmult_with_hooks(a, na, ng, context, &mut DefaultSecp256k1Hooks);
+    let with_inversions = ecmult_with_hooks(a, na, ng, context, &mut CheapInversionHooks);
+    assert_eq!(ret.to_affine(), with_inversions.to_affine());
+
+    ret
+}
+
+/// Compute na*a+ng*g where g is the generator.
+fn ecmult_with_hooks<H: super::hooks::Secp256k1Hooks>(
+    a: &Jacobian,
+    na: &Scalar,
+    ng: &Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Jacobian {
+    #[cfg(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"))]
+    {
+        let _ = context;
+        super::recover_shamir::ecmult(a, na, ng, hooks)
+    }
+
+    #[cfg(not(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops")))]
+    ecmult_wnaf(a, na, ng, context, hooks)
+}
+
+/// Algorithm adapted from https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h#L237
+#[cfg_attr(
+    all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"),
+    allow(dead_code)
+)]
+fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
+    a: &Jacobian,
+    na: &Scalar,
+    ng: &Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Jacobian {
+    // `z` is the denominator shared by the table of the multiples of `a`: those are handled as
+    // affine points, and it is applied to the result at the end. The generator's tables have to
+    // be brought to the same denominator on every use then. If inversion is cheap, the table
+    // is made affine instead and `z` stays 1.
     let mut z = FieldElement::ONE;
 
     let mut prea: [Affine; ECMULT_TABLE_SIZE_A] = [Affine::DEFAULT; ECMULT_TABLE_SIZE_A];
@@ -148,11 +207,16 @@ fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Ja
         // Due to secp256k1 we can pretend the z coordinate is 1 and use affine addition formulas,
         // and correct the result at the end
         odd_multiples_table_windowa(&mut prea, &mut aux, &mut z, a);
-        table_set_globalz_windowa(&mut prea, &aux);
+        if H::FE_INVERT_IS_CHEAP {
+            table_set_affine_windowa(&mut prea, &aux, &z, hooks);
+            z = FieldElement::ONE;
+        } else {
+            table_set_globalz_windowa(&mut prea, &aux);
+        }
 
         for i in 0..ECMULT_TABLE_SIZE_A {
             aux[i] = FieldElement::BETA;
-            aux[i] *= prea[i].x;
+            aux[i] *= &prea[i].x;
         }
     }
 
@@ -183,27 +247,41 @@ fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Ja
 
         let n = wnaf_na_1[i as usize];
         if i < bits_na_1 && n != 0 {
-            r.add_ge_in_place(table_get_ge(&prea, n, WINDOW_A), None);
+            let (idx, negate) = table_index(n, WINDOW_A);
+            r.add_affine_in_place(&prea[idx].x, &prea[idx].y, negate, None);
         }
 
         let n = wnaf_na_lam[i as usize];
         if i < bits_na_lam && n != 0 {
-            r.add_ge_in_place(table_get_ge_lambda(&prea, &aux, n, WINDOW_A), None);
+            let (idx, negate) = table_index(n, WINDOW_A);
+            r.add_affine_in_place(&aux[idx], &prea[idx].y, negate, None);
         }
 
         let n = wnaf_ng_1[i as usize];
         if i < bits_ng_1 && n != 0 {
-            r.add_zinv_in_place(table_get_ge_storage(&context.pre_g, n, WINDOW_G), &z);
+            let (idx, negate) = table_index(n, WINDOW_G);
+            let g = context.pre_g[idx].to_affine();
+            if H::FE_INVERT_IS_CHEAP {
+                r.add_affine_in_place(&g.x, &g.y, negate, None);
+            } else {
+                r.add_affine_zinv_in_place(&g.x, &g.y, negate, &z);
+            }
         }
 
         let n = wnaf_ng_128[i as usize];
         if i < bits_ng_128 && n != 0 {
-            r.add_zinv_in_place(table_get_ge_storage(&context.pre_g_128, n, WINDOW_G), &z);
+            let (idx, negate) = table_index(n, WINDOW_G);
+            let g = context.pre_g_128[idx].to_affine();
+            if H::FE_INVERT_IS_CHEAP {
+                r.add_affine_in_place(&g.x, &g.y, negate, None);
+            } else {
+                r.add_affine_zinv_in_place(&g.x, &g.y, negate, &z);
+            }
         }
     }
 
-    if !r.is_infinity() {
-        r.z *= z
+    if !H::FE_INVERT_IS_CHEAP && !r.is_infinity() {
+        r.z *= &z
     }
 
     r
@@ -256,7 +334,7 @@ fn odd_multiples_table_windowa(
     zr[0] = d.z;
 
     for i in 1..ECMULT_TABLE_SIZE_A {
-        ai.add_ge_in_place(d_ge, Some(&mut zr[i]));
+        ai.add_affine_in_place(&d_ge.x, &d_ge.y, false, Some(&mut zr[i]));
         pre_a[i] = Affine {
             x: ai.x,
             y: ai.y,
@@ -268,7 +346,7 @@ fn odd_multiples_table_windowa(
     // Since the z-coordinates of the pre_a values are implied by the zr array of z-coordinate ratios,
     // undoing the isomorphism here undoes the isomorphism for all pre_a values.
     *z = ai.z;
-    *z *= d.z;
+    *z *= &d.z;
 }
 
 fn table_set_globalz_windowa(
@@ -287,11 +365,35 @@ fn table_set_globalz_windowa(
     pre_a[i].set_ge_zinv(&ai, &zs);
 
     while i > 0 {
-        zs *= zr[i];
+        zs *= &zr[i];
         i -= 1;
 
         ai = pre_a[i];
         pre_a[i].set_ge_zinv(&ai, &zs);
+    }
+}
+
+/// Makes the table produced by `odd_multiples_table_windowa` affine by a single inversion:
+/// `pre_a[n-1].z = z`, and `1 / pre_a[i-1].z = zr[i] / pre_a[i].z`
+fn table_set_affine_windowa<H: super::hooks::Secp256k1Hooks>(
+    pre_a: &mut [Affine; ECMULT_TABLE_SIZE_A],
+    zr: &[FieldElement; ECMULT_TABLE_SIZE_A],
+    z: &FieldElement,
+    hooks: &mut H,
+) {
+    let mut zinv = *z;
+    hooks.fe_invert_and_assign(&mut zinv);
+
+    let mut i = ECMULT_TABLE_SIZE_A - 1;
+    loop {
+        let ai = pre_a[i];
+        pre_a[i].set_ge_zinv(&ai, &zinv);
+        if i == 0 {
+            break;
+        }
+
+        zinv *= &zr[i];
+        i -= 1;
     }
 }
 
@@ -354,48 +456,15 @@ fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
     last_set_bit + 1
 }
 
-fn table_get_ge(pre: &[Affine], n: i32, w: usize) -> Affine {
+/// Position of the odd multiple `|n|` in the table, and whether it has to be negated
+#[inline(always)]
+fn table_index(n: i32, w: usize) -> (usize, bool) {
     debug_assert!(table_verify(n, w));
 
     if n > 0 {
-        pre[(n - 1) as usize / 2]
+        ((n - 1) as usize / 2, false)
     } else {
-        let mut r = pre[(-n - 1) as usize / 2];
-        r.y.negate_in_place(1);
-        r
-    }
-}
-
-fn table_get_ge_lambda(pre: &[Affine], aux: &[FieldElement], n: i32, w: usize) -> Affine {
-    debug_assert!(table_verify(n, w));
-
-    if n > 0 {
-        Affine {
-            x: aux[(n - 1) as usize / 2],
-            y: pre[(n - 1) as usize / 2].y,
-            infinity: false,
-        }
-    } else {
-        let mut y = pre[(-n - 1) as usize / 2].y;
-        y.negate_in_place(1);
-
-        Affine {
-            x: aux[(-n - 1) as usize / 2],
-            y,
-            infinity: false,
-        }
-    }
-}
-
-fn table_get_ge_storage(pre: &[AffineStorage; ECMULT_TABLE_SIZE_G], n: i32, w: usize) -> Affine {
-    debug_assert!(table_verify(n, w));
-
-    if n > 0 {
-        pre[(n - 1) as usize / 2].to_affine()
-    } else {
-        let mut r = pre[(-n - 1) as usize / 2].to_affine();
-        r.y.negate_in_place(1);
-        r
+        ((-n - 1) as usize / 2, true)
     }
 }
 

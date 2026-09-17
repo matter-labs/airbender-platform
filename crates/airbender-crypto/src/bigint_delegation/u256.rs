@@ -339,6 +339,245 @@ pub unsafe fn mul_assign_montgomery<T: DelegatedMontParams<4>>(a: &mut U256, b: 
     })
 }
 
+// ---------------------------------------------------------------------------------------------
+// "Weakly reduced" arithmetic for pseudo-Mersenne moduli `p = 2^256 - c` with a small `c`
+// (`c = T::neg_modulus()`).
+//
+// Every delegation call costs a few cycles on the guest and a row in the delegation circuit, so
+// keeping each intermediate value canonical (`< p`) - an extra `sub p` / `add p` pair per
+// operation - is a large part of the cost of a field operation. The functions below instead keep
+// values as *any* 256-bit representative of the residue class: inputs and outputs are in
+// `[0, 2^256)`. Since `2p > 2^256`, there are at most two representatives of a class, and zero
+// is represented by either `0` or `p` (which is what `is_zero_mod` checks).
+//
+// A carry (borrow) out of 256 bits is worth `2^256 = c (mod p)`, so it is folded back by
+// adding (subtracting) `c`. Use `normalize_weak` to get the canonical representative.
+//
+// All of them require `c^2 + c < 2^256`.
+// ---------------------------------------------------------------------------------------------
+
+#[inline(always)]
+/// Copies `b` into `a`
+pub fn copy_assign(a: &mut U256, b: &U256) {
+    delegation::memcpy(a, b);
+}
+
+#[inline(always)]
+/// Folds the carry out of an addition back into `a`
+unsafe fn fold_carry_weak<T: DelegatedBarretParams<4>>(a: &mut U256, carry: bool) {
+    if carry {
+        // `a` wrapped around, so the second carry can only happen if both operands of the
+        // addition were non-canonical. After it `a < c`, so the third addition can not overflow.
+        let (carry, a) = delegation::add_chained(a, T::neg_modulus());
+        if carry != 0 {
+            delegation::add(a, T::neg_modulus());
+        }
+    }
+}
+
+#[inline(always)]
+/// Folds the borrow out of a subtraction back into `a`
+unsafe fn fold_borrow_weak<T: DelegatedBarretParams<4>>(a: &mut U256, borrow: bool) {
+    if borrow {
+        // Second borrow happens only if `a < c`, after it `a >= 2^256 - c > c`
+        let (borrow, a) = delegation::sub_chained(a, T::neg_modulus());
+        if borrow != 0 {
+            delegation::sub(a, T::neg_modulus());
+        }
+    }
+}
+
+#[inline(always)]
+/// Computes `a = a + b mod modulus`, weakly reduced
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn add_mod_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256, b: &U256) {
+    let (carry, a) = delegation::add_chained(a, b);
+    fold_carry_weak::<T>(a, carry != 0);
+}
+
+#[inline(always)]
+/// Computes `a = a - b mod modulus`, weakly reduced
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn sub_mod_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256, b: &U256) {
+    let (borrow, a) = delegation::sub_chained(a, b);
+    fold_borrow_weak::<T>(a, borrow != 0);
+}
+
+#[inline(always)]
+/// Computes `a = b - a mod modulus`, weakly reduced
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn sub_and_negate_mod_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256, b: &U256) {
+    let (borrow, a) = delegation::sub_and_negate_chained(a, b);
+    fold_borrow_weak::<T>(a, borrow != 0);
+}
+
+#[inline(always)]
+/// Computes `a = -a mod modulus`, weakly reduced. Zero can become `p`.
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn neg_mod_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256) {
+    // borrow happens only for non-canonical `a`
+    let (borrow, a) = delegation::sub_and_negate_chained(a, T::modulus());
+    fold_borrow_weak::<T>(a, borrow != 0);
+}
+
+#[inline(always)]
+/// Computes `a = 2 * a mod modulus`, weakly reduced
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn double_mod_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256) {
+    with_scratch!(s => {
+        delegation::memcpy(&mut s.copy_place_0, a);
+        let (carry, a) = delegation::add_chained(a, &s.copy_place_0);
+        fold_carry_weak::<T>(a, carry != 0);
+    })
+}
+
+#[inline(always)]
+/// Computes `a = 3 * a mod modulus`, weakly reduced
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn triple_mod_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256) {
+    with_scratch!(s => {
+        delegation::memcpy(&mut s.copy_place_0, a);
+        let (carry, a) = delegation::add_chained(a, &s.copy_place_0);
+        fold_carry_weak::<T>(a, carry != 0);
+        let (carry, a) = delegation::add_chained(a, &s.copy_place_0);
+        fold_carry_weak::<T>(a, carry != 0);
+    })
+}
+
+#[inline(always)]
+/// Computes `a = a * b mod modulus`, weakly reduced. Inputs can be any 256-bit integers.
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn mul_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256, b: &U256) {
+    with_scratch!(s => {
+        delegation::memcpy(&mut s.copy_place_1, a);
+
+        // a * b = hi * 2^256 + lo
+        delegation::mul_low(a, b);
+        delegation::mul_high(&mut s.copy_place_1, b);
+
+        delegation::memcpy(&mut s.copy_place_2, &s.copy_place_1);
+
+        // hi * 2^256 = hi * c = t_hi * 2^256 + t_lo, where t_hi < c
+        delegation::mul_low(&mut s.copy_place_2, T::neg_modulus());
+        delegation::mul_high(&mut s.copy_place_1, T::neg_modulus());
+
+        let carry = delegation::add(a, &s.copy_place_2) != 0;
+        if carry {
+            delegation::add(&mut s.copy_place_1, &ONE);
+        }
+
+        // (t_hi + carry) * 2^256 = (t_hi + carry) * c <= c^2, so there is no high part
+        delegation::mul_low(&mut s.copy_place_1, T::neg_modulus());
+
+        let carry = delegation::add(a, &s.copy_place_1) != 0;
+        if carry {
+            // `a` wrapped around and is `< c^2`, so the addition below can not overflow
+            delegation::add(a, T::neg_modulus());
+        }
+    })
+}
+
+#[inline(always)]
+/// Computes `a = a^2 mod modulus`, weakly reduced
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn square_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256) {
+    with_scratch!(s => {
+        delegation::memcpy(&mut s.copy_place_0, a);
+
+        mul_assign_weak::<T>(a, &s.copy_place_0);
+    })
+}
+
+/// Non-zero number has zero lowest 32 bits with probability 2^-32 if it is random, so look
+/// at the rest out of line: otherwise the compiler prefers to load and test all the words at once.
+#[inline(always)]
+fn is_non_zero_vartime(a: &U256) -> bool {
+    #[cold]
+    #[inline(never)]
+    fn is_non_zero_slow(a: &U256) -> bool {
+        a.0.iter().any(|limb| *limb != 0)
+    }
+
+    if a.0[0] as u32 != 0 {
+        true
+    } else {
+        is_non_zero_slow(a)
+    }
+}
+
+#[inline(always)]
+/// Montgomery multiplication `a = a * b / 2^256 mod modulus`, weakly reduced. Inputs can be any
+/// 256-bit integers. Also requires `DelegatedBarretParams` to fold the carry out.
+///
+/// `a * b = t_hi * 2^256 + t_lo`, and `m = t_lo * (-1/modulus) mod 2^256` makes `t_lo + low(m * modulus)`
+/// zero modulo 2^256. Both terms are below 2^256, so the sum is either 0 (only if `t_lo == 0`, as
+/// then `m == 0`), or exactly 2^256. So `low(m * modulus)` is never computed, and the result is
+/// `t_hi + high(m * modulus) + (t_lo != 0)`: 4 multiplications, a copy and an addition.
+/// # Safety
+/// `DelegatedMontParams` and `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn mul_assign_montgomery_weak<T: DelegatedMontParams<4> + DelegatedBarretParams<4>>(
+    a: &mut U256,
+    b: &U256,
+) {
+    with_scratch!(s => {
+        let a = delegation::widening_mul(a, &mut s.copy_place_1, b);
+
+        montgomery_reduce_weak::<T>(a, &s.copy_place_1);
+    })
+}
+
+#[inline(always)]
+/// `a = (high * 2^256 + a) / 2^256 mod modulus`, weakly reduced
+unsafe fn montgomery_reduce_weak<T: DelegatedMontParams<4> + DelegatedBarretParams<4>>(
+    a: &mut U256,
+    high: &U256,
+) {
+    let low_part_carry = is_non_zero_vartime(a);
+
+    let a = delegation::mul_low_chained(a, T::reduction_const());
+    let a = delegation::mul_high_chained(a, T::modulus());
+
+    // t_hi < 2^256 and high(m * modulus) < modulus, so after the carry out `a < modulus`,
+    // and the addition of `2^256 mod modulus` can not overflow
+    let (carry, a) = delegation::add_with_carry_bit_chained(a, high, low_part_carry);
+    if carry != 0 {
+        delegation::add(a, T::neg_modulus());
+    }
+}
+
+#[inline(always)]
+/// Montgomery squaring, weakly reduced
+/// # Safety
+/// `DelegatedMontParams` and `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn square_assign_montgomery_weak<
+    T: DelegatedMontParams<4> + DelegatedBarretParams<4>,
+>(
+    a: &mut U256,
+) {
+    with_scratch!(s => {
+        let a = delegation::widening_square(a, &mut s.copy_place_1, &mut s.copy_place_0);
+
+        montgomery_reduce_weak::<T>(a, &s.copy_place_1);
+    })
+}
+
+#[inline(always)]
+/// Brings a weakly reduced `a` into `[0, modulus)`
+/// # Safety
+/// `DelegatedBarretParams` should only provide references to statics.
+pub unsafe fn normalize_weak<T: DelegatedModParams<4>>(a: &mut U256) {
+    // a < 2^256 < 2p, so single subtraction is enough
+    sub_mod_with_carry::<T>(a, false);
+}
+
 #[cfg(test)]
 #[derive(Debug)]
 pub struct U256Wrapper<T: DelegatedModParams<4>>(pub U256, PhantomData<T>);

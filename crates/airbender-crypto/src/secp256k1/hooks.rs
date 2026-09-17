@@ -4,6 +4,11 @@
 //! section of the book for usage details and examples.
 
 pub trait Secp256k1Hooks {
+    /// Tells that `fe_invert_and_assign` costs about as much as a few field multiplications
+    /// (e.g. it takes the inverse as a hint and checks it), so the algorithms can use inversions
+    /// where they otherwise do more multiplications to avoid them.
+    const FE_INVERT_IS_CHEAP: bool = false;
+
     fn fe_sqrt_and_assign(&mut self, fe: &mut super::field::FieldElement) -> bool;
     fn fe_invert_and_assign(&mut self, fe: &mut super::field::FieldElement);
     fn scalar_invert_and_assign(&mut self, scalar: &mut super::scalars::Scalar);

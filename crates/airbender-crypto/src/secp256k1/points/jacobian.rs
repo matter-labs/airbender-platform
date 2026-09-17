@@ -188,9 +188,12 @@ impl Jacobian {
         z: FieldElement::ZERO,
     };
 
+    // magnitudes only exist for the fields with lazy reduction
+    #[cfg(not(feature = "bigint_ops"))]
     const X_MAGNITUDE_MAX: u32 = 4;
+    #[cfg(not(feature = "bigint_ops"))]
     const Y_MAGNITUDE_MAX: u32 = 4;
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, not(feature = "bigint_ops")))]
     const Z_MAGNITUDE_MAX: u32 = 1;
 
     #[inline(always)]
@@ -234,6 +237,51 @@ impl Jacobian {
         ret.y *= self.y;
 
         ret
+    }
+}
+
+/// Generic formulas, written for the field implementations with lazy reduction (`10x26`, `5x52`),
+/// where additions, negations and multiplications by a small integer are almost free
+#[cfg(not(feature = "bigint_ops"))]
+impl Jacobian {
+    /// Adds the affine point `(x, y)` (or `(x, -y)` if `negate_y`), that must not be the infinity
+    #[inline(always)]
+    pub(crate) fn add_affine_in_place(
+        &mut self,
+        x: &FieldElement,
+        y: &FieldElement,
+        negate_y: bool,
+        rzr: Option<&mut FieldElement>,
+    ) {
+        let mut a = Affine {
+            x: *x,
+            y: *y,
+            infinity: false,
+        };
+        if negate_y {
+            a.y.negate_in_place(1);
+        }
+        self.add_ge_in_place(a, rzr);
+    }
+
+    /// Same as `add_affine_in_place`, but the added point is `(x, y, 1/z)` in Jacobian coordinates
+    #[inline(always)]
+    pub(crate) fn add_affine_zinv_in_place(
+        &mut self,
+        x: &FieldElement,
+        y: &FieldElement,
+        negate_y: bool,
+        z: &FieldElement,
+    ) {
+        let mut b = Affine {
+            x: *x,
+            y: *y,
+            infinity: false,
+        };
+        if negate_y {
+            b.y.negate_in_place(1);
+        }
+        self.add_zinv_in_place(b, z);
     }
 
     // this is essentially this algorithm https://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#doubling-dbl-2009-l
@@ -457,6 +505,215 @@ impl Jacobian {
         x *= i;
         self.y += x;
         self.y.normalize_in_place();
+    }
+}
+
+/// Formulas for the delegation-based field. Any field operation there is one or more delegation
+/// calls, so compared to the generic ones they
+/// - do not use negations (`b - a` is cheaper than `-a + b`) and multiplications by small integers
+/// - take operands by reference, and make temporary copies by the delegation call
+/// - do not normalize, as the field is "weakly reduced" all the time
+#[cfg(feature = "bigint_ops")]
+macro_rules! duplicate {
+    ($name:ident = $src:expr) => {
+        let mut $name = core::mem::MaybeUninit::<FieldElement>::uninit();
+        let $name: &mut FieldElement = FieldElement::write_copy(&mut $name, $src);
+    };
+}
+
+#[cfg(feature = "bigint_ops")]
+impl Jacobian {
+    /// `X3 = M^2 - 2*S`, `Y3 = M*(S - X3) - 8*Y^4`, `Z3 = 2*Y*Z`, where `M = 3*X^2`, `S = 4*X*Y^2`.
+    /// 7 multiplications. `S` and `8*Y^4` are computed through `U = 2*Y^2` as `2*X*U` and `2*U^2`
+    /// to have less doublings, that are 2 delegation calls each.
+    pub(crate) fn double_in_place(&mut self, rzr: Option<&mut FieldElement>) {
+        // The formula maps infinity (`z == 0`) to infinity, so the check is only needed
+        // if we have to output the ratio
+        if let Some(rzr) = rzr {
+            if self.is_infinity() {
+                *rzr = FieldElement::ONE;
+                return;
+            }
+
+            rzr.copy_from(&self.y);
+            rzr.double_in_place();
+        }
+
+        // Z3 = 2*Y*Z
+        self.z.mul_in_place(&self.y);
+        self.z.double_in_place();
+
+        // M = 3*X^2
+        duplicate!(m = &self.x);
+        m.square_in_place();
+        m.triple_in_place();
+
+        // self.y = U = 2*Y^2
+        self.y.square_in_place();
+        self.y.double_in_place();
+
+        // S = 2*X*U
+        duplicate!(s = &self.y);
+        s.mul_in_place(&self.x);
+        s.double_in_place();
+
+        // self.y = 8*Y^4 = 2*U^2
+        self.y.square_in_place();
+        self.y.double_in_place();
+
+        // X3 = M^2 - 2*S
+        self.x.copy_from(m);
+        self.x.square_in_place();
+        self.x.sub_in_place(s);
+        self.x.sub_in_place(s);
+
+        // Y3 = M*(S - X3) - 8*Y^4
+        s.sub_in_place(&self.x);
+        m.mul_in_place(s);
+        self.y.sub_and_negate_in_place(m);
+    }
+
+    /// Adds the affine point `(x, y)` (or `(x, -y)` if `negate_y`), that must not be the infinity.
+    /// Same formula as the generic `add_ge_in_place`, so `rzr` has the same meaning.
+    #[inline(always)]
+    pub(crate) fn add_affine_in_place(
+        &mut self,
+        x: &FieldElement,
+        y: &FieldElement,
+        negate_y: bool,
+        rzr: Option<&mut FieldElement>,
+    ) {
+        self.add_affine_impl(x, y, negate_y, None, rzr);
+    }
+
+    /// Same as `add_affine_in_place`, but the added point is `(x, y, 1/z)` in Jacobian coordinates
+    #[inline(always)]
+    pub(crate) fn add_affine_zinv_in_place(
+        &mut self,
+        x: &FieldElement,
+        y: &FieldElement,
+        negate_y: bool,
+        z: &FieldElement,
+    ) {
+        self.add_affine_impl(x, y, negate_y, Some(z), None);
+    }
+
+    // https://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-madd
+    // as it's done in https://github.com/bitcoin-core/secp256k1/blob/master/src/group_impl.h#L590
+    // and https://github.com/bitcoin-core/secp256k1/blob/master/src/group_impl.h#L653 (`zinv` case).
+    // 11 multiplications (12 if `zinv` is there)
+    #[inline(always)]
+    fn add_affine_impl(
+        &mut self,
+        x: &FieldElement,
+        y: &FieldElement,
+        negate_y: bool,
+        zinv: Option<&FieldElement>,
+        rzr: Option<&mut FieldElement>,
+    ) {
+        if self.is_infinity() {
+            debug_assert!(rzr.is_none());
+            self.x.copy_from(x);
+            self.y.copy_from(y);
+            if negate_y {
+                self.y.negate_in_place(1);
+            }
+            self.z = FieldElement::ONE;
+            if let Some(zinv) = zinv {
+                // (x, y, 1/z) = (x * z^2, y * z^3, 1)
+                duplicate!(z2 = zinv);
+                z2.square_in_place();
+                self.x.mul_in_place(z2);
+                z2.mul_in_place(zinv);
+                self.y.mul_in_place(z2);
+            }
+            return;
+        }
+
+        // We need to calculate (rx,ry,rz) = (ax,ay,az) + (bx,by,1/z). Due to
+        // secp256k1's isomorphism we can multiply the Z coordinates on both sides
+        // by z, and get: (rx,ry,rz*z) = (ax,ay,az*z) + (bx,by,1).
+        // So `az` below is used for the computation of rx and ry, but not for rz.
+        // h = U2 - X1, where U2 = x*az^2
+        duplicate!(h = &self.z);
+        if let Some(zinv) = zinv {
+            h.mul_in_place(zinv);
+        }
+        duplicate!(r = h);
+        h.square_in_place();
+        r.mul_in_place(h);
+        h.mul_in_place(x);
+        h.sub_in_place(&self.x);
+
+        // r = S2 - Y1, where S2 = (+-y)*az^3
+        r.mul_in_place(y);
+        if negate_y {
+            r.add_in_place(&self.y);
+            r.negate_in_place(1);
+        } else {
+            r.sub_in_place(&self.y);
+        }
+
+        if h.normalizes_to_zero() {
+            if r.normalizes_to_zero() {
+                self.double_in_place(rzr);
+            } else {
+                if let Some(rzr) = rzr {
+                    *rzr = FieldElement::ZERO;
+                }
+                *self = Jacobian::INFINITY;
+            }
+            return;
+        }
+
+        if let Some(rzr) = rzr {
+            rzr.copy_from(h);
+        }
+
+        // Z3 = Z1*h
+        self.z.mul_in_place(h);
+
+        // h -> h^2, h3 = h^3, self.x -> t = X1*h^2
+        duplicate!(h3 = h);
+        h.square_in_place();
+        h3.mul_in_place(h);
+        self.x.mul_in_place(h);
+
+        // X3 = r^2 - h^3 - 2*t, kept in `h`
+        h.copy_from(r);
+        h.square_in_place();
+        h.sub_in_place(h3);
+        h.sub_in_place(&self.x);
+        h.sub_in_place(&self.x);
+
+        // Y3 = r*(t - X3) - Y1*h^3
+        self.x.sub_in_place(h);
+        self.x.mul_in_place(r);
+        self.y.mul_in_place(h3);
+        self.y.sub_and_negate_in_place(&self.x);
+
+        self.x.copy_from(h);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_ge_in_place(&mut self, a: Affine, rzr: Option<&mut FieldElement>) {
+        if a.is_infinity() {
+            if let Some(rzr) = rzr {
+                *rzr = FieldElement::ONE;
+            }
+            return;
+        }
+
+        self.add_affine_in_place(&a.x, &a.y, false, rzr);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_zinv_in_place(&mut self, b: Affine, z: &FieldElement) {
+        if b.is_infinity() {
+            return;
+        }
+
+        self.add_affine_zinv_in_place(&b.x, &b.y, false, z);
     }
 }
 

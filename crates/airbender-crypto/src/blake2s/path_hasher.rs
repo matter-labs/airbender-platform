@@ -17,9 +17,11 @@
 //! `t = 64` and the final-block flag set — a fresh single-block hash.)
 
 use blake2s_u32::state_with_extended_control::Blake2RoundFunctionEvaluator;
+#[cfg(target_arch = "riscv32")]
+use blake2s_u32::BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS;
 use blake2s_u32::{
     AlignedArray64, BLAKE2S_BLOCK_SIZE_BYTES, BLAKE2S_BLOCK_SIZE_U32_WORDS,
-    BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS, BLAKE2S_STATE_WIDTH_IN_U32_WORDS,
+    BLAKE2S_STATE_WIDTH_IN_U32_WORDS,
 };
 
 /// [`Blake2RoundFunctionEvaluator::new`] is sound only on RISC-V: it relies on
@@ -29,6 +31,8 @@ use blake2s_u32::{
 fn zeroed_evaluator() -> Blake2RoundFunctionEvaluator {
     let mut evaluator = Blake2RoundFunctionEvaluator {
         state: [0u32; BLAKE2S_STATE_WIDTH_IN_U32_WORDS],
+        // The scratch space only exists where the delegation is real.
+        #[cfg(target_arch = "riscv32")]
         extended_state: [0u32; BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS],
         input_buffer: AlignedArray64::from_value(0u32),
         t: 0,

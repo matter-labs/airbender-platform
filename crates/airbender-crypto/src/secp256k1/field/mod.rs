@@ -95,7 +95,21 @@ impl FieldElementConst {
         Self(self.0.normalize())
     }
 
+    /// NOTE: `self` should be normalized
     pub(crate) const fn to_storage(self) -> FieldStorage {
+        // Storage is read into the runtime element as is, and the delegation-based one
+        // is in Montgomery form
+        #[cfg(feature = "bigint_ops")]
+        {
+            // 2^256 mod p
+            const R: FieldElementConst = FieldElementConst::from_bytes_unchecked(&[
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+                0, 0, 0x03, 0xd1,
+            ]);
+            FieldStorage(self.mul(&R).normalize().0.to_storage())
+        }
+
+        #[cfg(not(feature = "bigint_ops"))]
         FieldStorage(self.0.to_storage())
     }
 
@@ -116,6 +130,7 @@ impl FieldElementConst {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub struct FieldElement(pub(crate) FieldElementImpl);
 
 impl FieldElement {
@@ -133,30 +148,74 @@ impl FieldElement {
         FieldElementImpl::from_bytes(bytes).map(Self)
     }
 
+    #[inline(always)]
     pub fn mul_in_place(&mut self, rhs: &Self) {
         self.0.mul_in_place(&rhs.0);
     }
 
+    #[inline(always)]
     pub fn mul_int_in_place(&mut self, rhs: u32) {
         self.0.mul_int_in_place(rhs);
     }
 
+    #[inline(always)]
     pub fn square_in_place(&mut self) {
         self.0.square_in_place();
     }
 
+    #[inline(always)]
     pub fn add_in_place(&mut self, rhs: &Self) {
         self.0.add_in_place(&rhs.0);
     }
 
+    #[inline(always)]
     pub fn double_in_place(&mut self) {
         self.0.double_in_place();
     }
 
+    #[inline(always)]
     pub fn sub_in_place(&mut self, rhs: &Self) {
         self.0.sub_in_place(&rhs.0);
     }
 
+    /// Computes `self = minuend - self`
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn sub_and_negate_in_place(&mut self, minuend: &Self) {
+        self.0.sub_and_negate_in_place(&minuend.0);
+    }
+
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn triple_in_place(&mut self) {
+        self.0.triple_in_place();
+    }
+
+    /// Cheaper `*self = *src` for the delegation-based field
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn copy_from(&mut self, src: &Self) {
+        self.0.copy_from(&src.0);
+    }
+
+    /// Cheaper `Clone` for the delegation-based field: initializes `dst` with a copy of `src`
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn write_copy<'a>(
+        dst: &'a mut core::mem::MaybeUninit<Self>,
+        src: &Self,
+    ) -> &'a mut Self {
+        // SAFETY: `Self` is a wrapper of the implementation with the same layout, and
+        // the implementation initializes all of it
+        unsafe {
+            let dst = &mut *(dst as *mut core::mem::MaybeUninit<Self>)
+                .cast::<core::mem::MaybeUninit<FieldElementImpl>>();
+            &mut *(FieldElementImpl::write_copy(dst, &src.0) as *mut FieldElementImpl)
+                .cast::<Self>()
+        }
+    }
+
+    #[inline(always)]
     pub fn add_int_in_place(&mut self, rhs: u32) {
         self.0.add_int_in_place(rhs);
     }
@@ -225,18 +284,22 @@ impl FieldElement {
 
         is_root.normalizes_to_zero()
     }
+    #[inline(always)]
     pub fn negate_in_place(&mut self, magnitude: u32) {
         self.0.negate_in_place(magnitude);
     }
 
+    #[inline(always)]
     pub fn normalize_in_place(&mut self) {
         self.0.normalize_in_place();
     }
 
+    #[inline(always)]
     pub fn is_odd(&self) -> bool {
         self.0.is_odd()
     }
 
+    #[inline(always)]
     pub fn normalizes_to_zero(&self) -> bool {
         self.0.normalizes_to_zero()
     }
@@ -254,42 +317,49 @@ impl FieldElement {
     }
 
     #[cfg(test)]
-    pub(crate) const fn to_storage(self) -> FieldStorage {
+    pub(crate) fn to_storage(mut self) -> FieldStorage {
+        self.normalize_in_place();
         FieldStorage(self.0.to_storage())
     }
 }
 
 impl MulAssign for FieldElement {
+    #[inline(always)]
     fn mul_assign(&mut self, rhs: Self) {
         self.mul_in_place(&rhs);
     }
 }
 
 impl MulAssign<&FieldElement> for FieldElement {
+    #[inline(always)]
     fn mul_assign(&mut self, rhs: &Self) {
         self.mul_in_place(rhs);
     }
 }
 
 impl MulAssign<u32> for FieldElement {
+    #[inline(always)]
     fn mul_assign(&mut self, rhs: u32) {
         self.mul_int_in_place(rhs);
     }
 }
 
 impl AddAssign for FieldElement {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
         self.add_in_place(&rhs);
     }
 }
 
 impl AddAssign<u32> for FieldElement {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: u32) {
         self.add_int_in_place(rhs);
     }
 }
 
 impl SubAssign for FieldElement {
+    #[inline(always)]
     fn sub_assign(&mut self, rhs: Self) {
         self.sub_in_place(&rhs);
     }

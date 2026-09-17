@@ -88,6 +88,8 @@ impl ECMultContext {
         Ok(context)
     }
 
+    /// NOTE: the tables should hold what `const_new` computes. With `bigint_ops` those are
+    /// the coordinates in Montgomery form, see `FieldElementConst::to_storage`.
     pub fn new_from_raw_unchecked(
         pre_g: [AffineStorage; ECMULT_TABLE_SIZE_G],
         pre_g_128: [AffineStorage; ECMULT_TABLE_SIZE_G],

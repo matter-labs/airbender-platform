@@ -9,7 +9,7 @@ static MODULUS: BigInt<4> = ScalarInner::ORDER.0;
 static REDUCTION_CONST: BigInt<4> = ScalarInner::REDUCTION_CONST.0;
 
 #[derive(Debug, Default)]
-pub(super) struct ScalarParams;
+pub struct ScalarParams;
 
 impl DelegatedModParams<4> for ScalarParams {
     const MODULUS_BITSIZE: usize = 256;
@@ -26,7 +26,7 @@ impl DelegatedMontParams<4> for ScalarParams {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ScalarInner(BigInt<4>);
+pub struct ScalarInner(BigInt<4>);
 
 impl ScalarInner {
     pub(super) const ZERO: Self = Self(BigInt::zero());
@@ -75,6 +75,11 @@ impl ScalarInner {
 
     pub(super) const fn from_be_bytes_unchecked(bytes: &[u8; 32]) -> Self {
         Self(u256::from_bytes_unchecked(bytes))
+    }
+
+    #[cfg(all(test, feature = "bigint_ops"))]
+    pub(super) fn from_u128(n: u128) -> Self {
+        Self::from_words([n as u64, (n >> 64) as u64, 0, 0]).to_representation()
     }
 
     pub(super) fn from_be_bytes(bytes: &[u8; 32]) -> Self {

@@ -6,6 +6,8 @@ pub mod field;
 pub mod hooks;
 mod points;
 mod recover;
+#[cfg(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"))]
+mod recover_shamir;
 pub mod scalars;
 
 #[cfg(test)]
