@@ -25,6 +25,8 @@ pub mod ark_ff_delegation;
 mod bigint_delegation;
 #[allow(unexpected_cfgs)]
 pub mod blake2s;
+pub mod bytes32;
+pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
 pub mod bls12_381;
 #[allow(clippy::all)]

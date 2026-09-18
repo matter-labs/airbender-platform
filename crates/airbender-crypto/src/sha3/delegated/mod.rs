@@ -197,7 +197,7 @@ impl<const SHA3: bool> Keccak256Core<SHA3> {
 }
 
 impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
-    type HashOutput = [u8; 32];
+    type HashOutput = crate::Bytes32;
 
     #[inline(always)]
     fn new() -> Self {
@@ -239,20 +239,18 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
 
     #[inline(always)]
     fn finalize(mut self) -> Self::HashOutput {
-        keccak_pad::<SHA3>(&mut self.state.0, self.filled_bytes);
+        keccak_pad::<SHA3>(self.state.as_words_mut(), self.filled_bytes);
         keccak_f1600(&mut self.state);
-        unsafe { self.state.0.as_ptr().cast::<[u8; 32]>().read() }
+        // state is overaligned, and the output is word aligned: copied by words
+        unsafe { self.state.0.as_ptr().cast::<crate::Bytes32>().read() }
     }
 
     #[inline(always)]
     fn finalize_reset(&mut self) -> Self::HashOutput {
-        keccak_pad::<SHA3>(&mut self.state.0, self.filled_bytes);
+        keccak_pad::<SHA3>(self.state.as_words_mut(), self.filled_bytes);
         keccak_f1600(&mut self.state);
-        let output = unsafe { self.state.0.as_ptr().cast::<[u8; 32]>().read() };
-        for dst in self.state.0.iter_mut() {
-            *dst = 0;
-        }
-        self.filled_bytes = 0;
+        let output = unsafe { self.state.0.as_ptr().cast::<crate::Bytes32>().read() };
+        self.reset_state();
 
         output
     }
@@ -266,12 +264,50 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
 
     #[inline(always)]
     fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput) -> ()>(&mut self, closure: FN) {
-        keccak_pad::<SHA3>(&mut self.state.0, self.filled_bytes);
+        keccak_pad::<SHA3>(self.state.as_words_mut(), self.filled_bytes);
         keccak_f1600(&mut self.state);
-        let output = unsafe { self.state.0.as_ptr().cast::<[u8; 32]>().as_ref_unchecked() };
+        let output = unsafe {
+            self.state
+                .0
+                .as_ptr()
+                .cast::<crate::Bytes32>()
+                .as_ref_unchecked()
+        };
         (closure)(output);
+        self.reset_state();
+    }
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+static ZERO_WORD: crate::BigInt<4> = crate::BigInt::<4>::zero();
+
+impl<const SHA3: bool> Keccak256Core<SHA3> {
+    #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+    #[inline(always)]
+    fn reset_state(&mut self) {
+        // We know that our state is overaligned, so we can do memcpy via precompile.
+        // In total we can zero out all padded buffer - 32xu64 words, meaning 8 precompile calls
+
+        unsafe {
+            let mut ptr = self.state.0.as_mut_ptr();
+            let src = core::ptr::addr_of!(ZERO_WORD).cast();
+            seq_macro::seq!(N in 0..8 {
+                let _ = crate::bigint_op_delegation_raw(ptr.cast(), src, crate::BigIntOps::MemCpy);
+                ptr = ptr.add(4); // 4xu64 = 32 bytes
+            });
+        }
+        self.filled_bytes = 0;
+    }
+
+    /// Zero the state with inline stores: a plain loop (or `fill`) is recognized as `memset`
+    /// and becomes a call, that costs more than the stores themselves
+    #[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+    #[inline(always)]
+    fn reset_state(&mut self) {
         for dst in self.state.0.iter_mut() {
-            *dst = 0;
+            unsafe {
+                core::ptr::write_volatile(dst, 0);
+            }
         }
         self.filled_bytes = 0;
     }
@@ -283,13 +319,14 @@ fn keccak_pad<const SHA3: bool>(
     state: &mut [u64; KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS],
     len_filled_bytes: usize,
 ) {
-    let pos_padding_start_u64 = len_filled_bytes / 8;
-    let padding_start = {
-        let len_leftover_bytes = len_filled_bytes % 8;
-        (if SHA3 { 0x06 } else { 0x01 }) << (len_leftover_bytes * 8)
-    };
-    state[pos_padding_start_u64] ^= padding_start;
-    state[16] ^= 0x80000000_00000000; // last bit is always there
+    // 32-bit words: a 64-bit shift by a variable amount is expensive on 32-bit targets.
+    // Lanes are little-endian, so the high half of lane `i` is word `2 * i + 1`
+    const NUM_WORDS: usize = 2 * KECCAK_SPECIAL5_STATE_AND_SCRATCH_U64_WORDS;
+    let words: &mut [u32; NUM_WORDS] =
+        unsafe { &mut *state.as_mut_ptr().cast::<[u32; NUM_WORDS]>() };
+    let padding_start = (if SHA3 { 0x06u32 } else { 0x01u32 }) << ((len_filled_bytes % 4) * 8);
+    words[len_filled_bytes / 4] ^= padding_start;
+    words[2 * 16 + 1] ^= 0x80000000; // last bit is always there
 }
 
 #[cfg(any(test, feature = "sha3_tests"))]

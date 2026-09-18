@@ -5,8 +5,8 @@ use seq_macro::seq;
 
 pub(crate) fn keccak_f1600(state: &mut AlignedState) {
     seq!(round in 0..24 {
-        iota_theta_rho_nopi(&mut state.0, round);
-        chi_nopi(&mut state.0, round);
+        iota_theta_rho_nopi(state.as_words_mut(), round);
+        chi_nopi(state.as_words_mut(), round);
     });
     const ROUND_CONSTANT_FINAL: u64 = 0x8000000080008008;
     state.0[0] ^= ROUND_CONSTANT_FINAL;
