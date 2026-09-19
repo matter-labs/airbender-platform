@@ -1,45 +1,45 @@
 use super::*;
 use crate::bn254::Fq12;
+use crate::extension_tower::*;
 use ark_ec::bn::g2::EllCoeff;
 use ark_ec::pairing::Pairing;
 use ark_ec::pairing::PairingOutput;
 use ark_ec::short_weierstrass::SWCurveConfig;
-use ark_ec::AdditiveGroup;
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
+use ark_ff::Field;
 use ark_ff::One;
-use ark_ff::{CyclotomicMultSubgroup, Field};
 use ark_serialize::CanonicalDeserialize;
 use ark_serialize::CanonicalSerialize;
+use core::mem::MaybeUninit;
 
 impl Bn254 {
     /// Evaluates the line function at point p.
     fn ell(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine) {
-        let mut c0 = coeffs.0;
-        let mut c1 = coeffs.1;
-        let mut c2 = coeffs.2;
-
         match Config::TWIST_TYPE {
             TwistType::M => {
+                let mut c1 = coeffs.1;
+                let mut c2 = coeffs.2;
                 c2.mul_assign_by_fp(&p.y);
                 c1.mul_assign_by_fp(&p.x);
-                f.mul_by_014(&c0, &c1, &c2);
+                f.mul_by_014(&coeffs.0, &c1, &c2);
             }
             TwistType::D => {
-                c0.mul_assign_by_fp(&p.y);
-                c1.mul_assign_by_fp(&p.x);
-                f.mul_by_034(&c0, &c1, &c2);
+                fp2_tmp!(c0 = &coeffs.0);
+                fp2_mul_by_fp(c0, &p.y);
+                fp2_tmp!(c1 = &coeffs.1);
+                fp2_mul_by_fp(c1, &p.x);
+                fp12_mul_by_034(f, c0, c1, &coeffs.2);
             }
         }
     }
 
-    fn exp_by_neg_x(mut f: Fq12) -> Fq12 {
-        Self::spec_cyclotomic_exp_by_x_inplace(&mut f);
+    fn exp_by_neg_x_in_place(f: &mut Fq12) {
+        Self::spec_cyclotomic_exp_by_x_inplace(f);
 
         if !Config::X_IS_NEGATIVE {
-            f.cyclotomic_inverse_in_place();
+            fp12_cyclotomic_inverse_in_place(f);
         }
-        f
     }
 
     fn spec_cyclotomic_exp_by_x_inplace(f: &mut Fq12) {
@@ -59,25 +59,26 @@ impl Bn254 {
 
     /// `exp_loop` taken from arkworks
     fn fast_exp_loop_with_naf<I: Iterator<Item = i8>>(f: &mut Fq12, e: I) {
-        let self_inverse = f.cyclotomic_inverse().unwrap();
+        fp12_tmp!(self_inverse = &*f);
+        fp12_cyclotomic_inverse_in_place(self_inverse);
         let mut res = Fq12::one();
         let mut found_nonzero = false;
         for value in e {
             if found_nonzero {
-                res.cyclotomic_square_in_place();
+                fp12_cyclotomic_square_in_place(&mut res);
             }
 
             if value != 0 {
                 found_nonzero = true;
 
                 if value > 0 {
-                    res *= &*f;
+                    fp12_mul_assign(&mut res, &*f);
                 } else {
-                    res *= &self_inverse;
+                    fp12_mul_assign(&mut res, self_inverse);
                 }
             }
         }
-        *f = res;
+        fp12_assign(f, &res);
     }
 }
 
@@ -116,7 +117,7 @@ impl Pairing for Bn254 {
 
                     for i in (1..Config::ATE_LOOP_COUNT.len()).rev() {
                         if i != Config::ATE_LOOP_COUNT.len() - 1 {
-                            f.square_in_place();
+                            fp12_square_in_place(&mut f);
                         }
 
                         Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
@@ -128,13 +129,13 @@ impl Pairing for Bn254 {
                     }
 
                     if Config::X_IS_NEGATIVE {
-                        f.cyclotomic_inverse_in_place();
+                        fp12_cyclotomic_inverse_in_place(&mut f);
                     }
 
                     Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
                     Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
 
-                    result *= f;
+                    fp12_mul_assign(&mut result, &f);
                 }
                 (None, None) => break,
                 _ => {
@@ -154,23 +155,18 @@ impl Pairing for Bn254 {
         //   elt^((q^6-1)*(q^2+1)) = (conj(elt) * elt^(-1))^(q^2+1)
         let f: crate::bn254::Fq12 = f.0;
 
-        // f1 = r.cyclotomic_inverse_in_place() = f^(p^6)
-        let mut f1 = f;
-        f1.cyclotomic_inverse_in_place();
+        // f1 = conj(f) = f^(p^6)
+        fp12_tmp!(f1 = &f);
+        fp12_cyclotomic_inverse_in_place(f1);
 
-        f.inverse().map(|mut f2| {
-            // f2 = f^(-1);
+        f.inverse().map(|f2| {
             // r = f^(p^6 - 1)
-            let mut r = f1 * &f2;
-
-            // f2 = f^(p^6 - 1)
-            f2 = r;
-            // r = f^((p^6 - 1)(p^2))
-            r.frobenius_map_in_place(2);
-
-            // r = f^((p^6 - 1)(p^2) + (p^6 - 1))
-            // r = f^((p^6 - 1)(p^2 + 1))
-            r *= &f2;
+            fp12_tmp!(r = f1);
+            fp12_mul_assign(r, &f2);
+            // r = f^((p^6 - 1)(p^2 + 1)) = r^(p^2) * r
+            fp12_tmp!(r_p2 = r);
+            r_p2.frobenius_map_in_place(2);
+            fp12_mul_assign(r, r_p2);
 
             // Hard part follows Laura Fuentes-Castaneda et al. "Faster hashing to G2"
             // by computing:
@@ -182,32 +178,50 @@ impl Pairing for Bn254 {
             // which equals
             //
             // result = elt^( 2z * ( 6z^2 + 3z + 1 ) * (q^4 - q^2 + 1)/r ).
-
-            let y0 = Self::exp_by_neg_x(r);
-            let y1 = y0.cyclotomic_square();
-            let y2 = y1.cyclotomic_square();
-            let mut y3 = y2 * &y1;
-            let y4 = Self::exp_by_neg_x(y3);
-            let y5 = y4.cyclotomic_square();
-            let mut y6 = Self::exp_by_neg_x(y5);
-            y3.cyclotomic_inverse_in_place();
-            y6.cyclotomic_inverse_in_place();
-            let y7 = y6 * &y4;
-            let mut y8 = y7 * &y3;
-            let y9 = y8 * &y1;
-            let y10 = y8 * &y4;
-            let y11 = y10 * &r;
-            let mut y12 = y9;
-            y12.frobenius_map_in_place(1);
-            let y13 = y12 * &y11;
+            //
+            // Same sequence as the arkworks implementation, each value updated in place.
+            fp12_tmp!(y0 = r);
+            Self::exp_by_neg_x_in_place(y0);
+            fp12_tmp!(y1 = y0);
+            fp12_cyclotomic_square_in_place(y1);
+            fp12_tmp!(y2 = y1);
+            fp12_cyclotomic_square_in_place(y2);
+            fp12_tmp!(y3 = y2);
+            fp12_mul_assign(y3, y1);
+            fp12_tmp!(y4 = y3);
+            Self::exp_by_neg_x_in_place(y4);
+            fp12_tmp!(y5 = y4);
+            fp12_cyclotomic_square_in_place(y5);
+            fp12_tmp!(y6 = y5);
+            Self::exp_by_neg_x_in_place(y6);
+            fp12_cyclotomic_inverse_in_place(y3);
+            fp12_cyclotomic_inverse_in_place(y6);
+            // y7 = y6 * y4, y8 = y7 * y3
+            let y8 = y6;
+            fp12_mul_assign(y8, y4);
+            fp12_mul_assign(y8, y3);
+            // y9 = y8 * y1
+            fp12_tmp!(y9 = y8);
+            fp12_mul_assign(y9, y1);
+            // y11 = y10 * r, y10 = y8 * y4
+            fp12_tmp!(y11 = y8);
+            fp12_mul_assign(y11, y4);
+            fp12_mul_assign(y11, r);
+            // y13 = y12 * y11, y12 = y9^p
+            fp12_tmp!(y13 = y9);
+            y13.frobenius_map_in_place(1);
+            fp12_mul_assign(y13, y11);
+            // y14 = y8^(p^2) * y13
             y8.frobenius_map_in_place(2);
-            let y14 = y8 * &y13;
-            r.cyclotomic_inverse_in_place();
-            let mut y15 = r * &y9;
-            y15.frobenius_map_in_place(3);
-            let y16 = y15 * &y14;
+            fp12_mul_assign(y8, y13);
+            let y14 = y8;
+            // y16 = (conj(r) * y9)^(p^3) * y14
+            fp12_cyclotomic_inverse_in_place(r);
+            fp12_mul_assign(r, y9);
+            r.frobenius_map_in_place(3);
+            fp12_mul_assign(r, y14);
 
-            PairingOutput(y16)
+            PairingOutput(*r)
         })
     }
 }
@@ -236,15 +250,14 @@ impl From<G2Affine> for G2PreparedNoAlloc {
             let neg_q = -q;
 
             for bit in Config::ATE_LOOP_COUNT.iter().rev().skip(1) {
-                ell_coeffs[i].write(r.double_in_place(&two_inv));
+                r.double_in_place(&two_inv, &mut ell_coeffs[i]);
                 i += 1;
 
-                let coeff = match bit {
-                    1 => r.add_in_place(&q),
-                    -1 => r.add_in_place(&neg_q),
+                match bit {
+                    1 => r.add_in_place(&q, &mut ell_coeffs[i]),
+                    -1 => r.add_in_place(&neg_q, &mut ell_coeffs[i]),
                     _ => continue,
                 };
-                ell_coeffs[i].write(coeff);
                 i += 1;
             }
 
@@ -257,9 +270,9 @@ impl From<G2Affine> for G2PreparedNoAlloc {
 
             q2.y = -q2.y;
 
-            ell_coeffs[i].write(r.add_in_place(&q1));
+            r.add_in_place(&q1, &mut ell_coeffs[i]);
             i += 1;
-            ell_coeffs[i].write(r.add_in_place(&q2));
+            r.add_in_place(&q2, &mut ell_coeffs[i]);
             i += 1;
 
             assert_eq!(i, ell_coeffs.len());
@@ -279,52 +292,137 @@ struct G2HomProjective {
     z: Fq2,
 }
 
+/// Writes a line coefficient triple into its slot, component by component
+#[inline(always)]
+fn write_coeff(out: &mut MaybeUninit<EllCoeff<Config>>, a: &Fq2, b: &Fq2, c: &Fq2) {
+    // SAFETY: the three fields are written before the value is used
+    unsafe {
+        let p = out.as_mut_ptr();
+        fp2_init(
+            &mut *(core::ptr::addr_of_mut!((*p).0) as *mut MaybeUninit<Fq2>),
+            a,
+        );
+        fp2_init(
+            &mut *(core::ptr::addr_of_mut!((*p).1) as *mut MaybeUninit<Fq2>),
+            b,
+        );
+        fp2_init(
+            &mut *(core::ptr::addr_of_mut!((*p).2) as *mut MaybeUninit<Fq2>),
+            c,
+        );
+    }
+}
+
 impl G2HomProjective {
-    fn double_in_place(&mut self, two_inv: &Fq) -> EllCoeff<Config> {
-        // Formula for line function when working with
-        // homogeneous projective coordinates.
-
-        let mut a = self.x * &self.y;
-        a.mul_assign_by_fp(two_inv);
-        let b = self.y.square();
-        let c = self.z.square();
-        let e = <Config as BnConfig>::G2Config::COEFF_B * &(c.double() + &c);
-        let f = e.double() + &e;
-        let mut g = b + &f;
-        g.mul_assign_by_fp(two_inv);
-        let h = (self.y + &self.z).square() - &(b + &c);
-        let i = e - &b;
-        let j = self.x.square();
-        let e_square = e.square();
-
-        self.x = a * &(b - &f);
-        self.y = g.square() - &(e_square.double() + &e_square);
-        self.z = b * &h;
+    /// Doubles the point and writes the line coefficients; the formulas of the arkworks
+    /// implementation for homogeneous projective coordinates, evaluated in place.
+    fn double_in_place(&mut self, two_inv: &Fq, out: &mut MaybeUninit<EllCoeff<Config>>) {
+        // a = x y / 2
+        fp2_tmp!(a = &self.x);
+        fp2_mul_assign(a, &self.y);
+        fp2_mul_by_fp(a, two_inv);
+        // b = y^2, c = z^2
+        fp2_tmp!(b = &self.y);
+        fp2_square_in_place(b);
+        fp2_tmp!(c = &self.z);
+        fp2_square_in_place(c);
+        // e = 3 B c, f = 3 e
+        fp2_tmp!(e = c);
+        fp2_double_in_place(e);
+        fp2_add_assign(e, c);
+        fp2_mul_assign(e, &<Config as BnConfig>::G2Config::COEFF_B);
+        fp2_tmp!(f = e);
+        fp2_double_in_place(f);
+        fp2_add_assign(f, e);
+        // g = (b + f) / 2
+        fp2_tmp!(g = b);
+        fp2_add_assign(g, f);
+        fp2_mul_by_fp(g, two_inv);
+        // h = (y + z)^2 - (b + c)
+        fp2_tmp!(h = &self.y);
+        fp2_add_assign(h, &self.z);
+        fp2_square_in_place(h);
+        fp2_sub_assign(h, b);
+        fp2_sub_assign(h, c);
+        // i = e - b, j = x^2
+        fp2_tmp!(i = e);
+        fp2_sub_assign(i, b);
+        fp2_tmp!(j = &self.x);
+        fp2_square_in_place(j);
+        // z = b h
+        fp2_assign(&mut self.z, b);
+        fp2_mul_assign(&mut self.z, h);
+        // x = a (b - f)
+        fp2_sub_assign(b, f);
+        fp2_assign(&mut self.x, a);
+        fp2_mul_assign(&mut self.x, b);
+        // y = g^2 - 3 e^2
+        fp2_square_in_place(g);
+        fp2_square_in_place(e);
+        fp2_tmp!(e3 = e);
+        fp2_double_in_place(e3);
+        fp2_add_assign(e3, e);
+        fp2_sub_assign(g, e3);
+        fp2_assign(&mut self.y, g);
+        // 3 j
+        fp2_tmp!(j3 = j);
+        fp2_double_in_place(j3);
+        fp2_add_assign(j3, j);
+        fp2_neg_in_place(h);
         match Config::TWIST_TYPE {
-            TwistType::M => (i, j.double() + &j, -h),
-            TwistType::D => (-h, j.double() + &j, i),
+            TwistType::M => write_coeff(out, i, j3, h),
+            TwistType::D => write_coeff(out, h, j3, i),
         }
     }
 
-    fn add_in_place(&mut self, q: &G2Affine) -> EllCoeff<Config> {
-        // Formula for line function when working with
-        // homogeneous projective coordinates.
-        let theta = self.y - &(q.y * &self.z);
-        let lambda = self.x - &(q.x * &self.z);
-        let c = theta.square();
-        let d = lambda.square();
-        let e = lambda * &d;
-        let f = self.z * &c;
-        let g = self.x * &d;
-        let h = e + &f - &g.double();
-        self.x = lambda * &h;
-        self.y = theta * &(g - &h) - &(e * &self.y);
-        self.z *= &e;
-        let j = theta * &q.x - &(lambda * &q.y);
-
+    /// Adds `q` and writes the line coefficients, in place as `double_in_place`
+    fn add_in_place(&mut self, q: &G2Affine, out: &mut MaybeUninit<EllCoeff<Config>>) {
+        // theta = y - q.y z, lambda = x - q.x z
+        fp2_tmp!(theta = &q.y);
+        fp2_mul_assign(theta, &self.z);
+        fp2_neg_in_place(theta);
+        fp2_add_assign(theta, &self.y);
+        fp2_tmp!(lambda = &q.x);
+        fp2_mul_assign(lambda, &self.z);
+        fp2_neg_in_place(lambda);
+        fp2_add_assign(lambda, &self.x);
+        // c = theta^2, d = lambda^2, e = lambda d, f = z c, g = x d
+        fp2_tmp!(c = theta);
+        fp2_square_in_place(c);
+        fp2_tmp!(d = lambda);
+        fp2_square_in_place(d);
+        fp2_tmp!(e = lambda);
+        fp2_mul_assign(e, d);
+        fp2_tmp!(f = &self.z);
+        fp2_mul_assign(f, c);
+        fp2_tmp!(g = &self.x);
+        fp2_mul_assign(g, d);
+        // h = e + f - 2 g
+        fp2_tmp!(h = e);
+        fp2_add_assign(h, f);
+        fp2_sub_assign(h, g);
+        fp2_sub_assign(h, g);
+        // x = lambda h
+        fp2_assign(&mut self.x, lambda);
+        fp2_mul_assign(&mut self.x, h);
+        // y = theta (g - h) - e y
+        fp2_sub_assign(g, h);
+        fp2_mul_assign(g, theta);
+        fp2_mul_assign(&mut self.y, e);
+        fp2_neg_in_place(&mut self.y);
+        fp2_add_assign(&mut self.y, g);
+        // z = z e
+        fp2_mul_assign(&mut self.z, e);
+        // j = theta q.x - lambda q.y
+        fp2_tmp!(j = theta);
+        fp2_mul_assign(j, &q.x);
+        fp2_tmp!(lq = lambda);
+        fp2_mul_assign(lq, &q.y);
+        fp2_sub_assign(j, lq);
+        fp2_neg_in_place(theta);
         match Config::TWIST_TYPE {
-            TwistType::M => (j, -theta, lambda),
-            TwistType::D => (lambda, -theta, j),
+            TwistType::M => write_coeff(out, j, theta, lambda),
+            TwistType::D => write_coeff(out, lambda, theta, j),
         }
     }
 }

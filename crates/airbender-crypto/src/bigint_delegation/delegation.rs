@@ -40,6 +40,12 @@ pub(super) fn memcpy(a: &mut U256, b: &U256) {
     bigint_op_delegation(a, b, BigIntOps::MemCpy);
 }
 
+/// `memcpy` into possibly uninitialized, 32-byte aligned memory
+#[inline(always)]
+pub(super) fn memcpy_to_ptr(dst: *mut U256, src: &U256) {
+    bigint_op_delegation(dst, src, BigIntOps::MemCpy);
+}
+
 #[inline(always)]
 pub(super) fn sub_with_carry_bit(a: &mut U256, b: &U256, carry: bool) -> u32 {
     bigint_op_delegation_with_carry_bit(a, b, carry, BigIntOps::Sub)
@@ -291,6 +297,15 @@ pub(crate) fn bigint_op_delegation_with_carry_bit(
     mask
 }
 
+// Number of delegation calls made so far on this thread (host emulation, tests only): the
+// cost model of the proving target is the number of these calls.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static DELEGATION_CALLS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    /// The same, per operation (indexed by `BigIntOps`)
+    pub(crate) static DELEGATION_CALLS_BY_OP: core::cell::RefCell<[u64; 8]> = const { core::cell::RefCell::new([0; 8]) };
+}
+
 #[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
 #[inline(always)]
 pub(crate) fn bigint_op_delegation_with_carry_bit(
@@ -299,6 +314,10 @@ pub(crate) fn bigint_op_delegation_with_carry_bit(
     carry: bool,
     op: BigIntOps,
 ) -> u32 {
+    #[cfg(test)]
+    DELEGATION_CALLS.with(|c| c.set(c.get() + 1));
+    #[cfg(test)]
+    DELEGATION_CALLS_BY_OP.with(|c| c.borrow_mut()[op as usize] += 1);
     debug_assert!(a_ptr.cast_const() != b_ptr);
     debug_assert!(a_ptr.addr() % 32 == 0);
     debug_assert!(b_ptr.addr() % 32 == 0);

@@ -166,11 +166,18 @@ impl MontConfig<NUM_LIMBS> for FqConfig {
         Some(inverse)
     }
 
-    // default impl
+    /// In place: the by-value `a[i] * b[i]` of the default moves 64-byte values through
+    /// `memcpy` calls; here the product is built in one buffer with delegated copies.
+    #[inline(always)]
     fn sum_of_products<const M: usize>(a: &[F; M], b: &[F; M]) -> F {
         let mut sum = F::ZERO;
-        for i in 0..a.len() {
-            sum += a[i] * b[i];
+        let mut product = F::ZERO;
+        for i in 0..M {
+            u512::copy_assign(&mut product.0, &a[i].0);
+            unsafe {
+                u512::mul_assign_montgomery::<FqParams>(&mut product.0, &b[i].0);
+                u512::add_mod_assign::<FqParams>(&mut sum.0, &product.0);
+            }
         }
         sum
     }
@@ -438,6 +445,51 @@ mod test {
                 .0;
             let r = <Bls12_381 as Pairing>::ScalarField::MODULUS;
             assert!(gt.cyclotomic_exp(r).is_one());
+        }
+    }
+
+    /// Products whose low limb is zero (the carry-only path of the reduction) and the
+    /// extreme residues, against the reference implementation
+    #[test]
+    fn test_mul_edge_cases() {
+        use ark_ff::PrimeField;
+        type RefFq = ark_bls12_381::Fq;
+        let from_ref = |r: RefFq| {
+            let mut t = BigInt::zero();
+            t.0[..6].copy_from_slice(&r.into_bigint().0);
+            Fq::from_bigint(t).unwrap()
+        };
+        let p_minus_1 = -RefFq::one();
+        let two_256 = RefFq::from(2u64).pow([256u64]);
+        let two_128 = RefFq::from(2u64).pow([128u64]);
+        // the Montgomery form of `2^512^-1` is 1: a zero low limb
+        let r_inv = RefFq::from(2u64).pow([512u64]).inverse().unwrap();
+        let values = [
+            RefFq::zero(),
+            RefFq::one(),
+            p_minus_1,
+            two_256,
+            two_128,
+            r_inv,
+            RefFq::from(2u64),
+            two_256 * two_128,
+            two_256 * r_inv,
+            p_minus_1 * r_inv,
+        ];
+        for &ra in values.iter() {
+            for &rb in values.iter() {
+                let mut a = from_ref(ra);
+                let b = from_ref(rb);
+                a *= &b;
+                assert_eq!(
+                    a.into_bigint().0[..6],
+                    (ra * rb).into_bigint().0[..6],
+                    "{ra} * {rb}"
+                );
+                let mut sq = from_ref(ra);
+                sq.square_in_place();
+                assert_eq!(sq.into_bigint().0[..6], ra.square().into_bigint().0[..6]);
+            }
         }
     }
 

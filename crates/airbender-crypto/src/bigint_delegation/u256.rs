@@ -312,29 +312,22 @@ pub unsafe fn square_assign_montgomery<T: DelegatedMontParams<4>>(a: &mut U256) 
 ///
 pub unsafe fn mul_assign_montgomery<T: DelegatedMontParams<4>>(a: &mut U256, b: &U256) {
     with_scratch!(s => {
-        delegation::memcpy(&mut s.copy_place_1, a);
-
-        delegation::mul_low(&mut s.copy_place_1, b);
+        // (a, low) = a * b: the high half stays in `a`
+        let low = &mut s.copy_place_1;
+        delegation::memcpy(low, a);
+        delegation::mul_low(low, b);
         delegation::mul_high(a, b);
 
-        delegation::memcpy(&mut s.copy_place_2, &s.copy_place_1);
+        // Montgomery reduction: with `m = low * (-N^-1) mod 2^256`, `low + low(m N) = 0 mod 2^256`,
+        // so the low half of `a b + m N` is never needed, only its carry: both terms are in
+        // `[0, 2^256)` and add up to `0` or `2^256`, i.e. the carry is set iff `low != 0`.
+        let carry = delegation::eq(low, &ZERO) == 0;
+        // low = high(m N)
+        delegation::mul_low(low, T::reduction_const());
+        delegation::mul_high(low, T::modulus());
 
-        delegation::mul_low(&mut s.copy_place_2, T::reduction_const());
-
-        delegation::memcpy(&mut s.copy_place_3, &s.copy_place_2);
-
-        delegation::mul_low(&mut s.copy_place_3, T::modulus());
-        delegation::mul_high(&mut s.copy_place_2, T::modulus());
-
-        let carry = delegation::add(&mut s.copy_place_3, &s.copy_place_1) != 0;
-
-        debug_assert!(s.copy_place_3.is_zero());
-
-        if carry {
-            delegation::add(&mut s.copy_place_2, &ONE);
-        }
-
-        let carry = delegation::add(a, &s.copy_place_2) != 0;
+        // a = (a b + m N) / 2^256 = high(a b) + high(m N) + carry, then one conditional subtraction
+        let carry = delegation::add_with_carry_bit(a, low, carry) != 0;
         sub_mod_with_carry::<T>(a, carry);
     })
 }
@@ -360,6 +353,14 @@ pub unsafe fn mul_assign_montgomery<T: DelegatedMontParams<4>>(a: &mut U256, b: 
 /// Copies `b` into `a`
 pub fn copy_assign(a: &mut U256, b: &U256) {
     delegation::memcpy(a, b);
+}
+
+/// Initializes the (32-byte aligned) memory at `dst` with a copy of `src`
+/// # Safety
+/// `dst` must be valid for writes of a `U256` and 32-byte aligned
+#[inline(always)]
+pub unsafe fn init_copy(dst: *mut U256, src: &U256) {
+    delegation::memcpy_to_ptr(dst, src);
 }
 
 #[inline(always)]

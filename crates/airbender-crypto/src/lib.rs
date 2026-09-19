@@ -26,6 +26,10 @@ mod bigint_delegation;
 #[allow(unexpected_cfgs)]
 pub mod blake2s;
 pub mod bytes32;
+#[cfg(test)]
+mod delegation_counts;
+pub(crate) mod extension_tower;
+pub(crate) mod jacobian;
 pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
 pub mod bls12_381;
@@ -86,6 +90,7 @@ pub use self::raw_delegation_interface::{
 // explicit initialization requirements.
 pub fn init_lib() {}
 
+#[derive(Clone, Copy)]
 pub enum BigIntOps {
     Add = 0,
     Sub = 1,

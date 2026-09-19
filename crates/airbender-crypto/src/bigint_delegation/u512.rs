@@ -90,6 +90,29 @@ pub(super) fn as_high(a: &U512) -> &U256 {
     }
 }
 
+/// Copies `b` into `a` with two delegated memcopies instead of a `memcpy` call
+#[inline(always)]
+pub fn copy_assign(a: &mut U512, b: &U512) {
+    let (a_low, a_high) = as_low_high_mut(a);
+    // SAFETY: a `U512` is two 32-byte aligned `U256` halves
+    let (b_low, b_high) = unsafe {
+        let low = b as *const U512 as *const U256;
+        (&*low, &*low.add(1))
+    };
+    delegation::memcpy(a_low, b_low);
+    delegation::memcpy(a_high, b_high);
+}
+
+/// Initializes the (32-byte aligned) memory at `dst` with a copy of `src`
+/// # Safety
+/// `dst` must be valid for writes of a `U512` and 32-byte aligned
+#[inline(always)]
+pub unsafe fn init_copy(dst: *mut U512, src: &U512) {
+    let dst = dst.cast::<U256>();
+    delegation::memcpy_to_ptr(dst, as_low(src));
+    delegation::memcpy_to_ptr(dst.add(1), as_high(src));
+}
+
 pub(super) fn as_low_high_mut(a: &mut U512) -> (&mut U256, &mut U256) {
     unsafe {
         let low = a as *mut U512 as *mut U256;
@@ -195,176 +218,108 @@ pub unsafe fn mul_assign_montgomery<T: DelegatedMontParams<8>>(a: &mut U512, b: 
     // otherwise we may get a carry in the final addition
     assert!(T::MODULUS_BITSIZE < 512);
 
+    // Two rounds of `t = (t + a b_i + k N) / 2^256` on 256-bit limbs (CIOS), `k` chosen so that
+    // the low limb of `t + a b_i + k N` vanishes. That limb is therefore never computed: with
+    // `k = t0 (-N^-1) mod 2^256`, `t0 + low(k n0)` is `0` or `2^256`, so its carry is `t0 != 0`.
+    // Carries are folded into the next addition with the carry bit instead of separate `+ 1`
+    // additions. Every scratch limb is a delegation-aligned `U256`.
     with_scratch!(s => {
-        let (r0, r1) = {
-            let b0 = as_low(b);
-            let r0 = &mut s.mul_copy_place_0;
-            delegation::memcpy(r0, as_low(a));
+        let (n0, n1) = (as_low(T::modulus()), as_high(T::modulus()));
+        let (b0, b1) = (as_low(b), as_high(b));
 
-            let carry_1 = &mut s.mul_copy_place_1;
-            delegation::memcpy(carry_1, r0);
+        // --- round 0: (t2, t1, t0) = a b0 ---
+        // t0 = low(a0 b0), c = high(a0 b0)
+        let t0 = &mut s.mul_copy_place_0;
+        delegation::memcpy(t0, as_low(a));
+        let c = &mut s.mul_copy_place_1;
+        delegation::memcpy(c, t0);
+        u256::mul_low_assign(t0, b0);
+        u256::mul_high_assign(c, b0);
+        // t1 = low(a1 b0) + c, t2 = high(a1 b0) (+ t2_carry, folded below)
+        let t1 = &mut s.mul_copy_place_2;
+        delegation::memcpy(t1, as_high(a));
+        let t2 = &mut s.mul_copy_place_3;
+        delegation::memcpy(t2, t1);
+        u256::mul_low_assign(t1, b0);
+        let t2_carry = u256::add_assign(t1, c);
+        u256::mul_high_assign(t2, b0);
 
-            u256::mul_low_assign(r0, b0);
-            u256::mul_high_assign(carry_1, b0);
-
-            let reduction_k = &mut s.mul_copy_place_2;
-            delegation::memcpy(reduction_k, r0);
-            u256::mul_low_assign(reduction_k, T::reduction_const());
-
-            let carry_2_low = &mut s.mul_copy_place_3;
-            delegation::memcpy(carry_2_low, as_low(T::modulus()));
-
-            u256::mul_low_assign(carry_2_low, reduction_k);
-            let of = u256::add_assign(carry_2_low, r0);
-
-            let carry_2 = &mut s.mul_copy_place_4;
-            delegation::memcpy(carry_2, as_low(T::modulus()));
-
-            u256::mul_high_assign(carry_2, reduction_k);
-
-            if of {
-                u256::add_assign(carry_2, &ONE);
-            }
-
-            // We can reuse mul_copy_place_3
-            debug_assert!(carry_2_low.is_zero());
-
-            let r1 = &mut s.mul_copy_place_3;
-            delegation::memcpy(r1, as_high(a));
-
-            let new_carry_1 = &mut s.mul_copy_place_5;
-            delegation::memcpy(new_carry_1, r1);
-
-            u256::mul_low_assign(r1, b0);
-            let of = u256::add_assign(r1, carry_1);
-
-            u256::mul_high_assign(new_carry_1, b0);
-
-            if of {
-                u256::add_assign(new_carry_1, &ONE);
-            }
-
-            // now mul_copy_place_1 is available
-            let carry_1 = new_carry_1;
-
-            let new_carry_2_low = &mut s.mul_copy_place_1;
-            delegation::memcpy(new_carry_2_low, as_high(T::modulus()));
-
-            u256::mul_low_assign(new_carry_2_low, reduction_k);
-            let of0 = u256::add_assign(new_carry_2_low, r1);
-            let of1 = u256::add_assign(new_carry_2_low, carry_2);
-
-            // we can reuse mul_copy_place_4 now
-            let new_carry_2 = &mut s.mul_copy_place_4;
-            delegation::memcpy(new_carry_2, as_high(T::modulus()));
-
-            u256::mul_high_assign(new_carry_2, reduction_k);
-
-            if of0 || of1 {
-                let temp = &mut s.low_word_scratch;
-                temp.0[0] = of0 as u64 + of1 as u64;
-                u256::add_assign(new_carry_2, temp);
-            }
-
-            let r0 = new_carry_2_low;
-            let carry_2 = new_carry_2;
-
-            let r1 = carry_1;
-            u256::add_assign(r1, carry_2);
-
-            debug_assert!(r1.0[2..4].iter().all(|&x| x == 0));
-
-            // we use mul_copy_place_1 and mul_copy_place_5
-            (r0, r1)
-        };
-
-        let b1 = as_high(b);
-
-        let new_r0 = &mut s.mul_copy_place_0;
-        delegation::memcpy(new_r0, as_low(a));
-
-        let carry_1 = &mut s.mul_copy_place_2;
-        delegation::memcpy(carry_1, new_r0);
-
-        u256::mul_low_assign(new_r0, b1);
-        let of = u256::add_assign(new_r0, r0);
-        u256::mul_high_assign(carry_1, b1);
-        if of {
-            u256::add_assign(carry_1, &ONE);
+        // --- reduction 0: (t1, t0) = (t2, t1, t0 + k N) / 2^256 ---
+        let k = &mut s.mul_copy_place_1;
+        delegation::memcpy(k, t0);
+        u256::mul_low_assign(k, T::reduction_const());
+        let low_carry = !u256::is_zero(t0);
+        // u = t1 + high(k n0) + low_carry + low(k n1), the new t0
+        let u = &mut s.mul_copy_place_0;
+        delegation::memcpy(u, n0);
+        u256::mul_high_assign(u, k);
+        let c0 = u256::add_with_carry_bit(u, t1, low_carry);
+        let v = &mut s.mul_copy_place_4;
+        delegation::memcpy(v, n1);
+        u256::mul_low_assign(v, k);
+        let c1 = u256::add_assign(u, v);
+        // k = t2 + high(k n1) + t2_carry + c0 + c1, the new t1 (below 2N / 2^256: no overflow)
+        u256::mul_high_assign(k, n1);
+        let overflow = u256::add_with_carry_bit(k, t2, t2_carry);
+        debug_assert!(!overflow);
+        let extra = c0 as u64 + c1 as u64;
+        if extra != 0 {
+            s.low_word_scratch.0[0] = extra;
+            let overflow = u256::add_assign(k, &s.low_word_scratch);
+            debug_assert!(!overflow);
         }
-        // mul_copy_place_1 is free
-        let r0 = new_r0;
+        let (t0, t1) = (u, k);
 
-        let reduction_k = &mut s.mul_copy_place_1;
-        delegation::memcpy(reduction_k, r0);
+        // --- round 1: (t2, t1, t0) += a b1 ---
+        let x = &mut s.mul_copy_place_2;
+        delegation::memcpy(x, as_low(a));
+        let xh = &mut s.mul_copy_place_3;
+        delegation::memcpy(xh, x);
+        u256::mul_low_assign(x, b1);
+        u256::mul_high_assign(xh, b1);
+        let c0 = u256::add_assign(t0, x);
+        let c1 = u256::add_with_carry_bit(t1, xh, c0);
+        let y = &mut s.mul_copy_place_2;
+        delegation::memcpy(y, as_high(a));
+        let t2 = &mut s.mul_copy_place_3;
+        delegation::memcpy(t2, y);
+        u256::mul_low_assign(y, b1);
+        let c2 = u256::add_assign(t1, y);
+        // t2 = high(a1 b1) (+ c1 + c2, folded below)
+        u256::mul_high_assign(t2, b1);
 
-        u256::mul_low_assign(reduction_k, T::reduction_const());
-
-        let carry_2_low = &mut s.mul_copy_place_3;
-        delegation::memcpy(carry_2_low, as_low(T::modulus()));
-
-        u256::mul_low_assign(carry_2_low, reduction_k);
-        let of = u256::add_assign(carry_2_low, r0);
-
-        let carry_2 = &mut s.mul_copy_place_4;
-        delegation::memcpy(carry_2, as_low(T::modulus()));
-
-        u256::mul_high_assign(carry_2, reduction_k);
-
-        if of {
-            u256::add_assign(carry_2, &ONE);
-        }
-
-        // mul_copy_place_3 is free
-        debug_assert!(carry_2_low.is_zero());
-
-        let new_r1 = &mut s.mul_copy_place_3;
-        delegation::memcpy(new_r1, as_high(a));
-
-        u256::mul_low_assign(new_r1, b1);
-        let of0 = u256::add_assign(new_r1, carry_1);
-        let of1 = u256::add_assign(new_r1, r1);
-
+        // --- reduction 1, the result lands in `a` ---
+        let k = &mut s.mul_copy_place_2;
+        delegation::memcpy(k, t0);
+        u256::mul_low_assign(k, T::reduction_const());
+        let low_carry = !u256::is_zero(t0);
         let (a0, a1) = as_low_high_mut(a);
-        u256::mul_high_assign(a1, b1);
-
-        if of0 || of1 {
-            let temp = &mut s.low_word_scratch;
-            temp.0[0] = of0 as u64 + of1 as u64;
-            u256::add_assign(a1, temp);
+        // a0 = t1 + high(k n0) + low_carry + low(k n1)
+        delegation::memcpy(a0, n0);
+        u256::mul_high_assign(a0, k);
+        let d0 = u256::add_with_carry_bit(a0, t1, low_carry);
+        let v = &mut s.mul_copy_place_4;
+        delegation::memcpy(v, n1);
+        u256::mul_low_assign(v, k);
+        let d1 = u256::add_assign(a0, v);
+        // a1 = t2 + high(k n1) + c1 + c2 + d0 + d1 (the result is below 2N < 2^512: no overflow)
+        delegation::memcpy(a1, n1);
+        u256::mul_high_assign(a1, k);
+        let overflow = u256::add_with_carry_bit(a1, t2, c1);
+        debug_assert!(!overflow);
+        let extra = c2 as u64 + d0 as u64 + d1 as u64;
+        if extra != 0 {
+            s.low_word_scratch.0[0] = extra;
+            let overflow = u256::add_assign(a1, &s.low_word_scratch);
+            debug_assert!(!overflow);
         }
 
-        // mul_copy_place_5 is free
-        let r1 = new_r1;
-
-        delegation::memcpy(a0, as_high(T::modulus()));
-        u256::mul_low_assign(a0, reduction_k);
-
-        let of0 = u256::add_assign(a0, r1);
-        let of1 = u256::add_assign(a0, carry_2);
-
-        let new_carry_2 = &mut s.mul_copy_place_4;
-        delegation::memcpy(new_carry_2, as_high(T::modulus()));
-
-        u256::mul_high_assign(new_carry_2, reduction_k);
-
-        if of0 || of1 {
-            let temp = &mut s.low_word_scratch;
-            temp.0[0] = of0 as u64 + of1 as u64;
-            u256::add_assign(new_carry_2, temp);
-        }
-
-        let carry2 = new_carry_2;
-
-        let carry = u256::add_assign(a1, carry2);
-        // we can't have a carry since MODULUS_BITSIZE < 512
-        debug_assert!(!carry);
-
-        let borrow = u256::sub_assign(a0, as_low(T::modulus()));
-        let borrow = u256::sub_with_carry_bit(a1, as_high(T::modulus()), borrow);
+        // one conditional subtraction brings the result below N
+        let borrow = u256::sub_assign(a0, n0);
+        let borrow = u256::sub_with_carry_bit(a1, n1, borrow);
         if borrow {
-            let carry = u256::add_assign(a0, as_low(T::modulus()));
-            let _ = u256::add_with_carry_bit(a1, as_high(T::modulus()), carry);
+            let carry = u256::add_assign(a0, n0);
+            let _ = u256::add_with_carry_bit(a1, n1, carry);
         }
 
         debug_assert!(a.0[6..8].iter().all(|&x| x == 0));

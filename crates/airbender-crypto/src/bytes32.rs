@@ -7,7 +7,7 @@
 use core::ops::{Deref, DerefMut};
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Hash, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Bytes32(pub [u8; 32]);
 
 const _: () = const {
@@ -53,6 +53,14 @@ impl PartialEq for Bytes32 {
 }
 
 impl Eq for Bytes32 {}
+
+impl core::hash::Hash for Bytes32 {
+    #[inline(always)]
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        // consistent with `PartialEq`: equal bytes hash equally
+        self.0.hash(state)
+    }
+}
 
 impl PartialEq<[u8; 32]> for Bytes32 {
     #[inline(always)]

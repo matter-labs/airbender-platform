@@ -102,10 +102,19 @@ pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {
     fn into_bigint(other: Fp<Self, N>) -> BigInt<N>;
 }
 
+// The derived equality compares the limbs as bytes (a `memcmp` call); this is a word
+// comparison, branch-free, and it is what `is_zero` runs on every group operation.
+impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
 /// Represents an element of the prime field F_p, where `p == P::MODULUS`.
 /// This type can represent elements in any field of size at most N * 64 bits.
 #[derive(Educe)]
-#[educe(Default, Hash, Clone, Copy, PartialEq, Eq)]
+#[educe(Default, Hash, Clone, Copy, Eq)]
 pub struct Fp<P: FpConfig<N>, const N: usize>(
     /// Contains the element in Montgomery form for efficient multiplication.
     /// To convert an element to a [`BigInt`](struct@BigInt), use `into_bigint` or `into`.

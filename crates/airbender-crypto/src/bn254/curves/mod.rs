@@ -19,6 +19,7 @@ use crate::bn254::fields::{Fq, Fq12Config, Fq2, Fq2Config, Fq6Config};
 
 pub mod g1;
 pub mod g2;
+pub(crate) mod g2_subgroup;
 
 mod pairing_impl;
 

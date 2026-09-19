@@ -4,7 +4,6 @@ compile_error!("feature `bigint_ops` must be activated for RISC-V target");
 pub type Fq = Fp256<MontBackend<FqConfig, 4>>;
 use crate::ark_ff_delegation::{BigInt, BigIntMacro, Fp, Fp256, MontBackend, MontConfig};
 use crate::bigint_delegation::{u256, DelegatedModParams, DelegatedMontParams};
-use ark_ff::ark_ff_macros::unroll_for_loops;
 use ark_ff::{AdditiveGroup, Zero};
 
 type B = BigInt<4>;
@@ -16,13 +15,13 @@ static MODULUS_CONSTANT: B =
 static MONT_REDUCTION_CONSTANT: B =
     BigIntMacro!("111032442853175714102588374283752698368366046808579839647964533820976443843465");
 
-// // a^-1 = a ^ (p - 2)
-// const INVERSION_POW: B = BigInt([
-//     4332616871279656263u64 - 2,
-//     10917124144477883021u64,
-//     13281191951274694749u64,
-//     3486998266802970665u64,
-// ]);
+// a^-1 = a ^ (p - 2)
+const INVERSION_POW: B = BigInt([
+    4332616871279656263u64 - 2,
+    10917124144477883021u64,
+    13281191951274694749u64,
+    3486998266802970665u64,
+]);
 
 #[derive(Default)]
 struct FqParams;
@@ -120,32 +119,33 @@ impl MontConfig<4usize> for FqConfig {
         a.0
     }
 
+    /// Fermat: a^(p - 2). A few hundred delegated Montgomery operations, which is cheaper
+    /// than the binary GCD (`__gcd_inverse`) whose word-by-word halving runs in software.
     #[inline(always)]
     fn inverse(a: &Fp<MontBackend<Self, 4>, 4>) -> Option<Fp<MontBackend<Self, 4>, 4>> {
-        return __gcd_inverse(a);
-
-        // use ark_ff::Field;
-        // if a.is_zero() {
-        //     return None;
-        // }
-
-        // let inverse = a.pow(INVERSION_POW);
-
-        // Some(inverse)
+        if a.is_zero() {
+            return None;
+        }
+        Some(crate::ark_ff_delegation::pow_window4(a, &INVERSION_POW.0))
     }
 
-    // default impl
+    /// In place, with delegated copies: no by-value moves of the operands
     #[inline(always)]
-    #[unroll_for_loops(8)]
     fn sum_of_products<const M: usize>(a: &[F; M], b: &[F; M]) -> F {
         let mut sum = F::ZERO;
-        for i in 0..a.len() {
-            sum += a[i] * &b[i];
+        let mut product = F::ZERO;
+        for i in 0..M {
+            u256::copy_assign(&mut product.0, &a[i].0);
+            unsafe {
+                u256::mul_assign_montgomery::<FqParams>(&mut product.0, &b[i].0);
+                u256::add_mod_assign::<FqParams>(&mut sum.0, &product.0);
+            }
         }
         sum
     }
 }
 
+#[cfg(test)]
 fn __gcd_inverse(a: &F) -> Option<F> {
     if a.is_zero() {
         return None;
@@ -283,6 +283,43 @@ mod test {
                 a.square() + c.square() + a * ark_ff::AdditiveGroup::double(&c),
                 "Distributivity for square failed"
             );
+        }
+    }
+
+    /// Products whose low limb is zero (the carry-only path of the reduction) and the
+    /// extreme residues, against the reference implementation
+    #[test]
+    fn test_mul_edge_cases() {
+        use ark_ff::{Field, One, PrimeField};
+        type RefFq = ark_bn254::Fq;
+        let from_ref = |r: RefFq| {
+            Fq::from_bigint(crate::ark_ff_delegation::BigInt(r.into_bigint().0)).unwrap()
+        };
+        let p_minus_1 = -RefFq::one();
+        let two_128 = RefFq::from(2u64).pow([128u64]);
+        // the Montgomery form of `2^256^-1` is 1: a zero low limb
+        let r_inv = RefFq::from(2u64).pow([256u64]).inverse().unwrap();
+        let values = [
+            RefFq::zero(),
+            RefFq::one(),
+            p_minus_1,
+            two_128,
+            r_inv,
+            RefFq::from(2u64),
+            two_128 * two_128,
+            p_minus_1 * r_inv,
+            two_128 * r_inv,
+        ];
+        for &ra in values.iter() {
+            for &rb in values.iter() {
+                let mut a = from_ref(ra);
+                let b = from_ref(rb);
+                a *= &b;
+                assert_eq!(a.into_bigint().0, (ra * rb).into_bigint().0, "{ra} * {rb}");
+                let mut sq = from_ref(ra);
+                sq.square_in_place();
+                assert_eq!(sq.into_bigint().0, ra.square().into_bigint().0);
+            }
         }
     }
 

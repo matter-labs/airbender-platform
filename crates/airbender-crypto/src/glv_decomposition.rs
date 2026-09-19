@@ -1,8 +1,6 @@
-use core::{array, fmt::Debug};
-
 use ark_ec::{scalar_mul::glv::GLVConfig, CurveConfig};
 use ark_ff::PrimeField;
-use ruint::aliases::{U1024, U512};
+use ruint::aliases::U512;
 
 // default ark implementation for scalar decomposition uses global allocator, so we need to write our own
 pub(crate) trait GLVConfigNoAllocator: GLVConfig
@@ -18,44 +16,107 @@ where
     //  - change to delegated U256
     //  - using U512 everywhere is probably overkill
     #[inline(always)]
+    /// The decomposition on 256-bit limbs with the delegated multiplications: `k` is below the
+    /// group order and the half-scalars below 2^128, so every product fits 256 or 512 bits.
+    /// The decomposition on 256-bit limbs with the delegated multiplications: `k` is below the
+    /// group order and the half-scalars below 2^128, so every product fits 256 or 512 bits.
     fn scalar_decomposition_no_allocator(
         k: Self::ScalarField,
     ) -> ((bool, Self::ScalarField), (bool, Self::ScalarField)) {
-        let s = I512::from_limbs_slice_and_sign(true, k.into_bigint().as_ref());
-
-        let [n11, n12, n21, n22] = array::from_fn(|i| {
-            let (sign, bigint) = Self::SCALAR_DECOMP_COEFFS[i];
-            I512::from_limbs_slice_and_sign(sign, bigint.as_ref())
-        });
-
-        let beta_1 = s.mul_and_shift(&Self::BETA_1.into());
-        let beta_2 = s.mul_and_shift(&Self::BETA_2.into());
-
-        let b11 = beta_1.mul(&n11);
-        let b12 = beta_2.mul(&n21);
-        let b1 = b11.add(&b12);
-
-        let b21 = beta_1.mul(&n12);
-        let b22 = beta_2.mul(&n22);
-        let b2 = b21.add(&b22);
-
-        let k1 = s.sub(&b1);
-        let k2 = b2.neg();
-
-        (
-            (
-                k1.sign,
-                Self::ScalarField::from_le_bytes_mod_order(
-                    &k1.data.to_le_bytes::<{ U512::BYTES }>(),
-                ),
-            ),
-            (
-                k2.sign,
-                Self::ScalarField::from_le_bytes_mod_order(
-                    &k2.data.to_le_bytes::<{ U512::BYTES }>(),
-                ),
-            ),
-        )
+        use crate::bigint_delegation::u256;
+        use crate::BigInt;
+        /// A limb with the alignment the delegation requires (the host `BigInt` has none)
+        #[derive(Clone, Copy)]
+        #[repr(C, align(32))]
+        struct U(BigInt<4>);
+        let one = U(BigInt::one());
+        // s = k as an integer (below 2^256)
+        let s = {
+            let limbs = k.into_bigint();
+            let limbs = limbs.as_ref();
+            let mut s = U(BigInt::zero());
+            s.0 .0.copy_from_slice(&limbs[..4]);
+            s
+        };
+        // beta = round(s * BETA / 2^512) exactly, with `BETA = B1 2^256 + B0`:
+        // `s BETA = L0 + (H0 + L1) 2^256 + (H1 + carry) 2^512`, rounded up for a positive
+        // result when bit 511 of the product (bit 255 of the middle limb) is set
+        let mul_shift = |(sign, beta): (bool, U512)| -> (bool, U) {
+            let limbs = beta.as_limbs();
+            let b0 = U(BigInt(limbs[..4].try_into().unwrap()));
+            let b1 = U(BigInt(limbs[4..].try_into().unwrap()));
+            let mut mid = s;
+            u256::mul_high_assign(&mut mid.0, &b0.0);
+            let mut l1 = s;
+            u256::mul_low_assign(&mut l1.0, &b1.0);
+            let mut high = s;
+            u256::mul_high_assign(&mut high.0, &b1.0);
+            let carry = u256::add_assign(&mut mid.0, &l1.0);
+            if carry {
+                let overflow = u256::add_assign(&mut high.0, &one.0);
+                debug_assert!(!overflow);
+            }
+            if sign && (mid.0 .0[3] >> 63) == 1 {
+                let overflow = u256::add_assign(&mut high.0, &one.0);
+                debug_assert!(!overflow);
+            }
+            (sign, high)
+        };
+        let beta_1 = mul_shift(Self::BETA_1);
+        let beta_2 = mul_shift(Self::BETA_2);
+        let coeff = |i: usize| -> (bool, U) {
+            let (sign, big) = Self::SCALAR_DECOMP_COEFFS[i];
+            let mut c = U(BigInt::zero());
+            c.0 .0.copy_from_slice(&big.as_ref()[..4]);
+            (sign, c)
+        };
+        let [n11, n12, n21, n22] = [coeff(0), coeff(1), coeff(2), coeff(3)];
+        // signed products of magnitudes below 2^128: they fit 256 bits
+        let prod = |(sa, a): (bool, U), (sb, b): (bool, U)| -> (bool, U) {
+            let mut r = a;
+            u256::mul_low_assign(&mut r.0, &b.0);
+            #[cfg(debug_assertions)]
+            {
+                let mut h = a;
+                u256::mul_high_assign(&mut h.0, &b.0);
+                debug_assert!(h.0 .0.iter().all(|&w| w == 0));
+            }
+            (!(sa ^ sb), r)
+        };
+        // signed sum with the conventions of the former signed 512-bit helper: `true` is
+        // positive and a cancellation gives a negative zero
+        let add = |(sa, a): (bool, U), (sb, b): (bool, U)| -> (bool, U) {
+            if sa == sb {
+                let mut r = a;
+                let overflow = u256::add_assign(&mut r.0, &b.0);
+                debug_assert!(!overflow);
+                (sa, r)
+            } else {
+                let mut r = a;
+                if u256::sub_assign(&mut r.0, &b.0) {
+                    let mut r = b;
+                    u256::sub_assign(&mut r.0, &a.0);
+                    (sb, r)
+                } else if r.0 .0.iter().all(|&w| w == 0) {
+                    (false, r)
+                } else {
+                    (sa, r)
+                }
+            }
+        };
+        let neg = |(sign, a): (bool, U)| (!sign, a);
+        let b1 = add(prod(beta_1, n11), prod(beta_2, n21));
+        let b2 = add(prod(beta_1, n12), prod(beta_2, n22));
+        let k1 = add((true, s), neg(b1));
+        let k2 = neg(b2);
+        let to_field = |(sign, a): (bool, U)| {
+            let mut bytes = [0u8; 32];
+            for (i, limb) in a.0 .0.iter().enumerate() {
+                bytes[8 * i..8 * i + 8].copy_from_slice(&limb.to_le_bytes());
+            }
+            (sign, Self::ScalarField::from_le_bytes_mod_order(&bytes))
+        };
+        (to_field(k1), to_field(k2))
     }
 
     // default implementation from ark for comparison
@@ -132,93 +193,189 @@ where
     }
 }
 
-pub struct I512 {
-    pub sign: bool,
-    pub data: U512,
+/// Joint sparse form of two non-negative scalars (Solinas): digits in {-1, 0, 1}, least
+/// significant first, with at most half of the positions non-zero in both together.
+/// The scalars must be below 2^127, as the GLV half-scalars are.
+fn joint_sparse_form(mut k0: u128, mut k1: u128) -> ([i8; 130], [i8; 130], usize) {
+    let mut d0 = [0i8; 130];
+    let mut d1 = [0i8; 130];
+    let mut len = 0;
+    while k0 != 0 || k1 != 0 {
+        let digit = |k: u128, other: u128| -> i8 {
+            if k & 1 == 0 {
+                return 0;
+            }
+            // 1 for k = 1 mod 4, -1 for k = 3 mod 4
+            let mut u: i8 = if k & 3 == 3 { -1 } else { 1 };
+            let m = k & 7;
+            if (m == 3 || m == 5) && (other & 3) == 2 {
+                u = -u;
+            }
+            u
+        };
+        let (u0, u1) = (digit(k0, k1), digit(k1, k0));
+        // k = (k - u) / 2, on non-negative values (k + 1 cannot overflow below 2^127)
+        // (k - u) / 2 without overflowing at 2^128: for an odd k, (k + 1) / 2 = (k >> 1) + 1
+        k0 = (k0 >> 1) + (u0 == -1) as u128;
+        k1 = (k1 >> 1) + (u1 == -1) as u128;
+        d0[len] = u0;
+        d1[len] = u1;
+        len += 1;
+    }
+    (d0, d1, len)
 }
 
-impl Debug for I512 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let sign = if self.sign { "" } else { "-" };
-        f.write_fmt(format_args!("{}{}", sign, self.data))
+/// The low 128 bits of a scalar that is known to fit in them
+/// The half-scalar as an integer, `None` if it does not fit 128 bits
+fn to_u128<F: PrimeField>(k: F) -> Option<u128> {
+    let limbs = k.into_bigint();
+    let limbs = limbs.as_ref();
+    if limbs[2..].iter().any(|l| *l != 0) {
+        return None;
     }
+    Some((limbs[0] as u128) | ((limbs[1] as u128) << 64))
 }
 
-impl I512 {
-    #[inline(always)]
-    pub fn from_limbs_slice_and_sign(sign: bool, slice: &[u64]) -> Self {
-        let data = U512::from_limbs_slice(slice);
-        Self { sign, data }
+/// GLV scalar multiplication with the two half-scalars in joint sparse form: the same
+/// doublings as a bit-by-bit loop but about half as many additions (one per non-zero joint
+/// digit) on the in-place Jacobian group law: mixed additions of the affine `±b1`, `±b2` and
+/// full additions of the precomputed `±(b1 + b2)`, `±(b1 - b2)`.
+pub fn glv_mul_projective_jsf<C: GLVConfig + GLVConfigNoAllocator>(
+    p: ark_ec::short_weierstrass::Projective<C>,
+    k: C::ScalarField,
+) -> ark_ec::short_weierstrass::Projective<C>
+where
+    C::BaseField: crate::extension_tower::CopyAssign,
+{
+    use crate::jacobian::Jacobian;
+    use ark_ec::CurveGroup;
+    use ark_ff::{AdditiveGroup, One};
+    use ark_std::Zero;
+    use core::mem::MaybeUninit;
+    if p.is_zero() {
+        return p;
+    }
+    let ((sgn_k1, k1), (sgn_k2, k2)) = C::scalar_decomposition(k);
+    // the decomposition keeps both halves below 2^128 for the supported curves; a plain
+    // double-and-add is the fallback should one not fit
+    let (Some(k1), Some(k2)) = (to_u128(k1), to_u128(k2)) else {
+        use ark_ec::PrimeGroup;
+        return p.mul_bigint(k.into_bigint());
+    };
+    let (d1, d2, len) = joint_sparse_form(k1, k2);
+    if len == 0 {
+        return ark_ec::short_weierstrass::Projective::<C>::zero();
     }
 
-    #[inline(always)]
-    pub fn mul_and_shift(&self, rhs: &Self) -> Self {
-        let wide_prod: U1024 = self.data.widening_mul(rhs.data);
-        let limbs = wide_prod.as_limbs();
+    // b1 = ±P, b2 = ±φ(P) as affine points, and their negations
+    let mut b1 = if p.z.is_one() {
+        ark_ec::short_weierstrass::Affine::<C>::new_unchecked(p.x, p.y)
+    } else {
+        p.into_affine()
+    };
+    let mut b2 = C::endomorphism_affine(&b1);
+    if !sgn_k1 {
+        b1.y.neg_in_place();
+    }
+    if !sgn_k2 {
+        b2.y.neg_in_place();
+    }
+    let neg_b1 = -b1;
+    let neg_b2 = -b2;
+    // sum = b1 + b2 and diff = b1 - b2 in Jacobian coordinates, and their negations
+    let mut slot = MaybeUninit::uninit();
+    let sum = Jacobian::<C>::init_infinity(&mut slot);
+    sum.add_assign_affine(&b1);
+    sum.add_assign_affine(&b2);
+    let mut slot = MaybeUninit::uninit();
+    let diff = Jacobian::<C>::init_infinity(&mut slot);
+    diff.add_assign_affine(&b1);
+    diff.add_assign_affine(&neg_b2);
+    let mut slot = MaybeUninit::uninit();
+    let neg_sum = Jacobian::<C>::init_copy(&mut slot, sum);
+    neg_sum.neg_in_place();
+    let mut slot = MaybeUninit::uninit();
+    let neg_diff = Jacobian::<C>::init_copy(&mut slot, diff);
+    neg_diff.neg_in_place();
 
-        let mut high = U512::from_limbs(limbs[8..].try_into().unwrap());
-        let sign = !(self.sign ^ rhs.sign);
-
-        // Round up for positive results when lower half >= 2^511
-        if sign && limbs[7] >> 63 == 1 {
-            high = high.wrapping_add(U512::ONE);
+    let mut slot = MaybeUninit::uninit();
+    let res = Jacobian::<C>::init_infinity(&mut slot);
+    let mut started = false;
+    for i in (0..len).rev() {
+        if started {
+            res.double_in_place();
         }
-
-        Self { sign, data: high }
-    }
-
-    #[inline(always)]
-    pub fn mul(&self, rhs: &Self) -> Self {
-        let data = self.data.checked_mul(rhs.data).unwrap();
-        Self {
-            sign: !(self.sign ^ rhs.sign),
-            data,
+        match (d1[i], d2[i]) {
+            (0, 0) => continue,
+            (1, 0) => res.add_assign_affine(&b1),
+            (-1, 0) => res.add_assign_affine(&neg_b1),
+            (0, 1) => res.add_assign_affine(&b2),
+            (0, -1) => res.add_assign_affine(&neg_b2),
+            (1, 1) => res.add_assign(sum),
+            (-1, -1) => res.add_assign(neg_sum),
+            (1, -1) => res.add_assign(diff),
+            (-1, 1) => res.add_assign(neg_diff),
+            _ => unreachable!("joint sparse form digits are -1, 0 or 1"),
         }
+        started = true;
     }
-
-    #[inline(always)]
-    pub fn add(&self, rhs: &Self) -> Self {
-        match (self.sign, rhs.sign) {
-            (true, false) | (false, true) => match self.data.cmp(&rhs.data) {
-                core::cmp::Ordering::Less => Self {
-                    sign: rhs.sign,
-                    data: rhs.data.checked_sub(self.data).unwrap(),
-                },
-                core::cmp::Ordering::Greater => Self {
-                    sign: self.sign,
-                    data: self.data.checked_sub(rhs.data).unwrap(),
-                },
-                core::cmp::Ordering::Equal => Self {
-                    sign: false,
-                    data: U512::ZERO,
-                },
-            },
-            (true, true) | (false, false) => Self {
-                sign: self.sign,
-                data: self.data.checked_add(rhs.data).unwrap(),
-            },
-        }
-    }
-
-    #[inline(always)]
-    pub fn sub(&self, rhs: &Self) -> Self {
-        self.add(&rhs.neg())
-    }
-
-    #[inline(always)]
-    pub fn neg(&self) -> Self {
-        Self {
-            sign: !self.sign,
-            data: self.data,
-        }
-    }
+    res.to_projective()
 }
 
-impl From<(bool, U512)> for I512 {
-    fn from(value: (bool, U512)) -> Self {
-        Self {
-            sign: value.0,
-            data: value.1,
+#[cfg(test)]
+mod jsf_tests {
+    use super::joint_sparse_form;
+
+    #[test]
+    fn jsf_evaluates_back_and_is_sparse() {
+        let mut state = 0x9E3779B97F4A7C15u128;
+        let mut pairs = vec![
+            (u128::MAX, u128::MAX),
+            (u128::MAX, 0),
+            (1u128 << 127, u128::MAX - 1),
+            ((1u128 << 127) + 3, (1u128 << 127) + 5),
+            (0, 1),
+        ];
+        for _ in 0..2000 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let k0 = state;
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let k1 = state >> (state & 0x7f) as u32;
+            pairs.push((k0, k1));
         }
+        for (k0, k1) in pairs {
+            let (d0, d1, len) = joint_sparse_form(k0, k1);
+            assert!(len <= 129);
+            // reconstruction in two's complement: the values fit 129 bits, compared modulo 2^128
+            let (mut v0, mut v1) = (0i128, 0i128);
+            let mut joint_weight = 0;
+            for i in (0..len).rev() {
+                v0 = v0.wrapping_mul(2).wrapping_add(d0[i] as i128);
+                v1 = v1.wrapping_mul(2).wrapping_add(d1[i] as i128);
+                joint_weight += (d0[i] != 0 || d1[i] != 0) as usize;
+                // of any three consecutive columns at least one is (0, 0), and adjacent
+                // digits of one scalar never have opposite signs
+                if i >= 2 {
+                    let zero = |j: usize| d0[j] == 0 && d1[j] == 0;
+                    assert!(zero(i) || zero(i - 1) || zero(i - 2));
+                }
+                if i > 0 {
+                    assert_ne!(d0[i] * d0[i - 1], -1);
+                    assert_ne!(d1[i] * d1[i - 1], -1);
+                }
+            }
+            assert_eq!(v0 as u128, k0);
+            assert_eq!(v1 as u128, k1);
+            // at least one zero column in every three: at most two thirds are non-zero
+            assert!(
+                joint_weight <= 2 * len / 3 + 2,
+                "weight {joint_weight} of {len}"
+            );
+        }
+        assert_eq!(joint_sparse_form(0, 0).2, 0);
     }
 }

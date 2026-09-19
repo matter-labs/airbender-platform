@@ -195,6 +195,10 @@ impl GLVConfig for Config {
         res
     }
 
+    fn glv_mul_projective(p: G1Projective, k: Self::ScalarField) -> G1Projective {
+        crate::glv_decomposition::glv_mul_projective_jsf::<Self>(p, k)
+    }
+
     fn endomorphism_affine(p: &Affine<Self>) -> Affine<Self> {
         let mut res = (*p).clone();
         res.x *= Self::ENDO_COEFFS[0];
@@ -272,6 +276,66 @@ pub fn endomorphism(p: &Affine<Config>) -> Affine<Config> {
     let mut res = (*p).clone();
     res.x *= BETA;
     res
+}
+
+#[cfg(test)]
+mod mul_tests {
+    use super::*;
+    use ark_ec::CurveGroup;
+    use ark_ff::{BigInteger, UniformRand};
+    type RefFq = ark_bls12_381::Fq;
+    type RefAffine = ark_bls12_381::G1Affine;
+
+    fn to_ref(p: G1Affine) -> RefAffine {
+        let conv = |x: Fq| {
+            let mut limbs = [0u64; 6];
+            limbs.copy_from_slice(&x.into_bigint().0[..6]);
+            RefFq::from_bigint(ark_ff::BigInt(limbs)).unwrap()
+        };
+        if p.infinity {
+            RefAffine::identity()
+        } else {
+            RefAffine::new_unchecked(conv(p.x), conv(p.y))
+        }
+    }
+
+    #[test]
+    fn scalar_multiplication_matches_the_reference() {
+        use ark_std::test_rng;
+        let mut rng = test_rng();
+        let r = ark_bls12_381::Fr::MODULUS;
+        let mut r_minus_1 = r;
+        r_minus_1.sub_with_borrow(&ark_ff::BigInt::from(1u64));
+        let mut r_plus_1 = r;
+        r_plus_1.add_with_carry(&ark_ff::BigInt::from(1u64));
+        let mut scalars: Vec<[u64; 4]> = vec![
+            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+            [2, 0, 0, 0],
+            [3, 0, 0, 0],
+            r_minus_1.0,
+            r.0,
+            r_plus_1.0,
+            [u64::MAX; 4],
+        ];
+        for _ in 0..20 {
+            scalars.push(ark_bls12_381::Fr::rand(&mut rng).into_bigint().0);
+        }
+        let mut points = vec![G1Affine::identity(), G1Affine::generator()];
+        for _ in 0..5 {
+            let k = ark_bls12_381::Fr::rand(&mut rng).into_bigint();
+            points.push(G1Affine::generator().mul_bigint(k).into_affine());
+        }
+        for p in &points {
+            let reference = to_ref(*p);
+            for scalar in &scalars {
+                let expected =
+                    ark_bls12_381::g1::Config::mul_affine(&reference, scalar).into_affine();
+                let ours = Config::mul_affine(p, scalar).into_affine();
+                assert_eq!(to_ref(ours), expected);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -505,9 +505,11 @@ pub mod tests {
             }
             assert!(
                 sha3::Digest::finalize_reset(&mut formal_keccak256)[..]
-                    == my_keccak256.finalize_reset()
+                    == my_keccak256.finalize_reset()[..]
             );
-            assert!(sha3::Digest::finalize_reset(&mut formal_sha3)[..] == my_sha3.finalize_reset());
+            assert!(
+                sha3::Digest::finalize_reset(&mut formal_sha3)[..] == my_sha3.finalize_reset()[..]
+            );
         }
     }
 
