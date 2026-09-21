@@ -3019,6 +3019,7 @@ dependencies = [
  "inferno",
  "keccak 0.1.6",
  "object",
+ "rayon",
  "ruint",
  "seq-macro",
  "serde",
