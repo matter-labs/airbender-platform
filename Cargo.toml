@@ -72,13 +72,11 @@ tera = { version = "1", default-features = false }
 # the graph carries one `execution_utils` and FRI proof types cross between
 # `airbender-host` and the wrapper. Move all of them together.
 #
-# `v0.6.2-private` is `v0.6.1-private` plus two GPU-runtime commits -- the
-# combiner's `release_host_state()` and file-backed circuit setup traces -- that
-# zksync-airbender-prover needs and the wrapper moved to first. Nothing under
-# `circuit_defs/`, `prover/` or `verifier_generator/` changed with it, so no
-# verifier binary, program commitment or VK moves here.
-common_constants = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.2-private", default-features = false }
-blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.2-private", default-features = false }
+# `v0.6.3-private` adds configurable host-buffer counts to `GpuConfig` on top
+# of `v0.6.2-private`. Only CLI configuration changed, so verifier binaries,
+# program commitments and VKs remain unchanged.
+common_constants = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.3-private", default-features = false }
+blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.3-private", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 k256 = { version = "0.13", default-features = false }
@@ -107,11 +105,11 @@ rand_core = { version = "0.6.4", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 
 # Airbender dependencies
-riscv_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.2-private" }
-execution_utils = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.2-private" }
-gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.2-private" }
-riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.2-private" }
-verifier_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.2-private" }
+riscv_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.3-private" }
+execution_utils = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.3-private" }
+gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.3-private" }
+riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.3-private" }
+verifier_common = { git = "https://github.com/matter-labs/zksync-airbender-private.git", tag = "v0.6.3-private" }
 
 # These packages can require too much stack space to compile,
 # which can be increased with `RUST_MIN_STACK=16777216` environment variable.
