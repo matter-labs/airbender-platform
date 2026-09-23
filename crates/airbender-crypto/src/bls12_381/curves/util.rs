@@ -297,3 +297,114 @@ pub(crate) fn read_g2_uncompressed<R: ark_serialize::Read>(
 
     Ok(p)
 }
+
+/// Decodes a compressed `G1` point (the ZCash / arkworks encoding, as `deserialize_compressed`
+/// with validation) with the square root of `y² = x³ + b` supplied by `sqrt`: it returns `None`
+/// when its argument is not a square and either root otherwise (the sign flag of the encoding
+/// then picks between the root and its negation). A prover can take the root from a hint that
+/// it checks with one squaring. The point is checked to be in the prime-order subgroup.
+pub fn g1_from_compressed_with_sqrt(
+    bytes: &[u8],
+    sqrt: impl FnOnce(&Fq) -> Option<Fq>,
+) -> Result<G1Affine, SerializationError> {
+    use ark_ec::short_weierstrass::SWCurveConfig;
+    use ark_ff::Field;
+
+    if bytes.len() != G1_SERIALIZED_SIZE {
+        return Err(SerializationError::InvalidData);
+    }
+    let flags = EncodingFlags::get_flags(bytes)?;
+    if !flags.is_compressed {
+        return Err(SerializationError::UnexpectedFlags);
+    }
+    let x_bytes = read_bytes_with_offset(bytes, 0, true);
+    if flags.is_infinity {
+        if x_bytes != [0u8; G1_SERIALIZED_SIZE] {
+            return Err(SerializationError::InvalidData);
+        }
+        return Ok(G1Affine::zero());
+    }
+    let x = deserialize_fq(x_bytes).ok_or(SerializationError::InvalidData)?;
+    // y² = x³ + b (a = 0)
+    let mut y_squared = x;
+    y_squared.square_in_place();
+    y_squared *= &x;
+    y_squared += &G1Config::COEFF_B;
+    let y = sqrt(&y_squared).ok_or(SerializationError::InvalidData)?;
+    let neg_y = -y;
+    // the same ordering as `Affine::get_ys_from_x_unchecked`: as integers
+    let (smaller, larger) = if y < neg_y { (y, neg_y) } else { (neg_y, y) };
+    let y = if flags.is_lexographically_largest {
+        larger
+    } else {
+        smaller
+    };
+    let p = G1Affine::new_unchecked(x, y);
+    if !p.is_in_correct_subgroup_assuming_on_curve() {
+        return Err(SerializationError::InvalidData);
+    }
+    Ok(p)
+}
+
+#[cfg(test)]
+mod hinted_decoding_tests {
+    use super::*;
+    use ark_ff::Field;
+    use ark_serialize::CanonicalDeserialize;
+    use hex_literal::hex;
+
+    fn reference(bytes: &[u8]) -> Result<G1Affine, SerializationError> {
+        G1Affine::deserialize_compressed(bytes)
+    }
+
+    #[test]
+    fn matches_deserialize_compressed() {
+        // generator, two KZG test vectors, and their sign-flipped and infinity encodings
+        let mut inputs: Vec<Vec<u8>> = vec![
+            hex!("97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb").to_vec(),
+            hex!("8f59a8d2a1a625a17f3fea0fe5eb8c896db3764f3185481bc22f91b4aaffcca25f26936857bc3a7c2539ea8ec3a952b7").to_vec(),
+            hex!("a62ad71d14c5719385c0686f1871430475bf3a00f0aa3f7b8dd99a9abc2160744faf0070725e00b60ad9a026a15b1a8c").to_vec(),
+        ];
+        for i in 0..3 {
+            let mut flipped = inputs[i].clone();
+            flipped[0] ^= 1 << 5;
+            inputs.push(flipped);
+        }
+        let mut infinity = vec![0u8; 48];
+        infinity[0] = 0xc0;
+        inputs.push(infinity);
+        // invalid: not on the curve, wrong flags, x >= p, infinity with a payload, short
+        inputs.push({
+            let mut v = vec![0u8; 48];
+            v[0] = 0x80;
+            v[47] = 2;
+            v
+        });
+        inputs.push({
+            let mut v = vec![0u8; 48];
+            v[0] = 0x40;
+            v
+        });
+        inputs.push(vec![0xffu8; 48]);
+        inputs.push({
+            let mut v = vec![0u8; 48];
+            v[0] = 0xc0;
+            v[47] = 1;
+            v
+        });
+        inputs.push(vec![0u8; 47]);
+        for input in inputs {
+            let expected = reference(&input);
+            let hinted = g1_from_compressed_with_sqrt(&input, |y2| y2.sqrt());
+            assert_eq!(expected.is_ok(), hinted.is_ok(), "{input:02x?}");
+            if let (Ok(a), Ok(b)) = (expected, hinted) {
+                assert_eq!(a, b, "{input:02x?}");
+            }
+            // the other root gives the same point
+            let hinted = g1_from_compressed_with_sqrt(&input, |y2| y2.sqrt().map(|y| -y));
+            if let Ok(a) = reference(&input) {
+                assert_eq!(a, hinted.unwrap());
+            }
+        }
+    }
+}

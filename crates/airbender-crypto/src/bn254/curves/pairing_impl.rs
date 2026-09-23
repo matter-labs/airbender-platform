@@ -14,6 +14,84 @@ use ark_serialize::CanonicalSerialize;
 use core::mem::MaybeUninit;
 
 impl Bn254 {
+    /// The Miller loop with the accumulator of the first pair started at `initial` instead of
+    /// `1`, and multiplied by `initial` (`initial_inverse`) at the `1` (`-1`) digits of the loop
+    /// count, so that the result is `initial^(6x+2) f` for the plain Miller loop output `f`: the
+    /// accumulator goes through the double-and-add of the exponent. This is how the residue
+    /// witness pairing check (`crate::residue_witness`) gets `d^(6x+2)` almost for free (the
+    /// squarings are the loop's own). `initial_inverse` must be the inverse of `initial`.
+    pub fn multi_miller_loop_with_initial(
+        initial: &Fq12,
+        initial_inverse: &Fq12,
+        a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
+        b: impl IntoIterator<Item = impl Into<<Self as Pairing>::G2Prepared>>,
+    ) -> Fq12 {
+        let mut a = a.into_iter();
+        let mut b = b.into_iter();
+        let mut result = Fq12::one();
+        let mut initial = Some(initial);
+        loop {
+            match (a.next(), b.next()) {
+                (Some(p), Some(q)) => {
+                    let p: <Self as Pairing>::G1Prepared = p.into();
+                    if p.is_zero() {
+                        continue;
+                    }
+                    let q: <Self as Pairing>::G2Prepared = q.into();
+                    if q.is_zero() {
+                        continue;
+                    }
+
+                    let base = initial.take();
+                    let mut f = match base {
+                        Some(initial) => *initial,
+                        None => Fq12::one(),
+                    };
+                    let mut ell_coeffs = q.ell_coeffs.iter();
+
+                    for i in (1..Config::ATE_LOOP_COUNT.len()).rev() {
+                        // the first squaring is of `1` unless the accumulator was started
+                        // elsewhere
+                        if i != Config::ATE_LOOP_COUNT.len() - 1 || base.is_some() {
+                            fp12_square_in_place(&mut f);
+                        }
+
+                        Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+
+                        let bit = Config::ATE_LOOP_COUNT[i - 1];
+                        if bit == 1 || bit == -1 {
+                            Self::ell(&mut f, &ell_coeffs.next().unwrap(), &p.0);
+                            if let Some(initial) = base {
+                                let factor = if bit == 1 { initial } else { initial_inverse };
+                                fp12_mul_assign(&mut f, factor);
+                            }
+                        }
+                    }
+
+                    if Config::X_IS_NEGATIVE {
+                        fp12_cyclotomic_inverse_in_place(&mut f);
+                    }
+
+                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+
+                    fp12_mul_assign(&mut result, &f);
+                }
+                (None, None) => break,
+                _ => {
+                    panic!("Caller must check input lengths");
+                }
+            }
+        }
+
+        // no pair: the accumulator is the initial value to the power of the loop count all
+        // the same
+        match initial {
+            Some(initial) => initial.pow(crate::residue_witness::bn254::SIX_X_PLUS_2),
+            None => result,
+        }
+    }
+
     /// Evaluates the line function at point p.
     fn ell(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine) {
         match Config::TWIST_TYPE {
@@ -97,69 +175,38 @@ impl Pairing for Bn254 {
         a: impl IntoIterator<Item = impl Into<Self::G1Prepared>>,
         b: impl IntoIterator<Item = impl Into<Self::G2Prepared>>,
     ) -> ark_ec::pairing::MillerLoopOutput<Self> {
-        let mut a = a.into_iter();
-        let mut b = b.into_iter();
-        let mut result = Fq12::one();
-        loop {
-            match (a.next(), b.next()) {
-                (Some(p), Some(q)) => {
-                    let p: Self::G1Prepared = p.into();
-                    if p.is_zero() {
-                        continue;
-                    }
-                    let q: Self::G2Prepared = q.into();
-                    if q.is_zero() {
-                        continue;
-                    }
-
-                    let mut f = Fq12::one();
-                    let mut ell_coeffs = q.ell_coeffs.iter();
-
-                    for i in (1..Config::ATE_LOOP_COUNT.len()).rev() {
-                        if i != Config::ATE_LOOP_COUNT.len() - 1 {
-                            fp12_square_in_place(&mut f);
-                        }
-
-                        Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
-
-                        let bit = Config::ATE_LOOP_COUNT[i - 1];
-                        if bit == 1 || bit == -1 {
-                            Self::ell(&mut f, &ell_coeffs.next().unwrap(), &p.0);
-                        }
-                    }
-
-                    if Config::X_IS_NEGATIVE {
-                        fp12_cyclotomic_inverse_in_place(&mut f);
-                    }
-
-                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
-                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
-
-                    fp12_mul_assign(&mut result, &f);
-                }
-                (None, None) => break,
-                _ => {
-                    panic!("Caller must check input lengths");
-                }
-            }
-        }
-
-        ark_ec::pairing::MillerLoopOutput(result)
+        ark_ec::pairing::MillerLoopOutput(Self::multi_miller_loop_with_initial(
+            &Fq12::one(),
+            &Fq12::one(),
+            a,
+            b,
+        ))
     }
 
     fn final_exponentiation(
         f: ark_ec::pairing::MillerLoopOutput<Self>,
     ) -> Option<PairingOutput<Self>> {
+        Self::final_exponentiation_with_inverse(&f.0, Field::inverse).map(PairingOutput)
+    }
+}
+
+impl Bn254 {
+    /// The final exponentiation of `f`, with the one field inversion it needs (`f^-1`, for the
+    /// easy part) supplied by `inverse`: a prover can take it from a hint that it then checks
+    /// with one multiplication. `inverse` returns `None` only for a zero `f`, and so does this.
+    pub fn final_exponentiation_with_inverse(
+        f: &Fq12,
+        inverse: impl FnOnce(&Fq12) -> Option<Fq12>,
+    ) -> Option<Fq12> {
         // Easy part: result = elt^((q^6-1)*(q^2+1)).
         // Follows, e.g., Beuchat et al page 9, by computing result as follows:
         //   elt^((q^6-1)*(q^2+1)) = (conj(elt) * elt^(-1))^(q^2+1)
-        let f: crate::bn254::Fq12 = f.0;
 
         // f1 = conj(f) = f^(p^6)
-        fp12_tmp!(f1 = &f);
+        fp12_tmp!(f1 = f);
         fp12_cyclotomic_inverse_in_place(f1);
 
-        f.inverse().map(|f2| {
+        inverse(f).map(|f2| {
             // r = f^(p^6 - 1)
             fp12_tmp!(r = f1);
             fp12_mul_assign(r, &f2);
@@ -221,7 +268,7 @@ impl Pairing for Bn254 {
             r.frobenius_map_in_place(3);
             fp12_mul_assign(r, y14);
 
-            PairingOutput(*r)
+            *r
         })
     }
 }

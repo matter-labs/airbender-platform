@@ -7,6 +7,7 @@ pub use self::curves::{g1, g2, G1Affine, G1Projective, G2Affine, G2Projective};
 pub use self::fields::{Fq, Fq12, Fq2, Fq6, Fr};
 
 pub(crate) use self::curves::util;
+pub use self::curves::util::g1_from_compressed_with_sqrt;
 
 use crate::ark_ec::pairing::Pairing;
 use crate::ark_ec::AffineRepr;

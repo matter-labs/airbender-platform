@@ -29,7 +29,9 @@ pub mod bytes32;
 #[cfg(test)]
 mod delegation_counts;
 pub(crate) mod extension_tower;
+pub mod hinted_ops;
 pub(crate) mod jacobian;
+pub mod residue_witness;
 pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
 pub mod bls12_381;

@@ -15,6 +15,66 @@ use ark_serialize::CanonicalSerialize;
 use core::mem::MaybeUninit;
 
 impl Bls12_381 {
+    /// The product of the Miller functions `f_|u|` of the pairs, with the accumulator of the
+    /// first pair started at `initial` instead of `1` and multiplied by `initial` at the set
+    /// bits of `|u|`, so that the result is `initial^|u| f`: the accumulator goes through the
+    /// double-and-add of the exponent, and the residue witness pairing check
+    /// (`crate::residue_witness`) gets `d^|u|` almost for free (the squarings are the loop's
+    /// own). Unlike `multi_miller_loop` the result is not conjugated for the negative seed: the
+    /// conjugation changes it by an `r`-th residue only, which the check is invariant to, and
+    /// which the final exponentiation would remove.
+    pub fn multi_miller_loop_with_initial(
+        initial: &Fq12,
+        a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
+        b: impl IntoIterator<Item = impl Into<<Self as Pairing>::G2Prepared>>,
+    ) -> Fq12 {
+        let mut a = a.into_iter();
+        let mut b = b.into_iter();
+        let mut result = Fq12::one();
+        let mut initial = Some(initial);
+        loop {
+            match (a.next(), b.next()) {
+                (Some(p), Some(q)) => {
+                    let p: <Self as Pairing>::G1Prepared = p.into();
+                    if p.is_zero() {
+                        continue;
+                    }
+                    let q: <Self as Pairing>::G2Prepared = q.into();
+                    if q.is_zero() {
+                        continue;
+                    }
+                    let base = initial.take();
+                    let mut f = match base {
+                        Some(initial) => *initial,
+                        None => Fq12::one(),
+                    };
+                    let mut ell_coeffs = q.ell_coeffs.iter();
+                    for i in BitIteratorBE::without_leading_zeros(Config::X).skip(1) {
+                        fp12_square_in_place(&mut f);
+                        Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+                        if i {
+                            Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+                            if let Some(initial) = base {
+                                fp12_mul_assign(&mut f, initial);
+                            }
+                        }
+                    }
+                    fp12_mul_assign(&mut result, &f);
+                }
+                (None, None) => break,
+                _ => {
+                    panic!("Caller must check input lengths");
+                }
+            }
+        }
+        // no pair: the accumulator is the initial value to the power of the loop count all
+        // the same
+        match initial {
+            Some(initial) => initial.pow(Config::X),
+            None => result,
+        }
+    }
+
     /// Evaluates the line function at point p.
     fn ell(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine) {
         match Config::TWIST_TYPE {
@@ -95,37 +155,7 @@ impl Pairing for Bls12_381 {
         a: impl IntoIterator<Item = impl Into<Self::G1Prepared>>,
         b: impl IntoIterator<Item = impl Into<Self::G2Prepared>>,
     ) -> ark_ec::pairing::MillerLoopOutput<Self> {
-        let mut a = a.into_iter();
-        let mut b = b.into_iter();
-        let mut result = Fq12::one();
-        loop {
-            match (a.next(), b.next()) {
-                (Some(p), Some(q)) => {
-                    let p: Self::G1Prepared = p.into();
-                    if p.is_zero() {
-                        continue;
-                    }
-                    let q: Self::G2Prepared = q.into();
-                    if q.is_zero() {
-                        continue;
-                    }
-                    let mut f = Fq12::one();
-                    let mut ell_coeffs = q.ell_coeffs.iter();
-                    for i in BitIteratorBE::without_leading_zeros(Config::X).skip(1) {
-                        fp12_square_in_place(&mut f);
-                        Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
-                        if i {
-                            Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
-                        }
-                    }
-                    fp12_mul_assign(&mut result, &f);
-                }
-                (None, None) => break,
-                _ => {
-                    panic!("Caller must check input lengths");
-                }
-            }
-        }
+        let mut result = Self::multi_miller_loop_with_initial(&Fq12::one(), a, b);
         if Config::X_IS_NEGATIVE {
             fp12_cyclotomic_inverse_in_place(&mut result);
         }
@@ -135,15 +165,26 @@ impl Pairing for Bls12_381 {
     fn final_exponentiation(
         f: ark_ec::pairing::MillerLoopOutput<Self>,
     ) -> Option<PairingOutput<Self>> {
+        Self::final_exponentiation_with_inverse(&f.0, Field::inverse).map(PairingOutput)
+    }
+}
+
+impl Bls12_381 {
+    /// The final exponentiation of `f`, with the one field inversion it needs (`f^-1`, for the
+    /// easy part) supplied by `inverse`: a prover can take it from a hint that it then checks
+    /// with one multiplication. `inverse` returns `None` only for a zero `f`, and so does this.
+    pub fn final_exponentiation_with_inverse(
+        f: &Fq12,
+        inverse: impl FnOnce(&Fq12) -> Option<Fq12>,
+    ) -> Option<Fq12> {
         // Computing the final exponentiation following
         // https://eprint.iacr.org/2020/875
         // Adapted from the implementation in https://github.com/ConsenSys/gurvy/pull/29
         // The same sequence as the arkworks implementation, each value updated in place.
-        let f = f.0;
         // f1 = conj(f) = f^(p^6)
-        fp12_tmp!(f1 = &f);
+        fp12_tmp!(f1 = f);
         fp12_cyclotomic_inverse_in_place(f1);
-        f.inverse().map(|f2| {
+        inverse(f).map(|f2| {
             // r = f^(p^6 - 1)
             fp12_tmp!(r = f1);
             fp12_mul_assign(r, &f2);
@@ -196,7 +237,7 @@ impl Pairing for Bls12_381 {
             fp12_mul_assign(y1, y0);
             // result.Mul(&result, &t[1])
             fp12_mul_assign(r, y1);
-            PairingOutput(*r)
+            *r
         })
     }
 }
