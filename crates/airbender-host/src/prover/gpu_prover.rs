@@ -3,7 +3,7 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::security::SecurityLevel;
-use prover_pipeline::{CpuConfig, GpuConfig, ProgramProver, ProgramProverConfig, ProverBackend};
+use prover_pipeline::{ProgramProver, ProgramProverConfig, ProverBackend};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -299,15 +299,11 @@ fn create_program_prover(
     config: GpuProverConfig,
 ) -> Result<ProgramProver> {
     let source = program_source(app_bin_path)?;
-    let mut gpu = GpuConfig::default();
-    if let Some(threads) = config.worker_threads {
-        gpu.replay_worker_threads_count = threads;
-    }
     let config = ProgramProverConfig {
         target: level.as_proof_target(),
         backend: ProverBackend::Gpu,
-        cpu: CpuConfig::default(),
-        gpu,
+        replay_threads: config.worker_threads,
+        ..ProgramProverConfig::default()
     };
     ProgramProver::new(source, config).map_err(HostError::Prover)
 }
