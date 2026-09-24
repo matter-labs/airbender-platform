@@ -60,12 +60,14 @@ where
     pub(crate) fn double_in_place(&mut self) {
         debug_assert!(C::COEFF_A.is_zero());
         // xx = X², yy = Y², yyyy = Y⁴
+        // a square of a fresh copy is a product with its source: one copy fewer than
+        // `square_in_place`, which copies its operand itself
         fp_tmp!(xx = &self.x);
-        xx.square_in_place();
+        *xx *= &self.x;
         fp_tmp!(yy = &self.y);
-        yy.square_in_place();
+        *yy *= &self.y;
         fp_tmp!(yyyy = &*yy);
-        yyyy.square_in_place();
+        *yyyy *= &*yy;
         // s = 4 X yy
         *yy *= &self.x;
         yy.double_in_place();
@@ -79,7 +81,7 @@ where
         self.z.double_in_place();
         // X' = m² - 2 s
         self.x.copy_assign(m);
-        self.x.square_in_place();
+        self.x *= &*m;
         self.x -= &*yy;
         self.x -= &*yy;
         // Y' = m (s - X') - 8 yyyy
@@ -122,11 +124,11 @@ where
             self.z.copy_assign(&q.z);
             return;
         }
-        // z1z1 = Z1², z2z2 = Z2²
+        // z1z1 = Z1², z2z2 = Z2² (products with the sources: see `double_in_place`)
         fp_tmp!(z1z1 = &self.z);
-        z1z1.square_in_place();
+        *z1z1 *= &self.z;
         fp_tmp!(z2z2 = &q.z);
-        z2z2.square_in_place();
+        *z2z2 *= &q.z;
         // u1 = X1 z2z2, h = U2 - u1 = X2 z1z1 - u1
         fp_tmp!(u1 = &self.x);
         *u1 *= &*z2z2;
@@ -165,7 +167,7 @@ where
         *u1 *= &*i;
         // X3 = r² - j - 2 v
         self.x.copy_assign(r);
-        self.x.square_in_place();
+        self.x *= &*r;
         self.x -= &*h;
         self.x -= &*u1;
         self.x -= &*u1;
@@ -189,9 +191,9 @@ where
             self.z.copy_assign(&C::BaseField::ONE);
             return;
         }
-        // z1z1 = Z1²
+        // z1z1 = Z1² (products with the sources: see `double_in_place`)
         fp_tmp!(z1z1 = &self.z);
-        z1z1.square_in_place();
+        *z1z1 *= &self.z;
         // h = U2 - X1 = X2 z1z1 - X1
         fp_tmp!(h = &q.x);
         *h *= &*z1z1;
@@ -213,7 +215,7 @@ where
         r.double_in_place();
         // hh = h²
         fp_tmp!(hh = &*h);
-        hh.square_in_place();
+        *hh *= &*h;
         // Z3 = (Z1 + h)² - z1z1 - hh
         self.z += &*h;
         self.z.square_in_place();
@@ -226,7 +228,7 @@ where
         self.x *= &*hh;
         // X3 = r² - j - 2 v
         fp_tmp!(x3 = &*r);
-        x3.square_in_place();
+        *x3 *= &*r;
         *x3 -= &*h;
         *x3 -= &self.x;
         *x3 -= &self.x;
@@ -239,6 +241,19 @@ where
         self.y.copy_assign(&self.x);
         self.x.copy_assign(x3);
     }
+}
+
+/// `a + b` for affine points, on the in-place group law (arkworks' `Projective + Affine`
+/// moves every field element by value, which costs a copy per operation)
+pub(crate) fn add_affine<C: SWCurveConfig>(a: &Affine<C>, b: &Affine<C>) -> Projective<C>
+where
+    C::BaseField: CopyAssign,
+{
+    let mut slot = MaybeUninit::uninit();
+    let sum = Jacobian::<C>::init_infinity(&mut slot);
+    sum.add_assign_affine(a);
+    sum.add_assign_affine(b);
+    sum.to_projective()
 }
 
 #[cfg(test)]

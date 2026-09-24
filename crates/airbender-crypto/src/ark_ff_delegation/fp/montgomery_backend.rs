@@ -109,12 +109,26 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
 
     fn inverse(a: &Fp<MontBackend<Self, N>, N>) -> Option<Fp<MontBackend<Self, N>, N>>;
 
+    /// Equality of the field elements: limb equality, unless the representation is redundant
+    /// (see `DelegatedModParams::REDUNDANT`)
+    #[inline(always)]
+    fn eq(a: &Fp<MontBackend<Self, N>, N>, b: &Fp<MontBackend<Self, N>, N>) -> bool {
+        a.0 == b.0
+    }
+
+    #[inline(always)]
+    fn is_zero(a: &Fp<MontBackend<Self, N>, N>) -> bool {
+        a.0 == BigInt::<N>::zero()
+    }
+
     fn from_bigint(r: BigInt<N>) -> Option<Fp<MontBackend<Self, N>, N>> {
+        // the integer must be canonical: the check comes before the zero test, which in a
+        // redundant representation would accept the modulus itself as a zero
         let mut r = Fp::new_unchecked(r);
-        if r.is_zero() {
-            Some(r)
-        } else if r.is_geq_modulus() {
+        if r.is_geq_modulus() {
             None
+        } else if r.0 == BigInt::<N>::zero() {
+            Some(r)
         } else {
             r *= &Fp::new_unchecked(Self::R2);
             Some(r)
@@ -286,6 +300,16 @@ impl<T: MontConfig<N>, const N: usize> FpConfig<N> for MontBackend<T, N> {
 
     fn inverse(a: &Fp<Self, N>) -> Option<Fp<Self, N>> {
         T::inverse(a)
+    }
+
+    #[inline(always)]
+    fn eq(a: &Fp<Self, N>, b: &Fp<Self, N>) -> bool {
+        T::eq(a, b)
+    }
+
+    #[inline(always)]
+    fn is_zero(a: &Fp<Self, N>) -> bool {
+        T::is_zero(a)
     }
 
     fn from_bigint(r: BigInt<N>) -> Option<Fp<Self, N>> {

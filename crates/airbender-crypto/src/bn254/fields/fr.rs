@@ -12,6 +12,9 @@ use ark_ff::{AdditiveGroup, Zero};
 static MONT_REDUCTION_CONSTANT: BigInt<4> =
     BigIntMacro!("52454480824480482120356829342366457550537710351690908576382634413609933864959");
 static MODULUS: BigInt<4> = FrConfig::MODULUS;
+// 2 r, the reduction constant of the redundant representation
+static DOUBLE_MODULUS: BigInt<4> =
+    BigIntMacro!("43776485743678550444492811490514550177096728800832068687396408373151616991234");
 
 /// a^-1 = a^(r - 2)
 const INVERSION_POW: BigInt<4> = BigInt([
@@ -24,10 +27,18 @@ const INVERSION_POW: BigInt<4> = BigInt([
 #[derive(Default, Debug)]
 pub struct FrParams;
 
+// the redundant representation needs 4 modulus < 2^256 (the top limb below 2^62)
+const _: () = assert!(FrConfig::MODULUS.0[3] >> 62 == 0);
+
 impl DelegatedModParams<4> for FrParams {
     const MODULUS_BITSIZE: usize = 254;
+    const REDUNDANT: bool = true;
     fn modulus() -> &'static BigInt<4> {
         &MODULUS
+    }
+
+    fn double_modulus() -> &'static BigInt<4> {
+        &DOUBLE_MODULUS
     }
 }
 
@@ -78,10 +89,24 @@ impl MontConfig<4> for FrConfig {
     });
 
     fn into_bigint(mut a: Fr) -> BigInt<4> {
+        // a multiplication by 1, whose result (below 2r in the redundant representation) is
+        // then made canonical
         unsafe {
             u256::mul_assign_montgomery::<FrParams>(&mut a.0, &BigInt::one());
+            u256::reduce_to_canonical::<FrParams>(&mut a.0);
         }
         a.0
+    }
+
+    /// Modular: the redundant representation has two representatives of every element
+    #[inline(always)]
+    fn eq(a: &Fr, b: &Fr) -> bool {
+        unsafe { u256::eq_mod::<FrParams>(&a.0, &b.0) }
+    }
+
+    #[inline(always)]
+    fn is_zero(a: &Fr) -> bool {
+        unsafe { u256::is_zero_mod::<FrParams>(&a.0) }
     }
 
     #[inline(always)]

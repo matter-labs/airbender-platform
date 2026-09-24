@@ -73,7 +73,7 @@ impl SWCurveConfig for Config {
 
     #[inline]
     fn mul_projective(p: &G1Projective, scalar: &[u64]) -> G1Projective {
-        let s = Self::ScalarField::from_sign_and_limbs(true, scalar);
+        let s = scalar_from_limbs(scalar);
         GLVConfig::glv_mul_projective(*p, s)
     }
 
@@ -172,6 +172,28 @@ impl SWCurveConfig for Config {
             G1_SERIALIZED_SIZE * 2
         }
     }
+}
+
+/// The scalar (little-endian limbs, any value below 2^256) as a field element, reduced modulo
+/// the group order. On the delegated field this is one Montgomery multiplication by `R²`
+/// (`x R^-1 R² = x R`, the Montgomery form of `x`, with the reduction of the multiplication:
+/// `x R² < 2^256 r`, so the product is below `2r` and one conditional subtraction makes it
+/// canonical), where `from_sign_and_limbs` would run arkworks' software multiplication.
+#[inline(always)]
+fn scalar_from_limbs(scalar: &[u64]) -> Fr {
+    #[cfg(any(
+        all(target_arch = "riscv32", feature = "bigint_ops"),
+        test,
+        feature = "proving"
+    ))]
+    if scalar.len() <= 4 {
+        let mut repr = <Fr as PrimeField>::BigInt::default();
+        repr.as_mut()[..scalar.len()].copy_from_slice(scalar);
+        let mut s = Fr::new_unchecked(repr);
+        s *= &Fr::new_unchecked(Fr::R2);
+        return s;
+    }
+    Fr::from_sign_and_limbs(true, scalar)
 }
 
 impl GLVConfig for Config {

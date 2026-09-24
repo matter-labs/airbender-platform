@@ -73,7 +73,7 @@ impl SWCurveConfig for Config {
         p: &bn::G1Projective<super::Config>,
         scalar: &[u64],
     ) -> bn::G1Projective<super::Config> {
-        let s = Self::ScalarField::from_sign_and_limbs(true, scalar);
+        let s = scalar_from_limbs(scalar);
         GLVConfig::glv_mul_projective(*p, s)
     }
 
@@ -87,6 +87,34 @@ impl SWCurveConfig for Config {
         // G1 = E(Fq) so if the point is on the curve, it is also in the subgroup.
         true
     }
+}
+
+/// `a + b` on the in-place group law: arkworks' `Projective + Affine` moves every field
+/// element by value, a copy per operation on the delegated field
+pub fn add_affine(a: &G1Affine, b: &G1Affine) -> bn::G1Projective<super::Config> {
+    crate::jacobian::add_affine(a, b)
+}
+
+/// The scalar (little-endian limbs, any value below 2^256) as a field element, reduced modulo
+/// the group order. On the delegated field this is one Montgomery multiplication by `R²`
+/// (`x R^-1 R² = x R`, the Montgomery form of `x`, with the reduction of the multiplication:
+/// `x R² < 2^256 r`, so the product is below `2r` and one conditional subtraction makes it
+/// canonical), where `from_sign_and_limbs` would run arkworks' software multiplication.
+#[inline(always)]
+fn scalar_from_limbs(scalar: &[u64]) -> Fr {
+    #[cfg(any(
+        all(target_arch = "riscv32", feature = "bigint_ops"),
+        test,
+        feature = "proving"
+    ))]
+    if scalar.len() <= 4 {
+        let mut repr = <Fr as PrimeField>::BigInt::default();
+        repr.as_mut()[..scalar.len()].copy_from_slice(scalar);
+        let mut s = Fr::new_unchecked(repr);
+        s *= &Fr::new_unchecked(Fr::R2);
+        return s;
+    }
+    Fr::from_sign_and_limbs(true, scalar)
 }
 
 impl GLVConfig for Config {
@@ -265,6 +293,25 @@ mod mul_tests {
             assert_eq!(ours.x.into_bigint().0, reference.x.into_bigint().0);
             assert_eq!(ours.y.into_bigint().0, reference.y.into_bigint().0);
         }
+    }
+
+    #[test]
+    fn scalar_above_the_group_order_is_reduced() {
+        // the ecmul precompile passes any 256-bit scalar: the reduction modulo r must match
+        let limbs = [u64::MAX, u64::MAX - 5, 0x1234_5678_9abc_def0, u64::MAX >> 1];
+        let reduced = ark_bn254::Fr::from_sign_and_limbs(true, &limbs)
+            .into_bigint()
+            .0;
+        assert_ne!(limbs, reduced);
+        assert_eq!(
+            super::scalar_from_limbs(&limbs),
+            super::Fr::from_sign_and_limbs(true, &limbs)
+        );
+        let p = G1Affine::generator();
+        assert_eq!(
+            Config::mul_affine(&p, &limbs),
+            Config::mul_affine(&p, &reduced)
+        );
     }
 
     #[test]

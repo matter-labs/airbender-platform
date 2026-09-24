@@ -281,8 +281,8 @@ pub(crate) fn fp2_mul_by_fp<P: Fp2Config>(a: &mut Fp2<P>, f: &P::Fp) {
 /// `a *= b`, three base multiplications
 #[inline(always)]
 pub(crate) fn fp2_mul_assign<P: NonresidueMinusOne>(a: &mut Fp2<P>, b: &Fp2<P>) {
-    fp_tmp!(t0 = &a.c0);
-    *t0 *= &b.c0;
+    // two copies: a1 b1 needs the original a1 after a0 + a1 is formed in place, and the sum
+    // b0 + b1 must not touch `b`; a0 b0 is computed in place in a0 once a0 + a1 is formed
     fp_tmp!(t1 = &a.c1);
     *t1 *= &b.c1;
     fp_tmp!(s = &b.c0);
@@ -290,10 +290,10 @@ pub(crate) fn fp2_mul_assign<P: NonresidueMinusOne>(a: &mut Fp2<P>, b: &Fp2<P>) 
     // c1 = (a0 + a1)(b0 + b1) - a0 b0 - a1 b1
     a.c1 += &a.c0;
     a.c1 *= &*s;
-    a.c1 -= &*t0;
+    a.c0 *= &b.c0;
+    a.c1 -= &a.c0;
     a.c1 -= &*t1;
     // c0 = a0 b0 - a1 b1
-    a.c0.copy_assign(t0);
     a.c0 -= &*t1;
 }
 

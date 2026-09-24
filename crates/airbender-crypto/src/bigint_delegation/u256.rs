@@ -6,6 +6,7 @@ pub(super) type U256 = BigInt<4>;
 
 static ONE: U256 = U256::one();
 static ZERO: U256 = U256::zero();
+static TWO: U256 = BigInt::<4>([2, 0, 0, 0]);
 
 struct ScratchSpace {
     copy_place_0: U256,
@@ -161,13 +162,42 @@ unsafe fn sub_mod_with_carry<T: DelegatedModParams<4>>(a: &mut U256, carry: bool
 }
 
 #[inline(always)]
+/// Brings `a < 4 modulus` into the redundant range `[0, 2 modulus)`: one conditional
+/// subtraction of `2 modulus`
+/// # Safety
+/// `DelegationModParams` should only provide references to mutable statics.
+unsafe fn reduce_below_double_modulus<T: DelegatedModParams<4>>(a: &mut U256) {
+    debug_assert!(T::REDUNDANT);
+    let borrow = delegation::sub(a, T::double_modulus()) != 0;
+    if borrow {
+        delegation::add(a, T::double_modulus());
+    }
+}
+
+#[inline(always)]
+/// The canonical representative of `a < 2 modulus`
+/// # Safety
+/// `DelegationModParams` should only provide references to mutable statics.
+/// It is the responsibility of the caller to make sure that is the case
+pub unsafe fn reduce_to_canonical<T: DelegatedModParams<4>>(a: &mut U256) {
+    sub_mod_with_carry::<T>(a, false);
+}
+
+#[inline(always)]
 /// computes `self = self + rhs mod modulus`
 /// # Safety
 /// `DelegationModParams` should only provide references to mutable statics.
 /// It is the responsibility of the caller to make sure that is the case
 pub unsafe fn add_mod_assign<T: DelegatedModParams<4>>(a: &mut U256, b: &U256) {
-    let carry = delegation::add(a, b) != 0;
-    sub_mod_with_carry::<T>(a, carry);
+    if T::REDUNDANT {
+        // both below 2 modulus: the sum is below 4 modulus < 2^256, no carry
+        let carry = delegation::add(a, b) != 0;
+        debug_assert!(!carry);
+        reduce_below_double_modulus::<T>(a);
+    } else {
+        let carry = delegation::add(a, b) != 0;
+        sub_mod_with_carry::<T>(a, carry);
+    }
 }
 
 #[inline(always)]
@@ -178,7 +208,13 @@ pub unsafe fn add_mod_assign<T: DelegatedModParams<4>>(a: &mut U256, b: &U256) {
 pub unsafe fn sub_mod_assign<T: DelegatedModParams<4>>(a: &mut U256, b: &U256) {
     let borrow = delegation::sub(a, b);
     if borrow != 0 {
-        delegation::add(a, T::modulus());
+        // redundant: `a - b > -2 modulus`, so adding `2 modulus` lands in `(0, 2 modulus)`
+        let back = if T::REDUNDANT {
+            T::double_modulus()
+        } else {
+            T::modulus()
+        };
+        delegation::add(a, back);
     }
 }
 
@@ -188,11 +224,27 @@ pub unsafe fn sub_mod_assign<T: DelegatedModParams<4>>(a: &mut U256, b: &U256) {
 /// `DelegationModParams` should only provide references to mutable statics.
 /// It is the responsibility of the caller to make sure that is the case
 pub unsafe fn double_mod_assign<T: DelegatedModParams<4>>(a: &mut U256) {
-    with_scratch!(s => {
-        delegation::memcpy(&mut s.copy_place_0, a);
-        let carry = delegation::add(a, &s.copy_place_0) != 0;
-        sub_mod_with_carry::<T>(a, carry);
-    })
+    if T::REDUNDANT {
+        // `2a` as the product by 2: one delegation, where an addition would need a copy of
+        // `a` first (a delegation cannot take the same operand twice). `a` is below twice the
+        // modulus, below 2^255 (a redundant field has `4 modulus < 2^256`), so the product does
+        // not overflow.
+        debug_assert!(a.0[3] >> 63 == 0);
+        delegation::mul_low(a, &TWO);
+        reduce_below_double_modulus::<T>(a);
+    } else if T::MODULUS_BITSIZE < 256 {
+        // the same for a canonical `a` below a modulus of at most 255 bits
+        debug_assert!(a.0[3] >> 63 == 0);
+        delegation::mul_low(a, &TWO);
+        sub_mod_with_carry::<T>(a, false);
+    } else {
+        // a 256-bit modulus (secp256r1): the sum can carry, which the product would drop
+        with_scratch!(s => {
+            delegation::memcpy(&mut s.copy_place_0, a);
+            let carry = delegation::add(a, &s.copy_place_0) != 0;
+            sub_mod_with_carry::<T>(a, carry);
+        })
+    }
 }
 
 #[inline(always)]
@@ -201,10 +253,42 @@ pub unsafe fn double_mod_assign<T: DelegatedModParams<4>>(a: &mut U256) {
 /// `DelegationModParams` should only provide references to mutable statics.
 /// It is the responsibility of the caller to make sure that is the case
 pub unsafe fn neg_mod_assign<T: DelegatedModParams<4>>(a: &mut U256) {
-    // delegation::eq returns 1 if they are equal and zero if not
-    if delegation::eq(a, &ZERO) == 0 {
-        delegation::sub_and_negate(a, T::modulus());
+    if T::REDUNDANT {
+        // modulus - a: a representative of `-a` in `[0, modulus]` for `a <= modulus`; for a
+        // larger `a` it borrows, and `3 modulus - a` is in `(modulus, 2 modulus)`
+        let borrow = delegation::sub_and_negate(a, T::modulus()) != 0;
+        if borrow {
+            delegation::add(a, T::double_modulus());
+        }
+    } else {
+        // delegation::eq returns 1 if they are equal and zero if not
+        if delegation::eq(a, &ZERO) == 0 {
+            delegation::sub_and_negate(a, T::modulus());
+        }
     }
+}
+
+#[inline(always)]
+/// `a = b mod modulus` for representatives in `[0, 2 modulus)`: the difference is a multiple
+/// of the modulus, i.e. `-modulus`, `0` or `modulus`
+/// # Safety
+/// `DelegationModParams` should only provide references to mutable statics.
+/// It is the responsibility of the caller to make sure that is the case
+pub unsafe fn eq_mod<T: DelegatedModParams<4>>(a: &U256, b: &U256) -> bool {
+    if !T::REDUNDANT {
+        return delegation::eq(a, b) != 0;
+    }
+    with_scratch!(s => {
+        delegation::memcpy(&mut s.copy_place_0, a);
+        let borrow = delegation::sub(&mut s.copy_place_0, b) != 0;
+        if borrow {
+            // the difference is in (-2 modulus, 0): equal iff it is -modulus
+            delegation::add(&mut s.copy_place_0, T::modulus());
+            delegation::eq(&s.copy_place_0, &ZERO) != 0
+        } else {
+            is_zero_mod::<T>(&s.copy_place_0)
+        }
+    })
 }
 
 #[inline(always)]
@@ -326,9 +410,15 @@ pub unsafe fn mul_assign_montgomery<T: DelegatedMontParams<4>>(a: &mut U256, b: 
         delegation::mul_low(low, T::reduction_const());
         delegation::mul_high(low, T::modulus());
 
-        // a = (a b + m N) / 2^256 = high(a b) + high(m N) + carry, then one conditional subtraction
+        // a = (a b + m N) / 2^256 = high(a b) + high(m N) + carry, then one conditional
+        // subtraction; in the redundant representation the inputs are below 2N and 4N < 2^256,
+        // so the result is below 2N already and stays as it is
         let carry = delegation::add_with_carry_bit(a, low, carry) != 0;
-        sub_mod_with_carry::<T>(a, carry);
+        if T::REDUNDANT {
+            debug_assert!(!carry);
+        } else {
+            sub_mod_with_carry::<T>(a, carry);
+        }
     })
 }
 

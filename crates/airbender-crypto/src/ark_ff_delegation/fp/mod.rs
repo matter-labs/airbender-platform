@@ -92,6 +92,11 @@ pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {
     /// Compute a^{-1} if `a` is not zero.
     fn inverse(a: &Fp<Self, N>) -> Option<Fp<Self, N>>;
 
+    /// Equality of the elements (limb equality unless the representation is redundant)
+    fn eq(a: &Fp<Self, N>, b: &Fp<Self, N>) -> bool;
+
+    fn is_zero(a: &Fp<Self, N>) -> bool;
+
     /// Construct a field element from an integer in the range
     /// `0..(Self::MODULUS - 1)`. Returns `None` if the integer is outside
     /// this range.
@@ -102,19 +107,26 @@ pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {
     fn into_bigint(other: Fp<Self, N>) -> BigInt<N>;
 }
 
-// The derived equality compares the limbs as bytes (a `memcmp` call); this is a word
-// comparison, branch-free, and it is what `is_zero` runs on every group operation.
+// The configuration decides: limb equality (a word comparison, branch-free, what `is_zero`
+// runs on every group operation), or a modular one for a redundant representation.
 impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        P::eq(self, other)
+    }
+}
+
+// Consistent with the equality above whatever the representation: the canonical integer
+impl<P: FpConfig<N>, const N: usize> core::hash::Hash for Fp<P, N> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.into_bigint().hash(state)
     }
 }
 
 /// Represents an element of the prime field F_p, where `p == P::MODULUS`.
 /// This type can represent elements in any field of size at most N * 64 bits.
 #[derive(Educe)]
-#[educe(Default, Hash, Clone, Copy, Eq)]
+#[educe(Default, Clone, Copy, Eq)]
 pub struct Fp<P: FpConfig<N>, const N: usize>(
     /// Contains the element in Montgomery form for efficient multiplication.
     /// To convert an element to a [`BigInt`](struct@BigInt), use `into_bigint` or `into`.
@@ -152,7 +164,7 @@ impl<P: FpConfig<N>, const N: usize> Zero for Fp<P, N> {
 
     #[inline]
     fn is_zero(&self) -> bool {
-        *self == P::ZERO
+        P::is_zero(self)
     }
 }
 
