@@ -26,8 +26,10 @@ cfg_if! {
     if #[cfg(all(debug_assertions, not(feature = "bigint_ops")))] {
         use field_impl::{FieldElementImpl as FieldElementImplConst, FieldElementImpl, FieldStorageImpl};
     } else if #[cfg(feature = "bigint_ops")] {
-        use field_10x26::{FieldElement10x26 as FieldElementImplConst, FieldStorage10x26 as FieldStorageImpl};
-        use field_8x32::FieldElement8x32 as FieldElementImpl;
+        // The stored form is the delegated element itself (Montgomery form, 32-byte aligned),
+        // so precomputed tables are used in place, without a conversion or a copy
+        use field_10x26::FieldElement10x26 as FieldElementImplConst;
+        use field_8x32::{FieldElement8x32 as FieldElementImpl, FieldElement8x32 as FieldStorageImpl};
     } else if #[cfg(target_pointer_width = "64")] {
         use field_5x52::{FieldElement5x52 as FieldElementImpl, FieldElement5x52 as FieldElementImplConst, FieldStorage5x52 as FieldStorageImpl};
     } else if #[cfg(target_pointer_width = "32")] {
@@ -106,7 +108,9 @@ impl FieldElementConst {
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
                 0, 0, 0x03, 0xd1,
             ]);
-            FieldStorage(self.mul(&R).normalize().0.to_storage())
+            FieldStorage(FieldStorageImpl::from_storage_10x26(
+                self.mul(&R).normalize().0.to_storage(),
+            ))
         }
 
         #[cfg(not(feature = "bigint_ops"))]
@@ -366,6 +370,7 @@ impl SubAssign for FieldElement {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub(crate) struct FieldStorage(FieldStorageImpl);
 
 impl FieldStorage {
@@ -373,6 +378,14 @@ impl FieldStorage {
 
     pub(crate) fn to_field_elem(self) -> FieldElement {
         FieldElement(self.0.to_field_elem())
+    }
+
+    /// The stored element in place: with the delegated field the storage is the element
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn as_field_elem(&self) -> &FieldElement {
+        // SAFETY: both are `repr(transparent)` wrappers of `FieldElement8x32`
+        unsafe { &*(self as *const Self).cast::<FieldElement>() }
     }
 }
 

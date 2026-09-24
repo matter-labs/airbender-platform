@@ -12,6 +12,7 @@ use ark_ff::Field;
 use ark_ff::One;
 use ark_serialize::CanonicalDeserialize;
 use ark_serialize::CanonicalSerialize;
+use core::borrow::Borrow;
 use core::mem::MaybeUninit;
 
 impl Bls12_381 {
@@ -23,15 +24,39 @@ impl Bls12_381 {
     /// own). Unlike `multi_miller_loop` the result is not conjugated for the negative seed: the
     /// conjugation changes it by an `r`-th residue only, which the check is invariant to, and
     /// which the final exponentiation would remove.
+    ///
+    /// The prepared `G2` points are borrowed: precomputed lines are read in place.
     pub fn multi_miller_loop_with_initial(
         initial: &Fq12,
         a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
-        b: impl IntoIterator<Item = impl Into<<Self as Pairing>::G2Prepared>>,
+        b: impl IntoIterator<Item = impl Borrow<G2PreparedNoAlloc>>,
+    ) -> Fq12 {
+        Self::miller_loop_impl(Some(initial), a, b)
+    }
+
+    /// The Miller loop over borrowed prepared `G2` points: the same as the `Pairing` trait's
+    /// `multi_miller_loop` (conjugated for the negative seed), which converts its points to
+    /// the prepared form by value, but with precomputed lines read in place.
+    pub fn multi_miller_loop_prepared(
+        a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
+        b: impl IntoIterator<Item = impl Borrow<G2PreparedNoAlloc>>,
+    ) -> Fq12 {
+        let mut result = Self::miller_loop_impl(None, a, b);
+        if Config::X_IS_NEGATIVE {
+            fp12_cyclotomic_inverse_in_place(&mut result);
+        }
+        result
+    }
+
+    fn miller_loop_impl(
+        initial: Option<&Fq12>,
+        a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
+        b: impl IntoIterator<Item = impl Borrow<G2PreparedNoAlloc>>,
     ) -> Fq12 {
         let mut a = a.into_iter();
         let mut b = b.into_iter();
         let mut result = Fq12::one();
-        let mut initial = Some(initial);
+        let mut initial = initial;
         loop {
             match (a.next(), b.next()) {
                 (Some(p), Some(q)) => {
@@ -39,7 +64,7 @@ impl Bls12_381 {
                     if p.is_zero() {
                         continue;
                     }
-                    let q: <Self as Pairing>::G2Prepared = q.into();
+                    let q: &G2PreparedNoAlloc = q.borrow();
                     if q.is_zero() {
                         continue;
                     }
@@ -155,11 +180,10 @@ impl Pairing for Bls12_381 {
         a: impl IntoIterator<Item = impl Into<Self::G1Prepared>>,
         b: impl IntoIterator<Item = impl Into<Self::G2Prepared>>,
     ) -> ark_ec::pairing::MillerLoopOutput<Self> {
-        let mut result = Self::multi_miller_loop_with_initial(&Fq12::one(), a, b);
-        if Config::X_IS_NEGATIVE {
-            fp12_cyclotomic_inverse_in_place(&mut result);
-        }
-        ark_ec::pairing::MillerLoopOutput(result)
+        ark_ec::pairing::MillerLoopOutput(Self::multi_miller_loop_prepared(
+            a,
+            b.into_iter().map(Into::<G2PreparedNoAlloc>::into),
+        ))
     }
 
     fn final_exponentiation(

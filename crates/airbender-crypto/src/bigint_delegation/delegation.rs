@@ -382,8 +382,12 @@ pub(crate) fn bigint_op_delegation_with_carry_bit(
             }
         };
 
-        use core::ptr::addr_of_mut;
-        addr_of_mut!((*a_ptr).0).write(*result.as_limbs());
+        // The comparison reads its first operand only: its emulation must not write it back,
+        // as that operand may live in read-only memory (a precomputed table)
+        if !matches!(op, BigIntOps::Eq) {
+            use core::ptr::addr_of_mut;
+            addr_of_mut!((*a_ptr).0).write(*result.as_limbs());
+        }
 
         of as u32
     }

@@ -694,7 +694,7 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use ark_ff::{AdditiveGroup, CyclotomicMultSubgroup, Field, PrimeField};
+    use ark_ff::{CyclotomicMultSubgroup, Field, PrimeField};
     use ark_std::rand::Rng;
     use ark_std::test_rng;
 

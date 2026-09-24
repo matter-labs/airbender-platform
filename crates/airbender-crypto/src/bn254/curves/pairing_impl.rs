@@ -7,10 +7,11 @@ use ark_ec::pairing::PairingOutput;
 use ark_ec::short_weierstrass::SWCurveConfig;
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
-use ark_ff::Field;
 use ark_ff::One;
+use ark_ff::{AdditiveGroup, Field};
 use ark_serialize::CanonicalDeserialize;
 use ark_serialize::CanonicalSerialize;
+use core::borrow::Borrow;
 use core::mem::MaybeUninit;
 
 impl Bn254 {
@@ -20,16 +21,36 @@ impl Bn254 {
     /// accumulator goes through the double-and-add of the exponent. This is how the residue
     /// witness pairing check (`crate::residue_witness`) gets `d^(6x+2)` almost for free (the
     /// squarings are the loop's own). `initial_inverse` must be the inverse of `initial`.
+    ///
+    /// The prepared `G2` points are borrowed: precomputed lines are read in place.
     pub fn multi_miller_loop_with_initial(
         initial: &Fq12,
         initial_inverse: &Fq12,
         a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
-        b: impl IntoIterator<Item = impl Into<<Self as Pairing>::G2Prepared>>,
+        b: impl IntoIterator<Item = impl Borrow<G2PreparedNoAlloc>>,
+    ) -> Fq12 {
+        Self::miller_loop_impl(Some((initial, initial_inverse)), a, b)
+    }
+
+    /// The Miller loop over borrowed prepared `G2` points: the same as the `Pairing` trait's
+    /// `multi_miller_loop`, which converts its points to the prepared form by value, but with
+    /// precomputed lines read in place.
+    pub fn multi_miller_loop_prepared(
+        a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
+        b: impl IntoIterator<Item = impl Borrow<G2PreparedNoAlloc>>,
+    ) -> Fq12 {
+        Self::miller_loop_impl(None, a, b)
+    }
+
+    fn miller_loop_impl(
+        initial: Option<(&Fq12, &Fq12)>,
+        a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
+        b: impl IntoIterator<Item = impl Borrow<G2PreparedNoAlloc>>,
     ) -> Fq12 {
         let mut a = a.into_iter();
         let mut b = b.into_iter();
         let mut result = Fq12::one();
-        let mut initial = Some(initial);
+        let mut initial = initial;
         loop {
             match (a.next(), b.next()) {
                 (Some(p), Some(q)) => {
@@ -37,14 +58,14 @@ impl Bn254 {
                     if p.is_zero() {
                         continue;
                     }
-                    let q: <Self as Pairing>::G2Prepared = q.into();
+                    let q: &G2PreparedNoAlloc = q.borrow();
                     if q.is_zero() {
                         continue;
                     }
 
                     let base = initial.take();
                     let mut f = match base {
-                        Some(initial) => *initial,
+                        Some((initial, _)) => *initial,
                         None => Fq12::one(),
                     };
                     let mut ell_coeffs = q.ell_coeffs.iter();
@@ -56,12 +77,12 @@ impl Bn254 {
                             fp12_square_in_place(&mut f);
                         }
 
-                        Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+                        Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0, q.affine_lines);
 
                         let bit = Config::ATE_LOOP_COUNT[i - 1];
                         if bit == 1 || bit == -1 {
-                            Self::ell(&mut f, &ell_coeffs.next().unwrap(), &p.0);
-                            if let Some(initial) = base {
+                            Self::ell(&mut f, &ell_coeffs.next().unwrap(), &p.0, q.affine_lines);
+                            if let Some((initial, initial_inverse)) = base {
                                 let factor = if bit == 1 { initial } else { initial_inverse };
                                 fp12_mul_assign(&mut f, factor);
                             }
@@ -72,8 +93,8 @@ impl Bn254 {
                         fp12_cyclotomic_inverse_in_place(&mut f);
                     }
 
-                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
-                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0, q.affine_lines);
+                    Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0, q.affine_lines);
 
                     fp12_mul_assign(&mut result, &f);
                 }
@@ -87,13 +108,13 @@ impl Bn254 {
         // no pair: the accumulator is the initial value to the power of the loop count all
         // the same
         match initial {
-            Some(initial) => initial.pow(crate::residue_witness::bn254::SIX_X_PLUS_2),
+            Some((initial, _)) => initial.pow(crate::residue_witness::bn254::SIX_X_PLUS_2),
             None => result,
         }
     }
 
     /// Evaluates the line function at point p.
-    fn ell(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine) {
+    fn ell(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine, affine_lines: bool) {
         match Config::TWIST_TYPE {
             TwistType::M => {
                 let mut c1 = coeffs.1;
@@ -103,11 +124,17 @@ impl Bn254 {
                 f.mul_by_014(&coeffs.0, &c1, &c2);
             }
             TwistType::D => {
-                fp2_tmp!(c0 = &coeffs.0);
-                fp2_mul_by_fp(c0, &p.y);
+                // an affine line has a first coefficient of one: its evaluation is y_P
+                let c0 = if affine_lines {
+                    Fq2::new(p.y, Fq::ZERO)
+                } else {
+                    let mut c0 = coeffs.0;
+                    c0.mul_assign_by_fp(&p.y);
+                    c0
+                };
                 fp2_tmp!(c1 = &coeffs.1);
                 fp2_mul_by_fp(c1, &p.x);
-                fp12_mul_by_034(f, c0, c1, &coeffs.2);
+                fp12_mul_by_034(f, &c0, c1, &coeffs.2);
             }
         }
     }
@@ -175,11 +202,9 @@ impl Pairing for Bn254 {
         a: impl IntoIterator<Item = impl Into<Self::G1Prepared>>,
         b: impl IntoIterator<Item = impl Into<Self::G2Prepared>>,
     ) -> ark_ec::pairing::MillerLoopOutput<Self> {
-        ark_ec::pairing::MillerLoopOutput(Self::multi_miller_loop_with_initial(
-            &Fq12::one(),
-            &Fq12::one(),
+        ark_ec::pairing::MillerLoopOutput(Self::multi_miller_loop_prepared(
             a,
-            b,
+            b.into_iter().map(Into::<G2PreparedNoAlloc>::into),
         ))
     }
 
@@ -280,6 +305,7 @@ impl From<G2Affine> for G2PreparedNoAlloc {
             Self {
                 ell_coeffs: [Default::default(); BN254_NUM_ELL_COEFFS],
                 infinity: true,
+                affine_lines: false,
             }
         } else {
             use ark_ff::{AdditiveGroup, One};
@@ -327,6 +353,7 @@ impl From<G2Affine> for G2PreparedNoAlloc {
             Self {
                 ell_coeffs: unsafe { ell_coeffs.map(|el| el.assume_init()) },
                 infinity: false,
+                affine_lines: false,
             }
         }
     }
@@ -341,7 +368,7 @@ struct G2HomProjective {
 
 /// Writes a line coefficient triple into its slot, component by component
 #[inline(always)]
-fn write_coeff(out: &mut MaybeUninit<EllCoeff<Config>>, a: &Fq2, b: &Fq2, c: &Fq2) {
+pub(crate) fn write_coeff(out: &mut MaybeUninit<EllCoeff<Config>>, a: &Fq2, b: &Fq2, c: &Fq2) {
     // SAFETY: the three fields are written before the value is used
     unsafe {
         let p = out.as_mut_ptr();
@@ -504,7 +531,7 @@ impl G2PreparedNoAlloc {
     }
 }
 
-fn mul_by_char(r: G2Affine) -> G2Affine {
+pub(crate) fn mul_by_char(r: G2Affine) -> G2Affine {
     // multiply by field characteristic
     use ark_ff::Field;
 
@@ -539,6 +566,9 @@ pub struct G2PreparedNoAlloc {
     /// <https://eprint.iacr.org/2013/722.pdf>
     pub ell_coeffs: [ark_ec::bn::g2::EllCoeff<Config>; BN254_NUM_ELL_COEFFS],
     pub infinity: bool,
+    /// The lines were computed in affine coordinates (`g2_affine`): their first coefficient
+    /// is one, and the evaluation at `P` takes `y_P` as it is
+    pub affine_lines: bool,
 }
 
 impl CanonicalSerialize for G2PreparedNoAlloc {

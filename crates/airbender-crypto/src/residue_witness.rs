@@ -722,7 +722,7 @@ pub mod bls12_381 {
 mod tests {
     use super::*;
     use ark_ec::pairing::Pairing;
-    use ark_ec::{AffineRepr, CurveGroup, PrimeGroup};
+    use ark_ec::{CurveGroup, PrimeGroup};
     use ark_ff::{Field, One, Zero};
 
     /// `λ` of bn254 and of bls12-381 (as the modules' constants), for the direct check
@@ -788,7 +788,14 @@ mod tests {
                 f * crate::bn254::Fq12::new(s, crate::bn254::Fq6::zero()),
                 c.pow(BN254_LAMBDA)
             );
-            let l = Bn254::multi_miller_loop_with_initial(&d, &c, pairs_g1, pairs_g2);
+            let l = Bn254::multi_miller_loop_with_initial(
+                &d,
+                &c,
+                pairs_g1,
+                pairs_g2
+                    .iter()
+                    .map(|q| crate::bn254::curves::G2PreparedNoAlloc::from(*q)),
+            );
             assert_eq!(l, d.pow(bn254::SIX_X_PLUS_2) * f);
             assert!(bn254::check(&l, &d, &s));
             // a wrong witness fails
@@ -814,7 +821,12 @@ mod tests {
             );
             // nor does any other value pass the check
             let (c, d, s) = (f, f.inverse().unwrap(), f.c0);
-            let l = Bn254::multi_miller_loop_with_initial(&d, &c, [p], [q]);
+            let l = Bn254::multi_miller_loop_with_initial(
+                &d,
+                &c,
+                [p],
+                [crate::bn254::curves::G2PreparedNoAlloc::from(q)],
+            );
             assert!(!bn254::check(&l, &d, &s));
         }
     }
@@ -842,10 +854,15 @@ mod tests {
                     .0
                     .is_one()
             );
+            let prepared_g2 = || {
+                pairs_g2
+                    .iter()
+                    .map(|q| crate::bls12_381::curves::G2PreparedNoAlloc::from(*q))
+            };
             let f = Bls12_381::multi_miller_loop_with_initial(
                 &crate::bls12_381::Fq12::one(),
                 pairs_g1,
-                pairs_g2,
+                prepared_g2(),
             );
             let mut f_conj = f;
             f_conj.conjugate_in_place();
@@ -856,7 +873,7 @@ mod tests {
                 f * crate::bls12_381::Fq12::new(s, crate::bls12_381::Fq6::zero()),
                 c.pow(BLS12_381_LAMBDA)
             );
-            let l = Bls12_381::multi_miller_loop_with_initial(&d, pairs_g1, pairs_g2);
+            let l = Bls12_381::multi_miller_loop_with_initial(&d, pairs_g1, prepared_g2());
             assert_eq!(
                 l,
                 d.pow(<crate::bls12_381::curves::Config as ark_ec::bls12::Bls12Config>::X) * f
@@ -871,14 +888,18 @@ mod tests {
         use crate::bls12_381::curves::Bls12_381;
         for k in 0..2 {
             let (p, q) = bls_points(k);
-            let f =
-                Bls12_381::multi_miller_loop_with_initial(&crate::bls12_381::Fq12::one(), [p], [q]);
+            let q = crate::bls12_381::curves::G2PreparedNoAlloc::from(q);
+            let f = Bls12_381::multi_miller_loop_with_initial(
+                &crate::bls12_381::Fq12::one(),
+                [p],
+                [&q],
+            );
             assert!(
                 bls12_381::witness(&f).is_none(),
                 "no witness for a non-identity"
             );
             let (d, s) = (f.inverse().unwrap(), f.c0);
-            let l = Bls12_381::multi_miller_loop_with_initial(&d, [p], [q]);
+            let l = Bls12_381::multi_miller_loop_with_initial(&d, [p], [&q]);
             assert!(!bls12_381::check(&l, &d, &s));
         }
     }

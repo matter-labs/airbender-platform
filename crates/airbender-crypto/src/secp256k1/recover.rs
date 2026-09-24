@@ -6,6 +6,8 @@ use crate::k256::{
     Secp256k1,
 };
 
+use core::{cfg_select, mem::MaybeUninit};
+
 use super::{
     context::{ECMultContext, ECMULT_TABLE_SIZE_A, WINDOW_A, WINDOW_G, WNAF_BITS},
     field::FieldElement,
@@ -165,24 +167,23 @@ fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
     // is made affine instead and `z` stays 1.
     let mut z = FieldElement::ONE;
 
-    let mut prea: [Affine; ECMULT_TABLE_SIZE_A] = [Affine::DEFAULT; ECMULT_TABLE_SIZE_A];
+    // The odd multiples of `a`, and `beta * x` of each: written only when `a` contributes,
+    // and read only at a non-zero digit of `na`, which implies that
+    let mut prea: [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A] =
+        [const { MaybeUninit::uninit() }; ECMULT_TABLE_SIZE_A];
     let mut aux: [FieldElement; ECMULT_TABLE_SIZE_A] = [FieldElement::ZERO; ECMULT_TABLE_SIZE_A];
 
-    let mut bits_na_1 = 0;
-    let mut bits_na_lam = 0;
+    // The digits are zero above the bits of their scalars, so a digit is looked at only for
+    // being non-zero
+    let mut wnaf_na_1 = [0 as WnafDigit; WNAF_BITS];
+    let mut wnaf_na_lam = [0 as WnafDigit; WNAF_BITS];
 
-    let mut bits_ng_1 = 0;
-    let mut bits_ng_128 = 0;
-
-    let mut wnaf_na_1 = [0i32; WNAF_BITS];
-    let mut wnaf_na_lam = [0i32; WNAF_BITS];
-
-    let mut wnaf_ng_1 = [0i32; WNAF_BITS];
-    let mut wnaf_ng_128 = [0i32; WNAF_BITS];
+    let mut wnaf_ng_1 = [0 as WnafDigit; WNAF_BITS];
+    let mut wnaf_ng_128 = [0 as WnafDigit; WNAF_BITS];
 
     let mut bits = 0;
 
-    if !na.is_zero() && !a.is_infinity() {
+    let prea: &[Affine; ECMULT_TABLE_SIZE_A] = if !na.is_zero() && !a.is_infinity() {
         // split na into 129 bit scalars
         // where na_1 + na_lam * lambda = na
 
@@ -190,35 +191,39 @@ fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
         let (na_1, na_lam) = na.decompose();
 
         // build wnaf representation
-        bits_na_1 = wnaf(&mut wnaf_na_1, &na_1, WINDOW_A);
-        bits_na_lam = wnaf(&mut wnaf_na_lam, &na_lam, WINDOW_A);
+        let bits_na_1 = wnaf(&mut wnaf_na_1, &na_1, WINDOW_A);
+        let bits_na_lam = wnaf(&mut wnaf_na_lam, &na_lam, WINDOW_A);
 
         debug_assert!(bits_na_1 <= WNAF_BITS as i32);
         debug_assert!(bits_na_lam <= WNAF_BITS as i32);
 
-        if bits_na_1 > bits_na_lam {
-            bits = bits_na_1;
-        } else {
-            bits = bits_na_lam;
-        }
+        bits = bits_na_1.max(bits_na_lam);
 
         // Calculate odd multiples of a.
         // All multiples are brought to the same `z` "denominator".
         // Due to secp256k1 we can pretend the z coordinate is 1 and use affine addition formulas,
         // and correct the result at the end
         odd_multiples_table_windowa(&mut prea, &mut aux, &mut z, a);
+        // SAFETY: `odd_multiples_table_windowa` wrote every entry
+        let prea: &mut [Affine; ECMULT_TABLE_SIZE_A] =
+            unsafe { &mut *(&mut prea as *mut [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A]).cast() };
         if H::FE_INVERT_IS_CHEAP {
-            table_set_affine_windowa(&mut prea, &aux, &z, hooks);
+            table_set_affine_windowa(prea, &aux, &z, hooks);
             z = FieldElement::ONE;
         } else {
-            table_set_globalz_windowa(&mut prea, &aux);
+            table_set_globalz_windowa(prea, &aux);
         }
 
         for i in 0..ECMULT_TABLE_SIZE_A {
             aux[i] = FieldElement::BETA;
             aux[i] *= &prea[i].x;
         }
-    }
+        prea
+    } else {
+        // never read: every digit of `na` is zero
+        // SAFETY: as above
+        unsafe { &*(&prea as *const [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A]).cast() }
+    };
 
     if !ng.is_zero() {
         // TODO: use u128 instead
@@ -229,54 +234,51 @@ fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
         let (ng_1, ng_128) = ng.decompose_128(); // NOTE: must return normal form
 
         // build wnaf representation
-        bits_ng_1 = wnaf(&mut wnaf_ng_1, &ng_1, WINDOW_G);
-        bits_ng_128 = wnaf(&mut wnaf_ng_128, &ng_128, WINDOW_G);
+        let bits_ng_1 = wnaf(&mut wnaf_ng_1, &ng_1, WINDOW_G);
+        let bits_ng_128 = wnaf(&mut wnaf_ng_128, &ng_128, WINDOW_G);
 
-        if bits_ng_1 > bits {
-            bits = bits_ng_1;
-        }
-        if bits_ng_128 > bits {
-            bits = bits_ng_128;
-        }
+        bits = bits.max(bits_ng_1).max(bits_ng_128);
     }
 
     let mut r = Jacobian::INFINITY;
 
-    for i in (0..bits).rev() {
+    for i in (0..bits as usize).rev() {
         r.double_in_place(None);
 
-        let n = wnaf_na_1[i as usize];
-        if i < bits_na_1 && n != 0 {
+        let n = wnaf_na_1[i];
+        if n != 0 {
             let (idx, negate) = table_index(n, WINDOW_A);
             r.add_affine_in_place(&prea[idx].x, &prea[idx].y, negate, None);
         }
 
-        let n = wnaf_na_lam[i as usize];
-        if i < bits_na_lam && n != 0 {
+        let n = wnaf_na_lam[i];
+        if n != 0 {
             let (idx, negate) = table_index(n, WINDOW_A);
             r.add_affine_in_place(&aux[idx], &prea[idx].y, negate, None);
         }
 
-        let n = wnaf_ng_1[i as usize];
-        if i < bits_ng_1 && n != 0 {
+        let n = wnaf_ng_1[i];
+        if n != 0 {
             let (idx, negate) = table_index(n, WINDOW_G);
-            let g = context.pre_g[idx].to_affine();
-            if H::FE_INVERT_IS_CHEAP {
-                r.add_affine_in_place(&g.x, &g.y, negate, None);
-            } else {
-                r.add_affine_zinv_in_place(&g.x, &g.y, negate, &z);
-            }
+            add_from_table(
+                &mut r,
+                &context.pre_g[idx],
+                negate,
+                &z,
+                H::FE_INVERT_IS_CHEAP,
+            );
         }
 
-        let n = wnaf_ng_128[i as usize];
-        if i < bits_ng_128 && n != 0 {
+        let n = wnaf_ng_128[i];
+        if n != 0 {
             let (idx, negate) = table_index(n, WINDOW_G);
-            let g = context.pre_g_128[idx].to_affine();
-            if H::FE_INVERT_IS_CHEAP {
-                r.add_affine_in_place(&g.x, &g.y, negate, None);
-            } else {
-                r.add_affine_zinv_in_place(&g.x, &g.y, negate, &z);
-            }
+            add_from_table(
+                &mut r,
+                &context.pre_g_128[idx],
+                negate,
+                &z,
+                H::FE_INVERT_IS_CHEAP,
+            );
         }
     }
 
@@ -285,6 +287,40 @@ fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
     }
 
     r
+}
+
+/// A digit of a wNAF representation: `|digit| < 2^(w - 1)` for the windows in use
+type WnafDigit = i16;
+const _: () = assert!(WINDOW_A <= 16 && WINDOW_G <= 16);
+
+/// `r += (x, y)` or `r -= (x, y)` for the stored generator multiple, an affine point if `affine`,
+/// otherwise a point with the denominator `1 / z`
+#[inline(always)]
+fn add_from_table(
+    r: &mut Jacobian,
+    stored: &super::points::AffineStorage,
+    negate: bool,
+    z: &FieldElement,
+    affine: bool,
+) {
+    let add = |r: &mut Jacobian, x: &FieldElement, y: &FieldElement| {
+        if affine {
+            r.add_affine_in_place(x, y, negate, None);
+        } else {
+            r.add_affine_zinv_in_place(x, y, negate, z);
+        }
+    };
+    cfg_select! {
+        // with the delegated field the table is read in place
+        feature = "bigint_ops" => {
+            let (x, y) = stored.coordinates();
+            add(r, x, y);
+        }
+        _ => {
+            let g = stored.to_affine();
+            add(r, &g.x, &g.y);
+        }
+    }
 }
 
 /// Fill `pre_a` with odd multiples of a.
@@ -297,7 +333,7 @@ fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
 /// Lastly, `zr[0]` is set so that `a.z = pre_a[0].z / zr[0]`
 /// Based on https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h#L73
 fn odd_multiples_table_windowa(
-    pre_a: &mut [Affine; ECMULT_TABLE_SIZE_A],
+    pre_a: &mut [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A],
     zr: &mut [FieldElement; ECMULT_TABLE_SIZE_A],
     z: &mut FieldElement,
     a: &Jacobian,
@@ -315,17 +351,12 @@ fn odd_multiples_table_windowa(
     //      ai = phi(a) = (a.x*C^2, a.y*C^3, a.z)
     // This lets us use the faster add_ge_var
 
-    let d_ge = Affine {
-        x: d.x,
-        y: d.y,
-        infinity: false,
-    };
-
-    pre_a[0].set_gej_zinv(a, &d.z);
+    let first = pre_a[0].write(Affine::DEFAULT);
+    first.set_gej_zinv(a, &d.z);
 
     let mut ai = Jacobian {
-        x: pre_a[0].x,
-        y: pre_a[0].y,
+        x: first.x,
+        y: first.y,
         z: a.z,
     };
 
@@ -334,12 +365,13 @@ fn odd_multiples_table_windowa(
     zr[0] = d.z;
 
     for i in 1..ECMULT_TABLE_SIZE_A {
-        ai.add_affine_in_place(&d_ge.x, &d_ge.y, false, Some(&mut zr[i]));
-        pre_a[i] = Affine {
+        // `d` as the affine point `(d.x, d.y)` of the isomorphic curve, read in place
+        ai.add_affine_in_place(&d.x, &d.y, false, Some(&mut zr[i]));
+        pre_a[i].write(Affine {
             x: ai.x,
             y: ai.y,
             infinity: false,
-        };
+        });
     }
 
     // Multiply the last z-coordinate by C to undo the isomorphism.
@@ -404,9 +436,9 @@ fn table_set_affine_windowa<H: super::hooks::Secp256k1Hooks>(
 ///     - the number of set values in wnaf is returned
 ///
 /// NOTE: the function assumes that `wnaf` is zeroed
-fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
-    debug_assert!(wnaf.len() <= 256);
-    debug_assert!((2..=31).contains(&w));
+fn wnaf(wnaf: &mut [WnafDigit], s: &Scalar, w: usize) -> i32 {
+    debug_assert!(wnaf.len() <= 224);
+    debug_assert!((2..=16).contains(&w));
     debug_assert!(wnaf.iter().all(|&x| x == 0));
 
     let mut s = *s;
@@ -421,9 +453,12 @@ fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
         s.negate_in_place();
         sign = -1;
     }
+    // the scalar as 32-bit words: a bit test is then one shift on this target
+    let limbs = s.limbs();
+    let words: [u32; 8] = core::array::from_fn(|i| (limbs[i / 2] >> (32 * (i % 2))) as u32);
 
     while bit < wnaf.len() {
-        if s.bits(bit, 1) == carry as u32 {
+        if ((words[bit >> 5] >> (bit & 31)) & 1) as i32 == carry {
             bit += 1;
             continue;
         }
@@ -433,12 +468,14 @@ fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
             now = wnaf.len() - bit;
         }
 
-        let mut word = (s.bits_var(bit, now) as i32) + carry;
+        // the `now <= 16` bits from `bit` on, which may straddle two words
+        let pair = words[bit >> 5] as u64 | ((words[(bit >> 5) + 1] as u64) << 32);
+        let mut word = (((pair >> (bit & 31)) as u32) & ((1 << now) - 1)) as i32 + carry;
 
         carry = (word >> (w - 1)) & 1;
         word -= carry << w;
 
-        wnaf[bit] = sign * word;
+        wnaf[bit] = (sign * word) as WnafDigit;
         last_set_bit = bit as i32;
 
         bit += now;
@@ -458,7 +495,8 @@ fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
 
 /// Position of the odd multiple `|n|` in the table, and whether it has to be negated
 #[inline(always)]
-fn table_index(n: i32, w: usize) -> (usize, bool) {
+fn table_index(n: WnafDigit, w: usize) -> (usize, bool) {
+    let n = n as i32;
     debug_assert!(table_verify(n, w));
 
     if n > 0 {

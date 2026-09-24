@@ -7,6 +7,7 @@ use crate::k256::FieldBytes;
 use super::field_10x26::FieldStorage10x26;
 
 #[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
 pub struct FieldElement8x32(pub(super) BigInt<4>);
 
 static MODULUS: BigInt<4> = FieldElement8x32::MODULUS;
@@ -287,7 +288,7 @@ impl FieldElement8x32 {
     /// NOTE: expects normalized element, gives the words of its Montgomery form
     #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
-    pub(super) const fn to_storage(self) -> FieldStorage10x26 {
+    pub(super) const fn to_storage_words(self) -> FieldStorage10x26 {
         let mut res = [0; 8];
         let words = self.0 .0;
         let mut i = 0;
@@ -297,6 +298,37 @@ impl FieldElement8x32 {
             i += 1;
         }
         FieldStorage10x26(res)
+    }
+
+    // The element is its own storage form (see `FieldStorage`): the constants of the tables
+    // are computed in the portable representation and repacked, at compile time
+    #[cfg(feature = "bigint_ops")]
+    pub(super) const DEFAULT: Self = Self::ZERO;
+
+    /// The element whose Montgomery form has the words of `storage`
+    #[cfg(feature = "bigint_ops")]
+    pub(super) const fn from_storage_10x26(storage: FieldStorage10x26) -> Self {
+        let words = storage.0;
+        let mut res = [0u64; 4];
+        let mut i = 0;
+        while i < 4 {
+            res[i] = words[2 * i] as u64 + ((words[2 * i + 1] as u64) << 32);
+            i += 1;
+        }
+        Self(BigInt(res))
+    }
+
+    /// NOTE: expects a normalized element
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(super) fn to_storage(self) -> Self {
+        self
+    }
+
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(super) fn to_field_elem(self) -> Self {
+        self
     }
 
     #[inline(always)]

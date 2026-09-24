@@ -91,6 +91,10 @@ impl ScalarInner {
         ((limbs[offset >> 6] >> (offset & 0x3F)) & ((1 << count) - 1)) as u32
     }
 
+    pub(super) fn limbs(&self) -> [u64; 4] {
+        *self.0.as_words()
+    }
+
     pub(super) fn bits_var(&self, offset: usize, count: usize) -> u32 {
         debug_assert!(count <= 32);
         debug_assert!(offset + count <= 256);

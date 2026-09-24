@@ -168,7 +168,7 @@ pub const G2_BY_TAU_POINT:
     feature = "proving",
     test
 )))]
-pub const PREPARED_G2_GENERATOR:
+pub static PREPARED_G2_GENERATOR:
     <crate::bls12_381::curves::Bls12_381 as crate::ark_ec::pairing::Pairing>::G2Prepared =
     crate::bls12_381::curves::G2PreparedNoAlloc {
         ell_coeffs: [
@@ -5254,7 +5254,7 @@ pub const PREPARED_G2_GENERATOR:
     feature = "proving",
     test
 ))]
-pub const PREPARED_G2_GENERATOR:
+pub static PREPARED_G2_GENERATOR:
     <crate::bls12_381::curves::Bls12_381 as crate::ark_ec::pairing::Pairing>::G2Prepared =
     crate::bls12_381::curves::G2PreparedNoAlloc {
         ell_coeffs: [
@@ -11118,7 +11118,7 @@ pub const PREPARED_G2_GENERATOR:
     feature = "proving",
     test
 )))]
-pub const PREPARED_G2_BY_TAU:
+pub static PREPARED_G2_BY_TAU:
     <crate::bls12_381::curves::Bls12_381 as crate::ark_ec::pairing::Pairing>::G2Prepared =
     crate::bls12_381::curves::G2PreparedNoAlloc {
         ell_coeffs: [
@@ -16162,7 +16162,7 @@ pub const PREPARED_G2_BY_TAU:
     feature = "proving",
     test
 ))]
-pub const PREPARED_G2_BY_TAU:
+pub static PREPARED_G2_BY_TAU:
     <crate::bls12_381::curves::Bls12_381 as crate::ark_ec::pairing::Pairing>::G2Prepared =
     crate::bls12_381::curves::G2PreparedNoAlloc {
         ell_coeffs: [

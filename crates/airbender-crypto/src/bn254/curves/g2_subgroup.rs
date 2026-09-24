@@ -299,7 +299,7 @@ pub(crate) fn is_in_subgroup(p: &G2Affine) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::bn254::curves::g2::{is_in_subgroup_reference, Config};
     use ark_ec::{AffineRepr, CurveGroup};
@@ -316,7 +316,7 @@ mod tests {
     }
 
     /// A random point of the twist, in the subgroup with negligible probability
-    fn random_curve_point(rng: &mut impl ark_std::rand::Rng) -> G2Affine {
+    pub(crate) fn random_curve_point(rng: &mut impl ark_std::rand::Rng) -> G2Affine {
         use ark_ec::models::short_weierstrass::SWCurveConfig;
         loop {
             let x = Fq2::rand(rng);

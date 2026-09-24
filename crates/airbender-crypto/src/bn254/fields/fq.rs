@@ -440,9 +440,7 @@ mod redundant_representation_tests {
     /// accept it and every observation must not tell it apart)
     fn shifted(a: &F) -> F {
         let mut limbs = a.0;
-        unsafe {
-            u256::add_assign(&mut limbs, FqParams::modulus());
-        }
+        u256::add_assign(&mut limbs, FqParams::modulus());
         F::new_unchecked(limbs)
     }
 
@@ -502,22 +500,18 @@ mod redundant_representation_tests {
     fn non_canonical_integers_are_rejected() {
         assert!(F::from_bigint(*FqParams::modulus()).is_none());
         let mut above = *FqParams::modulus();
-        unsafe {
-            u256::add_assign(&mut above, &BigInt::one());
-        }
+        u256::add_assign(&mut above, &BigInt::one());
         assert!(F::from_bigint(above).is_none());
         assert!(F::from_bigint(BigInt::zero()).unwrap().is_zero());
         let mut below = *FqParams::modulus();
-        unsafe {
-            u256::sub_assign(&mut below, &BigInt::one());
-        }
+        u256::sub_assign(&mut below, &BigInt::one());
         assert_eq!(F::from_bigint(below).unwrap(), -F::ONE);
     }
 
     #[test]
     fn results_stay_below_twice_the_modulus() {
         let mut rng = ark_std::test_rng();
-        let below = |x: &F| unsafe { u256::lt(&x.0, FqParams::double_modulus()) };
+        let below = |x: &F| u256::lt(&x.0, FqParams::double_modulus());
         for _ in 0..50 {
             let a = shifted(&F::rand(&mut rng));
             let b = shifted(&F::rand(&mut rng));

@@ -158,6 +158,11 @@ impl ScalarInner {
     }
     // This is only called on the results of decompose and decompose_128, so the input is already in integer form
     #[inline(always)]
+    pub(super) fn limbs(&self) -> [u64; 4] {
+        self.0 .0
+    }
+
+    #[inline(always)]
     #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn bits(&self, offset: usize, count: usize) -> u32 {
         // check requested bits must be from the same limb

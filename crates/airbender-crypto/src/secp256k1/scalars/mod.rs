@@ -85,6 +85,11 @@ impl Scalar {
         self.0.bits(offset, count)
     }
 
+    /// The 64-bit little-endian limbs of the representation
+    pub(crate) fn limbs(&self) -> [u64; 4] {
+        self.0.limbs()
+    }
+
     pub fn bits_var(&self, offset: usize, count: usize) -> u32 {
         self.0.bits_var(offset, count)
     }
