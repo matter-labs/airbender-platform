@@ -19,7 +19,7 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::security::SecurityLevel;
-use prover_pipeline::{CpuConfig, GpuConfig, ProgramProver, ProgramProverConfig, ProverBackend};
+use prover_pipeline::{ProgramProver, ProgramProverConfig, ProverBackend, RamSize};
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -184,12 +184,18 @@ impl CpuProver {
         let config = ProgramProverConfig {
             target: level.as_proof_target(),
             backend: ProverBackend::Cpu,
-            cpu: CpuConfig {
-                cycles_bound,
-                ram_bound,
-                worker_threads,
+            cycles_bound: Some(
+                u32::try_from(cycles_bound)
+                    .map_err(|_| HostError::Prover("cycles bound must fit into u32".to_string()))?,
+            ),
+            ram_size: match ram_bound {
+                b if b <= 32 << 20 => RamSize::Mib32,
+                b if b <= 128 << 20 => RamSize::Mib128,
+                b if b <= 1 << 30 => RamSize::Gib1,
+                _ => RamSize::Gib4,
             },
-            gpu: GpuConfig::default(),
+            worker_threads,
+            replay_threads: None,
         };
         let prover = ProgramProver::new(source, config).map_err(HostError::Prover)?;
 
