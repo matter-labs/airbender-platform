@@ -180,6 +180,11 @@ impl SWCurveConfig for Config {
 /// `x R² < 2^256 r`, so the product is below `2r` and one conditional subtraction makes it
 /// canonical), where `from_sign_and_limbs` would run arkworks' software multiplication.
 #[inline(always)]
+/// `k P + l Q` with the doublings shared between the two GLV multiplications
+pub fn mul_two(p: &G1Projective, k: Fr, q: &G1Projective, l: Fr) -> G1Projective {
+    crate::glv_decomposition::glv_mul_two_projective_jsf::<Config>(*p, k, *q, l)
+}
+
 fn scalar_from_limbs(scalar: &[u64]) -> Fr {
     #[cfg(any(
         all(target_arch = "riscv32", feature = "bigint_ops"),
@@ -355,6 +360,20 @@ mod mul_tests {
                     ark_bls12_381::g1::Config::mul_affine(&reference, scalar).into_affine();
                 let ours = Config::mul_affine(p, scalar).into_affine();
                 assert_eq!(to_ref(ours), expected);
+            }
+        }
+        // the two-point multiplication agrees with two single ones
+        for (i, p) in points.iter().enumerate() {
+            let q = points[(i + 3) % points.len()];
+            for pair in scalars.windows(2) {
+                let scalar =
+                    |limbs: [u64; 4]| Fr::from_bigint(<Fr as PrimeField>::BigInt::new(limbs));
+                let (Some(k), Some(l)) = (scalar(pair[0]), scalar(pair[1])) else {
+                    continue;
+                };
+                let expected = p.into_group() * k + q.into_group() * l;
+                let ours = super::mul_two(&p.into_group(), k, &q.into_group(), l);
+                assert_eq!(ours.into_affine(), expected.into_affine());
             }
         }
     }

@@ -248,78 +248,179 @@ where
     C::BaseField: crate::extension_tower::CopyAssign,
 {
     use crate::jacobian::Jacobian;
-    use ark_ec::CurveGroup;
-    use ark_ff::{AdditiveGroup, One};
     use ark_std::Zero;
     use core::mem::MaybeUninit;
     if p.is_zero() {
         return p;
     }
-    let ((sgn_k1, k1), (sgn_k2, k2)) = C::scalar_decomposition(k);
-    // the decomposition keeps both halves below 2^128 for the supported curves; a plain
-    // double-and-add is the fallback should one not fit
-    let (Some(k1), Some(k2)) = (to_u128(k1), to_u128(k2)) else {
+    let Some((signs, d1, d2, len)) = jsf_digits::<C>(k) else {
+        // the decomposition keeps both halves below 2^128 for the supported curves; a plain
+        // double-and-add is the fallback should one not fit
         use ark_ec::PrimeGroup;
         return p.mul_bigint(k.into_bigint());
     };
-    let (d1, d2, len) = joint_sparse_form(k1, k2);
     if len == 0 {
         return ark_ec::short_weierstrass::Projective::<C>::zero();
     }
-
-    // b1 = ±P, b2 = ±φ(P) as affine points, and their negations
-    let mut b1 = if p.z.is_one() {
-        ark_ec::short_weierstrass::Affine::<C>::new_unchecked(p.x, p.y)
-    } else {
-        p.into_affine()
-    };
-    let mut b2 = C::endomorphism_affine(&b1);
-    if !sgn_k1 {
-        b1.y.neg_in_place();
-    }
-    if !sgn_k2 {
-        b2.y.neg_in_place();
-    }
-    let neg_b1 = -b1;
-    let neg_b2 = -b2;
-    // sum = b1 + b2 and diff = b1 - b2 in Jacobian coordinates, and their negations
-    let mut slot = MaybeUninit::uninit();
-    let sum = Jacobian::<C>::init_infinity(&mut slot);
-    sum.add_assign_affine(&b1);
-    sum.add_assign_affine(&b2);
-    let mut slot = MaybeUninit::uninit();
-    let diff = Jacobian::<C>::init_infinity(&mut slot);
-    diff.add_assign_affine(&b1);
-    diff.add_assign_affine(&neg_b2);
-    let mut slot = MaybeUninit::uninit();
-    let neg_sum = Jacobian::<C>::init_copy(&mut slot, sum);
-    neg_sum.neg_in_place();
-    let mut slot = MaybeUninit::uninit();
-    let neg_diff = Jacobian::<C>::init_copy(&mut slot, diff);
-    neg_diff.neg_in_place();
+    let mut slots = [const { MaybeUninit::uninit() }; 4];
+    let table = JsfTable::<C>::new(&p, signs, &mut slots);
 
     let mut slot = MaybeUninit::uninit();
     let res = Jacobian::<C>::init_infinity(&mut slot);
-    let mut started = false;
     for i in (0..len).rev() {
-        if started {
+        if i != len - 1 {
             res.double_in_place();
         }
-        match (d1[i], d2[i]) {
-            (0, 0) => continue,
-            (1, 0) => res.add_assign_affine(&b1),
-            (-1, 0) => res.add_assign_affine(&neg_b1),
-            (0, 1) => res.add_assign_affine(&b2),
-            (0, -1) => res.add_assign_affine(&neg_b2),
-            (1, 1) => res.add_assign(sum),
-            (-1, -1) => res.add_assign(neg_sum),
-            (1, -1) => res.add_assign(diff),
-            (-1, 1) => res.add_assign(neg_diff),
-            _ => unreachable!("joint sparse form digits are -1, 0 or 1"),
-        }
-        started = true;
+        table.add_digits(res, d1[i], d2[i]);
     }
     res.to_projective()
+}
+
+/// `k P + l Q`, the two GLV double-and-adds interleaved so that the doublings are shared:
+/// each point costs its additions only (about a quarter of the digit pairs are zero)
+pub fn glv_mul_two_projective_jsf<C: GLVConfig + GLVConfigNoAllocator>(
+    p: ark_ec::short_weierstrass::Projective<C>,
+    k: C::ScalarField,
+    q: ark_ec::short_weierstrass::Projective<C>,
+    l: C::ScalarField,
+) -> ark_ec::short_weierstrass::Projective<C>
+where
+    C::BaseField: crate::extension_tower::CopyAssign,
+{
+    use crate::jacobian::Jacobian;
+    use ark_std::Zero;
+    use core::mem::MaybeUninit;
+    if p.is_zero() {
+        return glv_mul_projective_jsf::<C>(q, l);
+    }
+    if q.is_zero() {
+        return glv_mul_projective_jsf::<C>(p, k);
+    }
+    let (Some((signs_p, d1, d2, len_p)), Some((signs_q, e1, e2, len_q))) =
+        (jsf_digits::<C>(k), jsf_digits::<C>(l))
+    else {
+        return glv_mul_projective_jsf::<C>(p, k) + glv_mul_projective_jsf::<C>(q, l);
+    };
+    let len = len_p.max(len_q);
+    if len == 0 {
+        return ark_ec::short_weierstrass::Projective::<C>::zero();
+    }
+    let mut slots_p = [const { MaybeUninit::uninit() }; 4];
+    let table_p = JsfTable::<C>::new(&p, signs_p, &mut slots_p);
+    let mut slots_q = [const { MaybeUninit::uninit() }; 4];
+    let table_q = JsfTable::<C>::new(&q, signs_q, &mut slots_q);
+
+    let mut slot = MaybeUninit::uninit();
+    let res = Jacobian::<C>::init_infinity(&mut slot);
+    for i in (0..len).rev() {
+        if i != len - 1 {
+            res.double_in_place();
+        }
+        if i < len_p {
+            table_p.add_digits(res, d1[i], d2[i]);
+        }
+        if i < len_q {
+            table_q.add_digits(res, e1[i], e2[i]);
+        }
+    }
+    res.to_projective()
+}
+
+/// The signs of the GLV halves of `k` and the joint sparse form of their magnitudes, `None`
+/// if a half does not fit 128 bits
+#[allow(clippy::type_complexity)]
+fn jsf_digits<C: GLVConfig + GLVConfigNoAllocator>(
+    k: C::ScalarField,
+) -> Option<((bool, bool), [i8; 130], [i8; 130], usize)> {
+    let ((sgn_k1, k1), (sgn_k2, k2)) = C::scalar_decomposition(k);
+    let (k1, k2) = (to_u128(k1)?, to_u128(k2)?);
+    let (d1, d2, len) = joint_sparse_form(k1, k2);
+    Some(((sgn_k1, sgn_k2), d1, d2, len))
+}
+
+/// The points a joint sparse form of the GLV halves of a scalar adds: `±P`, `±φ(P)` with the
+/// signs of the halves folded in, and their sum and difference
+struct JsfTable<'a, C: ark_ec::short_weierstrass::SWCurveConfig>
+where
+    C::BaseField: crate::extension_tower::CopyAssign,
+{
+    b1: ark_ec::short_weierstrass::Affine<C>,
+    b2: ark_ec::short_weierstrass::Affine<C>,
+    neg_b1: ark_ec::short_weierstrass::Affine<C>,
+    neg_b2: ark_ec::short_weierstrass::Affine<C>,
+    sum: &'a crate::jacobian::Jacobian<C>,
+    diff: &'a crate::jacobian::Jacobian<C>,
+    neg_sum: &'a crate::jacobian::Jacobian<C>,
+    neg_diff: &'a crate::jacobian::Jacobian<C>,
+}
+
+impl<'a, C: GLVConfig + GLVConfigNoAllocator> JsfTable<'a, C>
+where
+    C::BaseField: crate::extension_tower::CopyAssign,
+{
+    /// `signs` are those of the two GLV halves of the scalar
+    fn new(
+        p: &ark_ec::short_weierstrass::Projective<C>,
+        (sgn_k1, sgn_k2): (bool, bool),
+        slots: &'a mut [core::mem::MaybeUninit<crate::jacobian::Jacobian<C>>; 4],
+    ) -> Self {
+        use crate::jacobian::Jacobian;
+        use ark_ec::CurveGroup;
+        use ark_ff::{AdditiveGroup, One};
+        // b1 = ±P, b2 = ±φ(P) as affine points, and their negations
+        let mut b1 = if p.z.is_one() {
+            ark_ec::short_weierstrass::Affine::<C>::new_unchecked(p.x, p.y)
+        } else {
+            p.into_affine()
+        };
+        let mut b2 = C::endomorphism_affine(&b1);
+        if !sgn_k1 {
+            b1.y.neg_in_place();
+        }
+        if !sgn_k2 {
+            b2.y.neg_in_place();
+        }
+        let neg_b1 = -b1;
+        let neg_b2 = -b2;
+        // sum = b1 + b2 and diff = b1 - b2 in Jacobian coordinates, and their negations
+        let [sum_slot, diff_slot, neg_sum_slot, neg_diff_slot] = slots;
+        let sum = Jacobian::<C>::init_infinity(sum_slot);
+        sum.add_assign_affine(&b1);
+        sum.add_assign_affine(&b2);
+        let diff = Jacobian::<C>::init_infinity(diff_slot);
+        diff.add_assign_affine(&b1);
+        diff.add_assign_affine(&neg_b2);
+        let neg_sum = Jacobian::<C>::init_copy(neg_sum_slot, sum);
+        neg_sum.neg_in_place();
+        let neg_diff = Jacobian::<C>::init_copy(neg_diff_slot, diff);
+        neg_diff.neg_in_place();
+        Self {
+            b1,
+            b2,
+            neg_b1,
+            neg_b2,
+            sum,
+            diff,
+            neg_sum,
+            neg_diff,
+        }
+    }
+
+    #[inline(always)]
+    fn add_digits(&self, res: &mut crate::jacobian::Jacobian<C>, d1: i8, d2: i8) {
+        match (d1, d2) {
+            (0, 0) => {}
+            (1, 0) => res.add_assign_affine(&self.b1),
+            (-1, 0) => res.add_assign_affine(&self.neg_b1),
+            (0, 1) => res.add_assign_affine(&self.b2),
+            (0, -1) => res.add_assign_affine(&self.neg_b2),
+            (1, 1) => res.add_assign(self.sum),
+            (-1, -1) => res.add_assign(self.neg_sum),
+            (1, -1) => res.add_assign(self.diff),
+            (-1, 1) => res.add_assign(self.neg_diff),
+            _ => unreachable!("joint sparse form digits are -1, 0 or 1"),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -91,10 +91,28 @@ impl<P: ark_ff::FpConfig<N>, const N: usize> CopyAssign for ark_ff::Fp<P, N> {
 
 /// Quadratic extensions with `u² = -1`: the `Fp2` products below hard-code that non-residue,
 /// so it is opted into per configuration
-pub(crate) trait NonresidueMinusOne: Fp2Config<Fp: CopyAssign> {}
+pub(crate) trait NonresidueMinusOne: Fp2Config<Fp: CopyAssign> {
+    /// `a *= b` with the three products of the Karatsuba multiplication reduced only once
+    /// combined, where the base field offers it (`true`); otherwise `a` is left untouched
+    #[inline(always)]
+    fn mul_assign_lazy(_a: &mut Fp2<Self>, _b: &Fp2<Self>) -> bool {
+        false
+    }
+}
 
 impl NonresidueMinusOne for crate::bn254::fields::Fq2Config {}
-impl NonresidueMinusOne for crate::bls12_381::fields::Fq2Config {}
+impl NonresidueMinusOne for crate::bls12_381::fields::Fq2Config {
+    #[cfg(any(
+        all(target_arch = "riscv32", feature = "bigint_ops"),
+        test,
+        feature = "proving"
+    ))]
+    #[inline(always)]
+    fn mul_assign_lazy(a: &mut Fp2<Self>, b: &Fp2<Self>) -> bool {
+        crate::bls12_381::fields::fq::fq2_mul_assign_lazy(&mut a.c0, &mut a.c1, &b.c0, &b.c1);
+        true
+    }
+}
 
 /// Multiplication by the cubic non-residue `ξ` of `Fp6 = Fp2[v]/(v³ - ξ)`, in place and without
 /// moving the operand (the arkworks `mul_fp2_by_nonresidue_in_place` hooks copy it)
@@ -281,6 +299,9 @@ pub(crate) fn fp2_mul_by_fp<P: Fp2Config>(a: &mut Fp2<P>, f: &P::Fp) {
 /// `a *= b`, three base multiplications
 #[inline(always)]
 pub(crate) fn fp2_mul_assign<P: NonresidueMinusOne>(a: &mut Fp2<P>, b: &Fp2<P>) {
+    if P::mul_assign_lazy(a, b) {
+        return;
+    }
     // two copies: a1 b1 needs the original a1 after a0 + a1 is formed in place, and the sum
     // b0 + b1 must not touch `b`; a0 b0 is computed in place in a0 once a0 + a1 is formed
     fp_tmp!(t1 = &a.c1);

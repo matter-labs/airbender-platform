@@ -12,9 +12,16 @@ struct FqParams;
 
 impl DelegatedModParams<8> for FqParams {
     const MODULUS_BITSIZE: usize = 381;
+    // elements are any representative below `2 modulus`: a multiplication then needs no final
+    // subtraction (`2^512 > 4 modulus`), see `u512::mul_assign_montgomery`
+    const REDUNDANT: bool = true;
 
     fn modulus() -> &'static BigInt<8> {
         &MODULUS_CONSTANT
+    }
+
+    fn double_modulus() -> &'static BigInt<8> {
+        &DOUBLE_MODULUS_CONSTANT
     }
 }
 
@@ -22,6 +29,22 @@ impl DelegatedMontParams<8> for FqParams {
     fn reduction_const() -> &'static BigInt<4> {
         &MONT_REDUCTION_CONSTANT
     }
+}
+
+impl u512::DelegatedLazyParams for FqParams {
+    fn four_modulus_squared() -> &'static BigInt<12> {
+        &FOUR_MODULUS_SQUARED
+    }
+
+    fn eight_modulus_squared() -> &'static BigInt<12> {
+        &EIGHT_MODULUS_SQUARED
+    }
+}
+
+/// `(a0 + a1 u) *= (b0 + b1 u)` with the reduction deferred, see `u512::fp2_mul_assign_lazy`
+#[inline(always)]
+pub(crate) fn fq2_mul_assign_lazy(a0: &mut F, a1: &mut F, b0: &F, b1: &F) {
+    unsafe { u512::fp2_mul_assign_lazy::<FqParams>(&mut a0.0, &mut a1.0, &b0.0, &b1.0) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -39,6 +62,9 @@ type B = BigInt<NUM_LIMBS>;
 type F = Fp<MontBackend<FqConfig, NUM_LIMBS>, NUM_LIMBS>;
 
 static MODULUS_CONSTANT: BigInt<8> = BigIntMacro!("4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787");
+static DOUBLE_MODULUS_CONSTANT: BigInt<8> = BigIntMacro!("8004819110443334786835579651471808313113765639878015770664116272248063300981675728885375258258031328075788545119574");
+static FOUR_MODULUS_SQUARED: BigInt<12> = BigIntMacro!("64077128990918821647774994577275890470780480397322210639449538147943906993965428573602624317208773719899817542160682922124415538158827623744800809684145743244372052137087251032065631877985326645674164094711099599885703973957941476");
+static EIGHT_MODULUS_SQUARED: BigInt<12> = BigIntMacro!("128154257981837643295549989154551780941560960794644421278899076295887813987930857147205248634417547439799635084321365844248831076317655247489601619368291486488744104274174502064131263755970653291348328189422199199771407947915882952");
 // it's - MODULUS^-1 mod 2^256
 static MONT_REDUCTION_CONSTANT: BigInt<4> =
     BigIntMacro!("11726191667098586211898467594267748916577995138249226639719947807923487178749");
@@ -71,11 +97,22 @@ impl MontConfig<NUM_LIMBS> for FqConfig {
     // we also need to override into_bigint to properly perform
     // conversion
     fn into_bigint(mut a: Fp<MontBackend<Self, NUM_LIMBS>, NUM_LIMBS>) -> BigInt<NUM_LIMBS> {
-        // for now it's just a multiplication with 1 literal
+        // a multiplication with 1 literal, then the canonical representative
         unsafe {
             u512::mul_assign_montgomery::<FqParams>(&mut a.0, &BigInt::one());
+            u512::reduce_to_canonical::<FqParams>(&mut a.0);
         }
         a.0
+    }
+
+    #[inline(always)]
+    fn eq(a: &F, b: &F) -> bool {
+        unsafe { u512::eq_mod::<FqParams>(&a.0, &b.0) }
+    }
+
+    #[inline(always)]
+    fn is_zero(a: &F) -> bool {
+        unsafe { u512::is_zero_mod::<FqParams>(&a.0) }
     }
 
     const GENERATOR: F = {
@@ -187,6 +224,33 @@ impl MontConfig<NUM_LIMBS> for FqConfig {
 mod test {
     use super::{BigInt, Fq, FqConfig, MontConfig, B};
     use ark_ff::{Field, One, UniformRand, Zero};
+
+    #[test]
+    fn fq2_lazy_multiplication_matches_arkworks() {
+        use crate::bls12_381::fields::fq2::Fq2;
+        use crate::extension_tower::fp2_mul_assign;
+        use ark_std::test_rng;
+        type RefFq2 = ark_bls12_381::Fq2;
+        // (sampling the delegated element directly rejects almost every 512-bit draw)
+        let convert = |x: ark_bls12_381::Fq| {
+            let mut t = BigInt::zero();
+            t.0[..6].copy_from_slice(&x.into_bigint().0);
+            Fq::from_bigint(t).unwrap()
+        };
+        let to_ours = |x: RefFq2| Fq2::new(convert(x.c0), convert(x.c1));
+        let mut rng = test_rng();
+        for _ in 0..2000 {
+            let a = RefFq2::rand(&mut rng);
+            let b = RefFq2::rand(&mut rng);
+            let mut ours = to_ours(a);
+            fp2_mul_assign(&mut ours, &to_ours(b));
+            assert_eq!(ours, to_ours(a * b));
+            // a product of products: the operands are then in the redundant range
+            let mut twice = ours;
+            fp2_mul_assign(&mut twice, &ours);
+            assert_eq!(twice, to_ours(a * b * (a * b)));
+        }
+    }
 
     #[test]
     fn test_mul_compare() {
@@ -528,11 +592,17 @@ mod test {
             u512::mul_assign_montgomery::<FqParams>(&mut a, &b);
         }
 
+        // the representation is redundant: the product is some representative below twice
+        // the modulus, and canonical after the reduction
         assert!(
-            a < super::MODULUS_CONSTANT,
-            "non-reduced montgomery mul result: {:?}",
+            a < super::DOUBLE_MODULUS_CONSTANT,
+            "montgomery mul result above twice the modulus: {:?}",
             a
         );
+        unsafe {
+            u512::reduce_to_canonical::<FqParams>(&mut a);
+        }
+        assert!(a < super::MODULUS_CONSTANT);
     }
 }
 
