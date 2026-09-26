@@ -116,9 +116,11 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         a.0 == b.0
     }
 
+    /// The limbs are compared (on the proving target, one delegation for 256 bits) only if the
+    /// lowest word is zero, which it is not for most elements
     #[inline(always)]
     fn is_zero(a: &Fp<MontBackend<Self, N>, N>) -> bool {
-        a.0 == BigInt::<N>::zero()
+        a.0 .0[0] as u32 == 0 && a.0 == BigInt::<N>::zero()
     }
 
     fn from_bigint(r: BigInt<N>) -> Option<Fp<MontBackend<Self, N>, N>> {

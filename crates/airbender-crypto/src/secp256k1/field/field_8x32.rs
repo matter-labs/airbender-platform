@@ -279,6 +279,9 @@ impl FieldElement8x32 {
         unsafe { u256::normalize_weak::<FieldParams>(&mut self.0) };
     }
 
+    /// Zero is `0` or `MODULUS` (`2 MODULUS > 2^256`). The lowest word tells which one the
+    /// element can be, and for most elements it is neither: then there is no comparison,
+    /// otherwise one.
     #[inline(always)]
     pub(super) fn normalizes_to_zero(&self) -> bool {
         unsafe { u256::is_zero_mod::<FieldParams>(&self.0) }
@@ -579,15 +582,24 @@ mod tests {
 
         const P: U256 = U256::from_limbs(FieldElement8x32::MODULUS.0);
 
-        /// Any 256-bit integer, biased to the edges of `[0, p)` and `[p, 2^256)`
+        /// Any 256-bit integer, biased to the edges of `[0, p)` and `[p, 2^256)`, and to the
+        /// integers with the lowest word of `0` or `p`, which the zero test compares
         fn any_weak() -> impl Strategy<Value = U256> {
             let small = || any::<u64>().prop_map(|x| U256::from(x % 5000));
+            let with_low_word = |word: u32| {
+                any::<[u64; 4]>().prop_map(move |mut limbs| {
+                    limbs[0] = (limbs[0] & !u64::from(u32::MAX)) | u64::from(word);
+                    U256::from_limbs(limbs)
+                })
+            };
             prop_oneof![
                 any::<[u64; 4]>().prop_map(U256::from_limbs),
                 small(),
                 small().prop_map(|x| P - x),
                 small().prop_map(|x| P + x),
                 small().prop_map(|x| U256::MAX - x),
+                with_low_word(0),
+                with_low_word(P.as_limbs()[0] as u32),
             ]
         }
 

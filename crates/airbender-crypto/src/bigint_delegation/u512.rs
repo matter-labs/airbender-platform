@@ -1,6 +1,6 @@
 use super::{
     delegation,
-    u256::{self, U256},
+    u256::{self, is_non_zero_vartime, low_word, U256},
     DelegatedModParams, DelegatedMontParams,
 };
 use crate::{BigInt, BigInteger};
@@ -96,23 +96,6 @@ macro_rules! with_scratch {
             $($body)*
         }
     };
-}
-
-/// A non-zero limb has a non-zero low word with overwhelming probability, so the rest is
-/// looked at out of line: cheaper than the comparison delegation on the fast path
-#[inline(always)]
-fn is_non_zero_vartime(a: &U256) -> bool {
-    #[cold]
-    #[inline(never)]
-    fn is_non_zero_slow(a: &U256) -> bool {
-        a.0.iter().any(|limb| *limb != 0)
-    }
-
-    if a.0[0] as u32 != 0 {
-        true
-    } else {
-        is_non_zero_slow(a)
-    }
 }
 
 /// The `i`-th 256-bit limb of a wide value
@@ -406,14 +389,22 @@ pub unsafe fn eq_mod<T: DelegatedModParams<8>>(a: &U512, b: &U512) -> bool {
     })
 }
 
-/// `a == 0` as a residue, for `a < 2 modulus`: zero or the modulus
+/// `a == 0` as a residue, for `a < 2 modulus`: zero or the modulus. The modulus is odd, so the
+/// lowest word tells which of the two `a` can be: at most one of them is compared, and for most
+/// values none (see `u256::low_word`).
 /// # Safety
 /// `DelegationModParams` should only provide references to mutable statics.
 pub unsafe fn is_zero_mod<T: DelegatedModParams<8>>(a: &U512) -> bool {
     let (low, high) = (as_low(a), as_high(a));
     let (n0, n1) = (as_low(T::modulus()), as_high(T::modulus()));
-    (delegation::eq(low, &ZERO) != 0 && delegation::eq(high, &ZERO) != 0)
-        || (delegation::eq(low, n0) != 0 && delegation::eq(high, n1) != 0)
+    debug_assert!(low_word(n0) != 0);
+    match low_word(low) {
+        0 => delegation::eq(low, &ZERO) != 0 && delegation::eq(high, &ZERO) != 0,
+        word if word == low_word(n0) => {
+            delegation::eq(low, n0) != 0 && delegation::eq(high, n1) != 0
+        }
+        _ => false,
+    }
 }
 
 /// Computes `self = self + rhs mod modulus`
@@ -476,10 +467,8 @@ pub unsafe fn double_mod_assign<T: DelegatedModParams<8>>(a: &mut U512) {
 pub unsafe fn neg_mod_assign<T: DelegatedModParams<8>>(a: &mut U512) {
     let (low, high) = as_low_high_mut(a);
 
-    let is_low_zero = delegation::eq(low, &ZERO) != 0;
-    let is_high_zero = delegation::eq(high, &ZERO) != 0;
-
-    if !is_low_zero || !is_high_zero {
+    // zero stays as it is; a non-zero lowest word rules it out without a comparison
+    if !u256::is_zero(low) || delegation::eq(high, &ZERO) == 0 {
         // in the redundant representation `a` is in `(0, 2 modulus)`, and so is
         // `2 modulus - a`
         let n = if T::REDUNDANT {
@@ -721,6 +710,52 @@ mod tests {
             neg_mod_assign::<TestMod>(&mut a);
         }
         assert_eq!(a.0, original.0, "neg(neg(a)) should equal a");
+    }
+
+    /// `a` with its lowest word replaced
+    fn with_low_word(mut a: U512, word: u32) -> U512 {
+        a.0[0] = (a.0[0] & !u64::from(u32::MAX)) | u64::from(word);
+        a
+    }
+
+    #[test]
+    fn test_neg_mod_with_zero_lowest_word() {
+        // the lowest word does not tell it from zero
+        let a = with_low_word(TEST_MODULUS, 0);
+        let mut negated = a;
+        unsafe {
+            neg_mod_assign::<TestMod>(&mut negated);
+        }
+        assert_ne!(negated.0, a.0, "neg(a) should differ from a when a != 0");
+        unsafe {
+            neg_mod_assign::<TestMod>(&mut negated);
+        }
+        assert_eq!(negated.0, a.0, "neg(neg(a)) should equal a");
+    }
+
+    /// Zero and the modulus are zero, and the integers that their lowest word does not tell
+    /// apart from them are compared (and not zero); the others are not compared at all
+    #[test]
+    fn test_is_zero_mod() {
+        let calls = || delegation::DELEGATION_CALLS.with(|c| c.get());
+        let modulus = TEST_MODULUS;
+        let mut high_only = U512::zero();
+        high_only.0[4] = 1;
+        let mut modulus_plus_high = modulus;
+        modulus_plus_high.0[4] += 1;
+        for (a, zero, compared) in [
+            (U512::zero(), true, true),
+            (modulus, true, true),
+            (with_low_word(modulus, 0), false, true),
+            (high_only, false, true),
+            (modulus_plus_high, false, true),
+            (with_low_word(U512::zero(), 1), false, false),
+            (with_low_word(modulus, 1), false, false),
+        ] {
+            let before = calls();
+            assert_eq!(unsafe { is_zero_mod::<TestMod>(&a) }, zero, "{a:?}");
+            assert_eq!(calls() > before, compared, "{a:?}");
+        }
     }
 
     #[test]

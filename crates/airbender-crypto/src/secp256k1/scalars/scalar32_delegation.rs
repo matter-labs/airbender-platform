@@ -283,8 +283,9 @@ impl ScalarInner {
         }
     }
 
-    /// One comparison: the scalars are canonical (below the order), as the modular operations
-    /// of the non-redundant `ScalarParams` keep them, and every scalar comes from one of them
+    /// Zero is the only representative to compare with: the scalars are canonical (below the
+    /// order), as the modular operations of the non-redundant `ScalarParams` keep them, and
+    /// every scalar comes from one of them. The comparison runs only if the lowest word is zero.
     #[inline(always)]
     pub(super) fn is_zero(&self) -> bool {
         debug_assert!(u256::lt(&self.0, &MODULUS));

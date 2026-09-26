@@ -260,11 +260,8 @@ pub unsafe fn neg_mod_assign<T: DelegatedModParams<4>>(a: &mut U256) {
         if borrow {
             delegation::add(a, T::double_modulus());
         }
-    } else {
-        // delegation::eq returns 1 if they are equal and zero if not
-        if delegation::eq(a, &ZERO) == 0 {
-            delegation::sub_and_negate(a, T::modulus());
-        }
+    } else if !is_zero(a) {
+        delegation::sub_and_negate(a, T::modulus());
     }
 }
 
@@ -284,7 +281,7 @@ pub unsafe fn eq_mod<T: DelegatedModParams<4>>(a: &U256, b: &U256) -> bool {
         if borrow {
             // the difference is in (-2 modulus, 0): equal iff it is -modulus
             delegation::add(&mut s.copy_place_0, T::modulus());
-            delegation::eq(&s.copy_place_0, &ZERO) != 0
+            is_zero(&s.copy_place_0)
         } else {
             is_zero_mod::<T>(&s.copy_place_0)
         }
@@ -296,9 +293,18 @@ pub fn eq(a: &U256, b: &U256) -> bool {
     delegation::eq(a, b) != 0
 }
 
+/// The lowest word of `a`. Only `2^-32` of the integers have it zero, and the values that the
+/// zero tests get are rarely zero, so the tests look at it first: the delegation compares only
+/// the integers that it does not tell apart from zero (or from the modulus).
 #[inline(always)]
+pub(super) fn low_word(a: &U256) -> u32 {
+    a.0[0] as u32
+}
+
+#[inline(always)]
+/// Whether `a` is zero: one word test, and a comparison only if the lowest word is zero
 pub fn is_zero(a: &U256) -> bool {
-    delegation::eq(a, &ZERO) != 0
+    low_word(a) == 0 && delegation::eq(a, &ZERO) != 0
 }
 
 #[inline(always)]
@@ -308,11 +314,20 @@ pub fn is_one(a: &U256) -> bool {
 }
 
 #[inline(always)]
+/// Whether `a` is `0` or the modulus, the representatives of zero below `2 modulus`. The
+/// modulus is odd, so the lowest word tells which of the two `a` can be: at most one of them is
+/// compared, and for most values none (see `low_word`).
 /// # Safety
 /// `DelegationModParams` should only provide references to mutable statics.
 /// It is the responsibility of the caller to make sure that is the case
 pub unsafe fn is_zero_mod<T: DelegatedModParams<4>>(a: &U256) -> bool {
-    (delegation::eq(a, &ZERO) != 0) || (delegation::eq(a, T::modulus()) != 0)
+    let modulus = T::modulus();
+    debug_assert!(low_word(modulus) != 0);
+    match low_word(a) {
+        0 => delegation::eq(a, &ZERO) != 0,
+        word if word == low_word(modulus) => delegation::eq(a, modulus) != 0,
+        _ => false,
+    }
 }
 
 pub fn lt(a: &U256, b: &U256) -> bool {
@@ -405,7 +420,7 @@ pub unsafe fn mul_assign_montgomery<T: DelegatedMontParams<4>>(a: &mut U256, b: 
         // Montgomery reduction: with `m = low * (-N^-1) mod 2^256`, `low + low(m N) = 0 mod 2^256`,
         // so the low half of `a b + m N` is never needed, only its carry: both terms are in
         // `[0, 2^256)` and add up to `0` or `2^256`, i.e. the carry is set iff `low != 0`.
-        let carry = delegation::eq(low, &ZERO) == 0;
+        let carry = is_non_zero_vartime(low);
         // low = high(m N)
         delegation::mul_low(low, T::reduction_const());
         delegation::mul_high(low, T::modulus());
@@ -587,17 +602,19 @@ pub unsafe fn square_assign_weak<T: DelegatedBarretParams<4>>(a: &mut U256) {
     })
 }
 
-/// Non-zero number has zero lowest 32 bits with probability 2^-32 if it is random, so look
-/// at the rest out of line: otherwise the compiler prefers to load and test all the words at once.
+/// `a != 0` for values that are zero only in degenerate cases (the low half of a product): the
+/// lowest word decides (see `low_word`), and the rest is looked at out of line, in software,
+/// otherwise the compiler prefers to load and test all the words at once. `is_zero` is for the
+/// values that can well be zero: its slow path is one delegated comparison.
 #[inline(always)]
-fn is_non_zero_vartime(a: &U256) -> bool {
+pub(super) fn is_non_zero_vartime(a: &U256) -> bool {
     #[cold]
     #[inline(never)]
     fn is_non_zero_slow(a: &U256) -> bool {
         a.0.iter().any(|limb| *limb != 0)
     }
 
-    if a.0[0] as u32 != 0 {
+    if low_word(a) != 0 {
         true
     } else {
         is_non_zero_slow(a)
@@ -699,7 +716,7 @@ mod tests {
     use crate::ark_ff_delegation::BigInt;
 
     use ark_ff::{BigInt as BigIntRef, BigInteger};
-    use proptest::{prop_assert_eq, proptest};
+    use proptest::{prop_assert, prop_assert_eq, proptest};
 
     #[derive(Default, Debug)]
     struct ZeroMod;
@@ -725,6 +742,74 @@ mod tests {
             prop_assert_eq!(low.0, ref_low.0);
             prop_assert_eq!(high.0, ref_high.0);
 
+        })
+    }
+
+    /// The secp256k1 prime, for the zero tests
+    #[derive(Default, Debug)]
+    struct OddMod;
+
+    static ODD_MODULUS: U256 = BigInt([0xFFFFFFFEFFFFFC2F, u64::MAX, u64::MAX, u64::MAX]);
+
+    impl DelegatedModParams<4> for OddMod {
+        const MODULUS_BITSIZE: usize = 256;
+
+        fn modulus() -> &'static BigInt<4> {
+            &ODD_MODULUS
+        }
+    }
+
+    fn delegation_calls() -> u64 {
+        delegation::DELEGATION_CALLS.with(|c| c.get())
+    }
+
+    /// `a` with its lowest word replaced
+    fn with_low_word(mut a: U256, word: u32) -> U256 {
+        a.0[0] = (a.0[0] & !u64::from(u32::MAX)) | u64::from(word);
+        a
+    }
+
+    /// The zero tests agree with the plain comparison, and compare with the delegation only
+    /// the integers that their lowest word does not tell apart: those whose lowest word is the
+    /// one of zero, or of the modulus
+    #[test]
+    fn zero_tests() {
+        let modulus = ODD_MODULUS;
+        proptest!(|(x: [u64; 4])| {
+            let x = BigInt(x);
+            let lookalikes = [with_low_word(x, 0), with_low_word(x, low_word(&modulus))];
+            for a in [x, U256::zero(), modulus].into_iter().chain(lookalikes) {
+                let zero = a.0 == [0; 4];
+
+                let calls = delegation_calls();
+                prop_assert_eq!(is_zero(&a), zero);
+                prop_assert_eq!(delegation_calls() - calls, u64::from(low_word(&a) == 0));
+
+                let calls = delegation_calls();
+                prop_assert_eq!(unsafe { is_zero_mod::<OddMod>(&a) }, zero || a.0 == modulus.0);
+                let compared = low_word(&a) == 0 || low_word(&a) == low_word(&modulus);
+                prop_assert_eq!(delegation_calls() - calls, u64::from(compared));
+
+                prop_assert_eq!(is_non_zero_vartime(&a), !zero);
+            }
+        })
+    }
+
+    /// `-a` is `modulus - a`, and zero for zero, also when only the lowest word of `a` is zero
+    #[test]
+    fn neg_mod_zero_lowest_word() {
+        proptest!(|(x: [u64; 4])| {
+            let mut x = BigInt(x);
+            // below the modulus
+            x.0[3] >>= 1;
+            for a in [x, with_low_word(x, 0), U256::zero()] {
+                let mut negated = a;
+                unsafe { neg_mod_assign::<OddMod>(&mut negated) };
+                let mut sum = BigIntRef::new(negated.0);
+                prop_assert!(!sum.add_with_carry(&BigIntRef::new(a.0)));
+                let expected = if a.0 == [0; 4] { [0; 4] } else { ODD_MODULUS.0 };
+                prop_assert_eq!(sum.0, expected);
+            }
         })
     }
 }
