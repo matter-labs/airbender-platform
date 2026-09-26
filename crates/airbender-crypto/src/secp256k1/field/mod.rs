@@ -121,6 +121,11 @@ impl FieldElementConst {
         self.0.normalizes_to_zero()
     }
 
+    /// Whether the element is zero
+    pub const fn is_zero(&self) -> bool {
+        self.0.normalizes_to_zero()
+    }
+
     #[inline(always)]
     const fn pow2k(&self, k: usize) -> Self {
         use const_for::const_for;
@@ -286,7 +291,7 @@ impl FieldElement {
         is_root.negate_in_place(1);
         is_root.add_in_place(&original);
 
-        is_root.normalizes_to_zero()
+        is_root.is_zero()
     }
     #[inline(always)]
     pub fn negate_in_place(&mut self, magnitude: u32) {
@@ -306,6 +311,44 @@ impl FieldElement {
     #[inline(always)]
     pub fn normalizes_to_zero(&self) -> bool {
         self.0.normalizes_to_zero()
+    }
+
+    /// Whether the element is zero
+    #[inline(always)]
+    pub fn is_zero(&self) -> bool {
+        self.0.normalizes_to_zero()
+    }
+
+    /// Whether the element is one: in the delegated representation one comparison, otherwise a
+    /// subtraction that normalizes to zero
+    #[inline(always)]
+    pub fn is_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            let mut difference = *self;
+            difference.sub_in_place(&Self::ONE);
+            difference.normalizes_to_zero()
+        }
+    }
+
+    /// Whether the element is minus one: in the delegated representation one comparison,
+    /// otherwise an addition that normalizes to zero
+    #[inline(always)]
+    pub fn is_minus_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_minus_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            let mut sum = *self;
+            sum.add_in_place(&Self::ONE);
+            sum.normalizes_to_zero()
+        }
     }
 
     #[inline(always)]
@@ -433,6 +476,24 @@ impl PartialEq for FieldElement {
 mod tests {
     use super::{FieldElement, FieldElementConst};
     use proptest::{prop_assert, prop_assert_eq, proptest};
+
+    #[test]
+    fn zero_one_and_minus_one() {
+        let mut minus_one = FieldElement::ONE;
+        minus_one.negate_in_place(1);
+        assert!(FieldElement::ZERO.is_zero() && !FieldElement::ONE.is_zero());
+        assert!(FieldElement::ONE.is_one() && !FieldElement::ONE.is_minus_one());
+        assert!(minus_one.is_minus_one() && !minus_one.is_one());
+        proptest!(|(x: FieldElement)| {
+            let mut difference = x;
+            difference.sub_in_place(&FieldElement::ONE);
+            prop_assert_eq!(x.is_one(), difference.normalizes_to_zero());
+            let mut sum = x;
+            sum.add_in_place(&FieldElement::ONE);
+            prop_assert_eq!(x.is_minus_one(), sum.normalizes_to_zero());
+            prop_assert_eq!(x.is_zero(), x.normalizes_to_zero());
+        })
+    }
 
     #[test]
     fn storage_round_trip() {

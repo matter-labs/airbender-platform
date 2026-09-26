@@ -36,7 +36,7 @@ impl JacobianConst {
     }
 
     pub(crate) const fn is_infinity(&self) -> bool {
-        self.z.normalizes_to_zero()
+        self.z.is_zero()
     }
 
     pub(crate) const fn to_affine_const(self) -> AffineConst {
@@ -144,8 +144,8 @@ impl JacobianConst {
         let s2 = a.y.mul(&z12).mul(&self.z);
         let h = u1.negate(Self::X_MAGNITUDE_MAX).add(&u2);
         let i = s2.negate(1).add(&s1);
-        if h.normalizes_to_zero() {
-            if i.normalizes_to_zero() {
+        if h.is_zero() {
+            if i.is_zero() {
                 ret = self.double(rzr);
             } else if let Some(rzr) = rzr {
                 *rzr = FieldElementConst::ZERO;
@@ -207,7 +207,7 @@ impl Jacobian {
     }
 
     pub(crate) fn is_infinity(&self) -> bool {
-        self.z.normalizes_to_zero()
+        self.z.is_zero()
     }
 
     pub fn to_affine(self) -> Affine {
@@ -379,8 +379,8 @@ impl Jacobian {
         let mut i = self.y;
         i += a.y;
 
-        if h.normalizes_to_zero() {
-            if i.normalizes_to_zero() {
+        if h.is_zero() {
+            if i.is_zero() {
                 self.double_in_place(rzr);
             } else {
                 if let Some(rzr) = rzr {
@@ -470,8 +470,8 @@ impl Jacobian {
         i.negate_in_place(Self::Y_MAGNITUDE_MAX);
         i += b.y;
 
-        if h.normalizes_to_zero() {
-            if i.normalizes_to_zero() {
+        if h.is_zero() {
+            if i.is_zero() {
                 self.double_in_place(None);
             } else {
                 *self = Jacobian::INFINITY;
@@ -654,8 +654,8 @@ impl Jacobian {
             r.sub_in_place(&self.y);
         }
 
-        if h.normalizes_to_zero() {
-            if r.normalizes_to_zero() {
+        if h.is_zero() {
+            if r.is_zero() {
                 self.double_in_place(rzr);
             } else {
                 if let Some(rzr) = rzr {

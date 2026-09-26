@@ -11,6 +11,37 @@
 // crate linked explicitly. Without this, `--features alloc` does not build at all.
 #[cfg(feature = "alloc")]
 extern crate alloc;
+
+// Compile-time checks of the memory layout of the extension field towers and of the affine points,
+// which are not `repr(C)`: oracles read these values where they are in the memory of the RISC-V
+// guest. The components of an extension field element are back to back, `c0` first, without
+// padding, recursively, and an affine point is `x`, then `y`, then the flag of the point at
+// infinity.
+macro_rules! assert_tower_layout {
+    ($fq:ty, $fq2:ty, $fq6:ty, $fq12:ty) => {
+        const _: () = {
+            use core::mem::{offset_of, size_of};
+            assert!(offset_of!($fq2, c0) == 0 && offset_of!($fq2, c1) == size_of::<$fq>());
+            assert!(size_of::<$fq2>() == 2 * size_of::<$fq>());
+            assert!(offset_of!($fq6, c0) == 0 && offset_of!($fq6, c1) == size_of::<$fq2>());
+            assert!(offset_of!($fq6, c2) == 2 * size_of::<$fq2>());
+            assert!(size_of::<$fq6>() == 3 * size_of::<$fq2>());
+            assert!(offset_of!($fq12, c0) == 0 && offset_of!($fq12, c1) == size_of::<$fq6>());
+            assert!(size_of::<$fq12>() == 2 * size_of::<$fq6>());
+        };
+    };
+}
+
+macro_rules! assert_affine_layout {
+    ($point:ty, $coordinate:ty) => {
+        const _: () = {
+            use core::mem::{offset_of, size_of};
+            assert!(offset_of!($point, x) == 0);
+            assert!(offset_of!($point, y) == size_of::<$coordinate>());
+            assert!(offset_of!($point, infinity) == 2 * size_of::<$coordinate>());
+        };
+    };
+}
 #[allow(clippy::all)]
 #[allow(unused_imports, dead_code)]
 #[cfg(any(

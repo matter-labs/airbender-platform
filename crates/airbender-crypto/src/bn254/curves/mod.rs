@@ -64,3 +64,6 @@ pub type G1Affine = bn::G1Affine<Config>;
 pub type G1Projective = bn::G1Projective<Config>;
 pub type G2Affine = bn::G2Affine<Config>;
 pub type G2Projective = bn::G2Projective<Config>;
+
+assert_affine_layout!(G1Affine, crate::bn254::Fq);
+assert_affine_layout!(G2Affine, crate::bn254::Fq2);

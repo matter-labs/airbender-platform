@@ -47,7 +47,7 @@ impl AffineConst {
     }
 
     pub(crate) const fn is_infinity(&self) -> bool {
-        self.infinity || (self.x.normalizes_to_zero() && self.y.normalizes_to_zero())
+        self.infinity || (self.x.is_zero() && self.y.is_zero())
     }
 
     #[allow(unused_mut)]
@@ -129,7 +129,7 @@ impl Affine {
     }
 
     pub fn is_infinity(&self) -> bool {
-        self.infinity || (self.x.normalizes_to_zero() && self.y.normalizes_to_zero())
+        self.infinity || (self.x.is_zero() && self.y.is_zero())
     }
 
     pub fn decompress(x_bytes: &FieldBytes, y_is_odd: bool) -> Option<Self> {

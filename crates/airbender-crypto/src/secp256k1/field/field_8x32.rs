@@ -16,6 +16,8 @@ static REDUCTION_CONST: BigInt<4> = FieldElement8x32::REDUCTION_CONST;
 /// `2^512 mod MODULUS`, Montgomery multiplication by it converts into Montgomery form
 static R2: BigInt<4> = FieldElement8x32::R2;
 static ONE_INTEGER: BigInt<4> = BigInt::one();
+/// `-1` in Montgomery form, for the comparison with it
+static MINUS_ONE: BigInt<4> = FieldElement8x32::MINUS_ONE;
 
 #[derive(Debug, Default)]
 pub struct FieldParams;
@@ -97,6 +99,10 @@ impl FieldElement8x32 {
     pub(super) const ONE: Self = Self(Self::NEG_MODULUS);
     // 2^256 - MODULUS
     const NEG_MODULUS: BigInt<4> = BigIntMacro!("4294968273");
+    // -2^256 mod MODULUS = MODULUS - NEG_MODULUS
+    const MINUS_ONE: BigInt<4> = BigIntMacro!(
+        "115792089237316195423570985008687907853269984665640564039457584007904539703390"
+    );
     // NEG_MODULUS^2
     const R2: BigInt<4> = BigIntMacro!("18446752466076602529");
     // -1/MODULUS mod 2^256
@@ -278,6 +284,19 @@ impl FieldElement8x32 {
         unsafe { u256::is_zero_mod::<FieldParams>(&self.0) }
     }
 
+    /// One comparison: `ONE` is the only representative of one below `2^256` (`ONE + MODULUS`
+    /// is `2^256`)
+    #[inline(always)]
+    pub(super) fn is_one(&self) -> bool {
+        u256::eq(&self.0, &NEG_MODULUS)
+    }
+
+    /// One comparison: `MINUS_ONE` is the only representative of minus one below `2^256`
+    #[inline(always)]
+    pub(super) fn is_minus_one(&self) -> bool {
+        u256::eq(&self.0, &MINUS_ONE)
+    }
+
     /// Parity of the canonical representative
     #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
@@ -419,6 +438,28 @@ impl proptest::arbitrary::Arbitrary for FieldElement8x32 {
 mod tests {
     use super::FieldElement8x32;
     use proptest::{prop_assert_eq, proptest};
+
+    #[test]
+    fn test_one_and_minus_one() {
+        let mut minus_one = FieldElement8x32::ONE;
+        minus_one.negate_in_place(1);
+        assert!(FieldElement8x32::ONE.is_one() && !FieldElement8x32::ONE.is_minus_one());
+        assert!(minus_one.is_minus_one() && !minus_one.is_one());
+        // the other representative of zero
+        let modulus = FieldElement8x32(FieldElement8x32::MODULUS);
+        assert!(modulus.normalizes_to_zero() && !modulus.is_one() && !modulus.is_minus_one());
+        proptest!(|(x: FieldElement8x32)| {
+            // the single comparisons agree with the modular ones, whatever the representative
+            for x in [x, FieldElement8x32(FieldElement8x32::MODULUS)] {
+                let mut difference = x;
+                difference.sub_in_place(&FieldElement8x32::ONE);
+                prop_assert_eq!(x.is_one(), difference.normalizes_to_zero());
+                let mut sum = x;
+                sum.add_in_place(&FieldElement8x32::ONE);
+                prop_assert_eq!(x.is_minus_one(), sum.normalizes_to_zero());
+            }
+        })
+    }
 
     #[test]
     fn test_invert() {

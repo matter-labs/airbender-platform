@@ -98,6 +98,32 @@ impl Scalar {
         self.0.is_zero()
     }
 
+    /// Whether the scalar is one: in the delegated representation one comparison, otherwise a
+    /// subtraction and a zero check
+    pub fn is_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            (*self - Self::ONE).is_zero()
+        }
+    }
+
+    /// Whether the scalar is minus one: in the delegated representation one comparison, otherwise
+    /// an addition and a zero check
+    pub fn is_minus_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_minus_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            (*self + Self::ONE).is_zero()
+        }
+    }
+
     pub fn negate_in_place(&mut self) {
         self.0.negate_in_place();
     }
@@ -201,11 +227,27 @@ mod tests {
 
     #[test]
     fn test_zero() {
-        // The delegation scalar compares representations, and `ORDER` is not reduced.
+        // The delegation scalar compares representations, and keeps them canonical: `ORDER` is
+        // not one of them.
         #[cfg(not(feature = "bigint_ops"))]
-        assert_eq!(Scalar::ZERO, Scalar::ORDER);
+        {
+            assert_eq!(Scalar::ZERO, Scalar::ORDER);
+            assert!(Scalar::ORDER.is_zero());
+        }
         assert!(Scalar::ZERO.is_zero());
-        assert!(Scalar::ORDER.is_zero());
+        assert!(!Scalar::ONE.is_zero());
+    }
+
+    #[test]
+    fn test_one_and_minus_one() {
+        assert!(Scalar::ONE.is_one() && !Scalar::ONE.is_minus_one());
+        assert!((-Scalar::ONE).is_minus_one() && !(-Scalar::ONE).is_one());
+        assert!(!Scalar::ZERO.is_one() && !Scalar::ZERO.is_minus_one());
+        proptest!(|(x: Scalar)| {
+            prop_assert_eq!(x.is_one(), (x - Scalar::ONE).is_zero());
+            prop_assert_eq!(x.is_minus_one(), (x + Scalar::ONE).is_zero());
+            prop_assert_eq!(x.is_zero(), x == Scalar::ZERO);
+        });
     }
 
     #[test]

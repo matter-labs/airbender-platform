@@ -152,7 +152,7 @@ fn affine_sum_and_difference<H: Secp256k1Hooks>(
 ) -> Option<(Affine, Affine)> {
     let mut dx_inv = p_b.x;
     dx_inv.sub_in_place(&p_a.x);
-    if dx_inv.normalizes_to_zero() {
+    if dx_inv.is_zero() {
         return None;
     }
     hooks.fe_invert_and_assign(&mut dx_inv);
@@ -211,9 +211,7 @@ pub(super) fn ecmult<H: Secp256k1Hooks>(
         let (k_b, b_negative) = split_half(na_lam);
 
         // that is the case for the recovery, no inversion is needed then
-        let mut z_minus_one = a.z;
-        z_minus_one.sub_in_place(&FieldElement::ONE);
-        p_a = if z_minus_one.normalizes_to_zero() {
+        p_a = if a.z.is_one() {
             Affine {
                 x: a.x,
                 y: a.y,
