@@ -71,9 +71,84 @@
 //! multiplications for BN254 and two for BLS12-381, instead of the ~4-5k field multiplications
 //! of the final exponentiation.
 //!
+//! # The prover's exponentiations
+//!
+//! The witness is a chain of roots, each an exponentiation by a fixed exponent of about the
+//! size of `p^12`. As in the final exponentiations of the pairings, the powers of `p` are
+//! Frobenius maps: an exponent `e = Σ e_i p^i` with digits `e_i < p` gives
+//! `f^e = Π (f^(p^i))^(e_i)`, a product of twelve exponentiations by exponents of the size of
+//! `p` that share their squarings ([`FrobeniusPowers`]). That is about a thousand
+//! multiplications and squarings in place of the 4.5-7 thousand of a plain square-and-multiply.
+//! The exponents are tabulated in base `p` next to their plain form (`*_BASE_P`). `c^λ` needs
+//! no table: `λ` is a short exponent plus powers of `p` with coefficients `±1`.
+//!
 //! Prover side: [`bn254::witness`], [`bls12_381::witness`] (arkworks arithmetic, host only in
 //! practice). Verifier side: `multi_miller_loop_with_initial` of the pairing implementations,
 //! then [`bn254::check`], [`bls12_381::check`].
+
+use ark_ff::Field;
+
+/// Exponentiation by exponents in base `p` (`e = Σ digits[i] p^i`, the least significant digit
+/// first): `f^e = Π (f^(p^i))^(digits[i])`, where the Frobenius images `f^(p^i)` take the place
+/// of the powers of `p`. The twelve exponentiations run together, left to right over the bits
+/// of the digits: one squaring per bit, and one multiplication per group of four images by
+/// the tabulated product of those whose digit has the bit set.
+pub struct FrobeniusPowers<F: Field> {
+    /// `tables[t][subset]` is the product of the images `4 t + b` for the bits `b` of `subset`
+    tables: [[F; 16]; 3],
+}
+
+impl<F: Field> FrobeniusPowers<F> {
+    pub fn new(f: &F) -> Self {
+        let images: [F; 12] = core::array::from_fn(|power| {
+            let mut image = *f;
+            image.frobenius_map_in_place(power);
+            image
+        });
+        let tables = core::array::from_fn(|group| {
+            let mut table = [F::one(); 16];
+            for subset in 1..16usize {
+                let image = &images[4 * group + subset.trailing_zeros() as usize];
+                let rest = subset & (subset - 1);
+                table[subset] = if rest == 0 {
+                    *image
+                } else {
+                    table[rest] * image
+                };
+            }
+            table
+        });
+        Self { tables }
+    }
+
+    /// The product of all twelve images, `f^(1 + p + ... + p^11)`: the norm of `f` to the
+    /// prime field (as an element of `F`)
+    pub fn norm(&self) -> F {
+        self.tables[0][15] * self.tables[1][15] * self.tables[2][15]
+    }
+
+    /// `f^e` for `e = Σ digits[i] p^i`
+    pub fn pow<const N: usize>(&self, digits: &[[u64; N]; 12]) -> F {
+        let mut result = F::one();
+        let mut started = false;
+        for bit in (0..64 * N).rev() {
+            if started {
+                result.square_in_place();
+            }
+            for (group, table) in self.tables.iter().enumerate() {
+                let subset = (0..4).fold(0usize, |subset, image| {
+                    let digit = &digits[4 * group + image];
+                    subset | ((((digit[bit / 64] >> (bit % 64)) & 1) as usize) << image)
+                });
+                if subset != 0 {
+                    result *= &table[subset];
+                    started = true;
+                }
+            }
+        }
+        result
+    }
+}
 
 pub mod bn254 {
     //! `λ = 6x + 2 + p - p² + p³ = 3 r m` (Section 4 of the paper; `λ = 0 mod r` because
@@ -83,6 +158,7 @@ pub mod bn254 {
     //! then `c = (f ω^i)^(1 / (r m))` (exponentiations by `r^-1 mod h`, `m^-1 mod h`) followed
     //! by a cube root (a Tonelli-Shanks variant, Alg. 4 of the paper), so that
     //! `c^(3 r m) = f ω^i`. The same construction as gnark's `finalExpWitness` for BN254.
+    use super::FrobeniusPowers;
     use crate::bn254::{Fq, Fq12, Fq2, Fq6};
     use ark_ff::{Field, One, Zero};
 
@@ -301,6 +377,259 @@ pub mod bn254 {
         0x1c41570c,
     ];
 
+    /// `EXP1`, in base `p` (the least significant digit first)
+    pub const EXP1_BASE_P: [[u64; 4]; 12] = [
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+        [
+            0x69602eb24829a9c2,
+            0xdd2b2385cd7b4384,
+            0xe81ac1e7808072c9,
+            0x10216f7ba065e00d,
+        ],
+    ];
+    /// `(r m)^-1 mod h = R_INV M_INV mod h`, in base `p` (the least significant digit first)
+    pub const RM_INV_BASE_P: [[u64; 4]; 12] = [
+        [
+            0xf96dcf8b082e62fc,
+            0x3023e36dc7c45880,
+            0x94977b668143a8bd,
+            0x07e443e43898ae58,
+        ],
+        [
+            0x39440cb83a7424fb,
+            0x02a45aa5d1df0ac8,
+            0x99efc58ab4ff33d3,
+            0x026698d3d315c01f,
+        ],
+        [
+            0x5e61051c8f0608d5,
+            0x861879a46b79184a,
+            0x4485de106eb8fcaa,
+            0x2d76e848ec068d41,
+        ],
+        [
+            0xd87904e38d78e800,
+            0x61f4e641a90a5f6c,
+            0xfc679c05537c0cba,
+            0x0bdecaebe0b5ea28,
+        ],
+        [
+            0x8ba9a045accc1a25,
+            0x935e72c6e8780c7c,
+            0x3ff09ea01c4c3329,
+            0x23e069fcb61f176b,
+        ],
+        [
+            0x5eb974d57f1551f2,
+            0x8063f4cc80b427d7,
+            0xf5e13d69b7c2a06c,
+            0x29c7f9b56f4f088f,
+        ],
+        [
+            0x3fa6c28d0442acf8,
+            0x38e4fc17f4d7a03f,
+            0x0fa22a8487d33f24,
+            0x0be15b40a3f62ffc,
+        ],
+        [
+            0xce22024ed6122a65,
+            0x594b8453f33cb769,
+            0x266ff2fa0439d76f,
+            0x0c6a71077cfdca42,
+        ],
+        [
+            0xd5c889818ca77509,
+            0x608c15b8a2d8cb82,
+            0x35b79d5e4353d716,
+            0x144aafe47ca6ea8b,
+        ],
+        [
+            0xd4134831c8af2e1a,
+            0x96abb293e22aff61,
+            0x2f126f4a0b3ab46a,
+            0x0b5f69e3992037a7,
+        ],
+        [
+            0xbd7aef53fd64f7ac,
+            0x2308cd06049eb83f,
+            0xf97b49b3341ddbda,
+            0x18953f1390fe1e73,
+        ],
+        [
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+        ],
+    ];
+    /// `EXP2`, in base `p` (the least significant digit first)
+    pub const EXP2_BASE_P: [[u64; 4]; 12] = [
+        [
+            0xd3da81a69816e7ba,
+            0x7e0770a5754a1b4c,
+            0xda526354271d81de,
+            0x263c4aa04ccb8e59,
+        ],
+        [
+            0xa1a53be2057a204f,
+            0xc7c07c7cb9c88723,
+            0x7d05f94bfc9da821,
+            0x2b9cc51ed7982e5e,
+        ],
+        [
+            0x334f6a069a605b9e,
+            0x79f81dc295d5286d,
+            0x6769498d509c7607,
+            0x0098f12a81332e39,
+        ],
+        [
+            0x011a244207c39435,
+            0xc3b12999da539444,
+            0x0a1cdf85261c9c4a,
+            0x05f96ba90bffce3e,
+        ],
+        [
+            0xcee4de7d7526cccb,
+            0x0d6a35711ed2001a,
+            0xacd0757cfb9cc28e,
+            0x0b59e62796cc6e42,
+        ],
+        [
+            0x9caf98b8e28a0561,
+            0x5723414863506bf1,
+            0x4f840b74d11ce8d1,
+            0x10ba60a621990e47,
+        ],
+        [
+            0x6a7a52f44fed3df7,
+            0xa0dc4d1fa7ced7c8,
+            0xf237a16ca69d0f14,
+            0x161adb24ac65ae4b,
+        ],
+        [
+            0x38450d2fbd50768d,
+            0xea9558f6ec4d439f,
+            0x94eb37647c1d3557,
+            0x1b7b55a337324e50,
+        ],
+        [
+            0x060fc76b2ab3af23,
+            0x344e64ce30cbaf76,
+            0x379ecd5c519d5b9b,
+            0x20dbd021c1feee55,
+        ],
+        [
+            0xd3da81a69816e7b9,
+            0x7e0770a5754a1b4c,
+            0xda526354271d81de,
+            0x263c4aa04ccb8e59,
+        ],
+        [
+            0xa1a53be2057a204f,
+            0xc7c07c7cb9c88723,
+            0x7d05f94bfc9da821,
+            0x2b9cc51ed7982e5e,
+        ],
+        [
+            0x334f6a069a605b9e,
+            0x79f81dc295d5286d,
+            0x6769498d509c7607,
+            0x0098f12a81332e39,
+        ],
+    ];
+    /// `EXP2 mod 27`: the exponent of a 27-th root of unity is taken modulo its order
+    pub const EXP2_MOD_27: &[u64] = &[0xe];
+
+    /// Whether the element of the images `powers` is a cubic residue, `f^EXP1 = 1`: every
+    /// digit of `EXP1 = (p^12 - 1) / 3` in base `p` is `(p - 1) / 3`, so `f^EXP1` is the norm
+    /// of `f` to `Fp` raised to `(p - 1) / 3`, an exponentiation in the prime field
+    fn is_cubic_residue(powers: &FrobeniusPowers<Fq12>) -> bool {
+        let norm = powers.norm();
+        debug_assert!(
+            norm.c1.is_zero()
+                && norm.c0.c1.is_zero()
+                && norm.c0.c2.is_zero()
+                && norm.c0.c0.c1.is_zero(),
+            "the norm is in the prime field"
+        );
+        norm.c0.c0.c0.pow(EXP1_BASE_P[0]).is_one()
+    }
+
+    /// `c^λ` for `λ = 6x + 2 + p - p^2 + p^3`, with `d = c^-1` for the negative term
+    pub(super) fn pow_lambda(c: &Fq12, d: &Fq12) -> Fq12 {
+        let frobenius = |x: &Fq12, power: usize| {
+            let mut image = *x;
+            image.frobenius_map_in_place(power);
+            image
+        };
+        c.pow(SIX_X_PLUS_2) * frobenius(c, 1) * frobenius(d, 2) * frobenius(c, 3)
+    }
+
     /// A 27-th root of unity in `Fp6` (`(0, c010, c011, 0, 0, 0)` in the tower), necessarily a
     /// cubic non-residue: `w^((p^12 - 1) / 27)` for the generator `w` of `Fp12 = Fp[w] / (w^12
     /// - 18 w^6 + 82)`, mapped to the tower (from gnark)
@@ -341,26 +670,30 @@ pub mod bn254 {
         // the power of ω that makes f ω^i a cubic residue
         let mut scaled = *f;
         let mut scaling = Fq12::one();
+        let mut powers = FrobeniusPowers::new(&scaled);
         let mut is_cube = false;
         for _ in 0..3 {
-            if scaled.pow(EXP1).is_one() {
+            if is_cubic_residue(&powers) {
                 is_cube = true;
                 break;
             }
             scaled *= &omega;
             scaling *= &omega;
+            powers = FrobeniusPowers::new(&scaled);
         }
         if !is_cube {
             return None;
         }
-        // (r m)-th root
-        let root = scaled.pow(R_INV).pow(M_INV);
+        // (r m)-th root: one exponentiation by `R_INV M_INV mod h`, as the order of the scaled
+        // identity divides `h` (for anything else the last check below fails)
+        let root = powers.pow(&RM_INV_BASE_P);
         // cube root, Tonelli-Shanks with 3^3 | p^12 - 1 (Alg. 4 of the paper, as in gnark):
         // x^3 / root has order 3^t, t <= 3, and the candidate is corrected by ω^EXP2 until
         // t = 0
         let root_inv = root.inverse()?;
-        let mut x = root.pow(EXP2);
-        let omega_exp2 = omega.pow(EXP2);
+        let mut x = FrobeniusPowers::new(&root).pow(&EXP2_BASE_P);
+        // the order of ω is 27
+        let omega_exp2 = omega.pow(EXP2_MOD_27);
         let order = |x: &Fq12| -> Option<u32> {
             let mut x3 = x.square() * x * root_inv;
             let mut t = 0;
@@ -391,10 +724,11 @@ pub mod bn254 {
         }
         // f s = c^λ must hold; it does for an identity, and never for anything else
         let s = scaling.c0;
-        if *f * Fq12::new(s, Fq6::zero()) != c.pow(LAMBDA) {
+        let d = c.inverse()?;
+        if *f * Fq12::new(s, Fq6::zero()) != pow_lambda(&c, &d) {
             return None;
         }
-        Some((c, c.inverse()?, s))
+        Some((c, d, s))
     }
 
     /// The check on `l`, the Miller loop output with the accumulator started at `d = c^-1`
@@ -424,6 +758,7 @@ pub mod bls12_381 {
     //! parts of `f` of order dividing `POLY` and `27`, so that `f s` has order dividing `FEF`,
     //! and then `c = (f s)^(λ^-1 mod FEF)` gives `c^λ = f s`. The same construction as gnark's
     //! `finalExpWitness` for BLS12-381.
+    use super::FrobeniusPowers;
     use crate::bls12_381::{Fq12, Fq6};
     use ark_ff::{Field, One, Zero};
 
@@ -656,6 +991,217 @@ pub mod bls12_381 {
         0x4ea48c,
     ];
 
+    /// `POLY = (1 - u) / 3`
+    pub const POLY: &[u64] = &[0x460055555555aaab];
+    /// `FEF = h / (27 POLY)`, the common factor of `E27F` and `EPF`, in base `p` (the least
+    /// significant digit first)
+    pub const FEF_BASE_P: [[u64; 6]; 12] = [
+        [
+            0x25ed097b2f684bda,
+            0x6f76876884bd8b8e,
+            0xaac288b217879e39,
+            0x616ce4b157b85e9d,
+            0x0385ae7d0846c545,
+            0x0000000000000000,
+        ],
+        [
+            0x19097b424bda25ed,
+            0xb350425eb4e33fb4,
+            0x7877f643af9dd83c,
+            0x5d21b891d1702a91,
+            0x0385ae7d0846c545,
+            0x0000000000000000,
+        ],
+        [
+            0x62387b424bda0000,
+            0xae34f25e83549509,
+            0x39e172616890ab25,
+            0x2418f7b7239c9184,
+            0x7dc2522ea03d6595,
+            0x0b8eb2a0fd1c667d,
+        ],
+        [
+            0x8e38a12f4bda12f6,
+            0x8f870f8dd7ec4c97,
+            0x7ee15bcf3b9c03cb,
+            0xed089e5da01a594d,
+            0xc266d7945865780f,
+            0x05c759507e8e333e,
+        ],
+        [
+            0x25ecbda125ed097b,
+            0x10bbe2d03bd96bb4,
+            0xc87809053576e66f,
+            0x866b34fa9eb75b62,
+            0x201494e17c516ed2,
+            0x08ab05f8bdd54cde,
+        ],
+        [
+            0x857a71c7097b097b,
+            0xc2a6efb32bd8c471,
+            0xd9e3114cbf8ca929,
+            0xebf58f6e992b63b7,
+            0x96cb8a160c0149dc,
+            0x1439b899baf1b35b,
+        ],
+        [
+            0x40aa8e38e38e425e,
+            0x3ebdbda0db8de38e,
+            0x94fffc2f58e466d8,
+            0xf239230f49c4f89a,
+            0x61336bca2c32bc07,
+            0x02e3aca83f47199f,
+        ],
+        [
+            0xe0e31c71c71c4bda,
+            0x051d57ff912eda12,
+            0x945ad4d3685e7ee1,
+            0xc2ac1305cbe432e6,
+            0x7a3ca3b197f6a04f,
+            0x0b8eb2a0fd1c667d,
+        ],
+        [
+            0x2b091c71c71c5555,
+            0x1471fd54a8842f68,
+            0xa0019eeb56fbfe04,
+            0xc7dc97b7758ed233,
+            0x190937e76bc3e447,
+            0x08ab05f8bdd54cde,
+        ],
+        [
+            0x925df684c71c25ed,
+            0x3d59357a39b32284,
+            0x2811fbb32b80f76a,
+            0xcb14b4e7f4e810aa,
+            0xed6dea691f5fb614,
+            0x171d6541fa38ccfa,
+        ],
+        [
+            0xd3ffda12ed09684b,
+            0xa7b1b78e0a38ae12,
+            0x445ac211e28570ae,
+            0x9962969cfe9d0215,
+            0x5dadbd4d23ebf6c2,
+            0x02e3aca83f47199f,
+        ],
+        [
+            0x07c725ed097b4bda,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+        ],
+    ];
+    /// `LAMBDA_INV_MOD_FEF`, in base `p` (the least significant digit first)
+    pub const LAMBDA_INV_MOD_FEF_BASE_P: [[u64; 6]; 12] = [
+        [
+            0x6ca90e0a821440e4,
+            0x1383b5d0ebd5bf5c,
+            0x9f6fc2c865dbe35e,
+            0x5ef25cf4c43902cb,
+            0xb7c30e486540bd66,
+            0x060f503d133880c7,
+        ],
+        [
+            0x45e13fc0730166ab,
+            0x13cd4f525dafea8d,
+            0x111c7b44c1f0ba2e,
+            0xa62aab8ebd02c0b9,
+            0x4f2bd277712bda60,
+            0x1707f81d81bd3082,
+        ],
+        [
+            0x9053a635979de487,
+            0x8d897536d02f9126,
+            0xb2b07691658fb475,
+            0x89667a2317a7b379,
+            0xea63e9bd44de2e2a,
+            0x0ed1b431ff1de2f4,
+        ],
+        [
+            0x2040d1abc1b5c5ca,
+            0xcbdfc2fbc4289425,
+            0x185472d0913c9ddf,
+            0x7be1f938eba244a0,
+            0xa637b52a168622c1,
+            0x0d18720ef888f73e,
+        ],
+        [
+            0x490f41b1c854d4ad,
+            0xeed852391b4abd8d,
+            0x2a297ce017a1b292,
+            0xd1eb0291bbe614d5,
+            0xe38b335eac92bed1,
+            0x0668832008cbcc2b,
+        ],
+        [
+            0x6d18b0c74c29c90c,
+            0x88880ea73fefee85,
+            0x2b4a380b948f8b66,
+            0x32fda5697f3cda1c,
+            0x090cfe4e333eb551,
+            0x062205cd27177413,
+        ],
+        [
+            0x561f1a586381af68,
+            0x3a65ff28d77c88d4,
+            0x44488e1d824d3293,
+            0x5b0c90dda60a6aeb,
+            0xe8a8ad4dc2139968,
+            0x0ae87d0701299360,
+        ],
+        [
+            0x063b7df807e9344b,
+            0xb606a0a8b1231bf9,
+            0xb4b263d69b7cf70c,
+            0xc40be0bd5765c50b,
+            0x11816f80bb4079eb,
+            0x0d70a2963dc4d09a,
+        ],
+        [
+            0x39c9022da34c99fd,
+            0xd1af5e6c973f985f,
+            0x953a5b8b2947ec52,
+            0xc656326843b516b7,
+            0xbf37788da8fb9533,
+            0x0ad11f0ad3197e11,
+        ],
+        [
+            0x108696b7e3df2a82,
+            0x44bf5afe9cabef0c,
+            0x8ef330f8cc087e47,
+            0x94d2cf64ef8fd7d0,
+            0x9ac26a68cb69421a,
+            0x176028a4c6f909dd,
+        ],
+        [
+            0xda0dbc0672954649,
+            0x4d67e2c24c095ff7,
+            0xfdc292c60ddd113e,
+            0xd84e733e5c298389,
+            0xad06f704d5832044,
+            0x0a8f4a240b9647fc,
+        ],
+        [
+            0x0605379b2ec13579,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+            0x0000000000000000,
+        ],
+    ];
+    /// `|u|`, the low part of `λ = p + |u|`
+    pub const U_ABS: &[u64] = &[0xd201000000010000];
+
+    /// `c^λ` for `λ = p - u = p + |u|`
+    pub(super) fn pow_lambda(c: &Fq12) -> Fq12 {
+        let mut image = *c;
+        image.frobenius_map_in_place(1);
+        image * c.pow(U_ABS)
+    }
+
     /// The witness `(d = c^-1, s)` of `f`, the product of the Miller functions `f_|u|` over all
     /// pairs (without the conjugation that stands for the negative seed: it changes `f` by an
     /// `r`-th residue only). `f s = c^λ`. `None` if `f` is not the pairing identity (then no
@@ -663,14 +1209,17 @@ pub mod bls12_381 {
     /// rather than looped on).
     pub fn witness(f: &Fq12) -> Option<(Fq12, Fq6)> {
         // 1. the POLY-th root part: root = f^(27 FEF) has order dividing POLY
-        let root = f.pow(E27F);
+        // `f^FEF` once: both parts below are short powers of it (`E27F = 27 FEF`,
+        // `EPF = POLY FEF`)
+        let reduced = FrobeniusPowers::new(f).pow(&FEF_BASE_P);
+        let root = reduced.pow([27u64]);
         let root_poly_inverse = if root.is_one() {
             Fq12::one()
         } else {
             root.pow(E27F_NEG_INV_MOD_POLY)
         };
         // 2. the 27-th root part: root = f^(POLY FEF) has order 3^k, k <= 3
-        let root = f.pow(EPF);
+        let root = reduced.pow(POLY);
         let root_27th_inverse = if root.is_one() {
             Fq12::one()
         } else {
@@ -696,9 +1245,9 @@ pub mod bls12_381 {
         }
         // 3. f s has order dividing FEF, coprime to λ
         let scaled = *f * scaling;
-        let c = scaled.pow(LAMBDA_INV_MOD_FEF);
+        let c = FrobeniusPowers::new(&scaled).pow(&LAMBDA_INV_MOD_FEF_BASE_P);
         // f s = c^λ must hold; it does for an identity, and never for anything else
-        if c.pow(LAMBDA) != scaled {
+        if pow_lambda(&c) != scaled {
             return None;
         }
         Some((c.inverse()?, scaling.c0))
@@ -950,6 +1499,70 @@ mod tests {
             );
             assert_eq!(c.square() * c, z2, "cube root");
             assert_eq!(c.pow(BN254_LAMBDA), y, "lambda {k}");
+        }
+    }
+
+    /// The exponentiation in base `p` against the plain one, for every tabulated exponent, on
+    /// Miller loop outputs that are not pairing identities (elements with no special order)
+    #[test]
+    fn bn254_base_p_exponents_match_plain() {
+        use crate::bn254::curves::Bn254;
+        for k in 0..2 {
+            let (p, q) = bn254_points(k);
+            let f = Bn254::multi_miller_loop([p], [q]).0;
+            let powers = FrobeniusPowers::new(&f);
+            assert_eq!(powers.pow(&bn254::EXP1_BASE_P), f.pow(bn254::EXP1), "EXP1");
+            assert_eq!(powers.pow(&bn254::EXP2_BASE_P), f.pow(bn254::EXP2), "EXP2");
+            assert_eq!(
+                powers.norm().pow(bn254::EXP1_BASE_P[0]),
+                f.pow(bn254::EXP1),
+                "norm"
+            );
+            let inverse = f.inverse().unwrap();
+            assert_eq!(
+                bn254::pow_lambda(&f, &inverse),
+                f.pow(bn254::LAMBDA),
+                "lambda"
+            );
+            assert_eq!(
+                bn254::pow_lambda(&f, &inverse),
+                f.pow(BN254_LAMBDA),
+                "lambda"
+            );
+            // the merged root exponent is `R_INV M_INV` modulo `h`: equal on elements of order
+            // dividing `h`, the `r`-th powers
+            let residue = f.pow(<crate::bn254::Fr as ark_ff::PrimeField>::MODULUS);
+            assert_eq!(
+                FrobeniusPowers::new(&residue).pow(&bn254::RM_INV_BASE_P),
+                residue.pow(bn254::R_INV).pow(bn254::M_INV),
+                "RM_INV"
+            );
+        }
+        let omega = bn254::root_27th_of_unity();
+        assert_eq!(omega.pow(bn254::EXP2_MOD_27), omega.pow(bn254::EXP2));
+    }
+
+    #[test]
+    fn bls12_381_base_p_exponents_match_plain() {
+        use crate::bls12_381::curves::Bls12_381;
+        for k in 0..2 {
+            let (p, q) = bls_points(k);
+            let f = Bls12_381::multi_miller_loop([p], [q]).0;
+            let powers = FrobeniusPowers::new(&f);
+            let reduced = powers.pow(&bls12_381::FEF_BASE_P);
+            assert_eq!(reduced.pow([27u64]), f.pow(bls12_381::E27F), "E27F");
+            assert_eq!(reduced.pow(bls12_381::POLY), f.pow(bls12_381::EPF), "EPF");
+            assert_eq!(
+                powers.pow(&bls12_381::LAMBDA_INV_MOD_FEF_BASE_P),
+                f.pow(bls12_381::LAMBDA_INV_MOD_FEF),
+                "LAMBDA_INV_MOD_FEF"
+            );
+            assert_eq!(
+                bls12_381::pow_lambda(&f),
+                f.pow(bls12_381::LAMBDA),
+                "lambda"
+            );
+            assert_eq!(bls12_381::pow_lambda(&f), f.pow(BLS12_381_LAMBDA), "lambda");
         }
     }
 }
