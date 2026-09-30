@@ -214,7 +214,7 @@ impl TransitionMatrix {
 
         if mod_info.modulus.0[1] != 0 {
             cd += mod_info.modulus.0[1] as i128 * md as i128;
-            ce += mod_info.modulus.0[1] as i128 * md as i128;
+            ce += mod_info.modulus.0[1] as i128 * me as i128;
         }
 
         d_out.0[0] = (cd as u64 & m62) as i64;
@@ -228,7 +228,7 @@ impl TransitionMatrix {
 
         if mod_info.modulus.0[2] != 0 {
             cd += mod_info.modulus.0[2] as i128 * md as i128;
-            ce += mod_info.modulus.0[2] as i128 * md as i128;
+            ce += mod_info.modulus.0[2] as i128 * me as i128;
         }
 
         d_out.0[1] = (cd as u64 & m62) as i64;
@@ -240,9 +240,9 @@ impl TransitionMatrix {
         cd += u * d3 + v * e3;
         ce += q * d3 + r * e3;
 
-        if mod_info.modulus.0[2] != 0 {
+        if mod_info.modulus.0[3] != 0 {
             cd += mod_info.modulus.0[3] as i128 * md as i128;
-            ce += mod_info.modulus.0[3] as i128 * md as i128;
+            ce += mod_info.modulus.0[3] as i128 * me as i128;
         }
 
         d_out.0[2] = (cd as u64 & m62) as i64;
