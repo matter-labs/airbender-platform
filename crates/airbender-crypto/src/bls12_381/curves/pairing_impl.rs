@@ -76,9 +76,14 @@ impl Bls12_381 {
                     let mut ell_coeffs = q.ell_coeffs.iter();
                     for i in BitIteratorBE::without_leading_zeros(Config::X).skip(1) {
                         fp12_square_in_place(&mut f);
-                        Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+                        Self::ell_prepared(&mut f, ell_coeffs.next().unwrap(), &p.0, q.normalized);
                         if i {
-                            Self::ell(&mut f, ell_coeffs.next().unwrap(), &p.0);
+                            Self::ell_prepared(
+                                &mut f,
+                                ell_coeffs.next().unwrap(),
+                                &p.0,
+                                q.normalized,
+                            );
                             if let Some(initial) = base {
                                 fp12_mul_assign(&mut f, initial);
                             }
@@ -100,23 +105,69 @@ impl Bls12_381 {
         }
     }
 
-    /// Evaluates the line function at point p.
-    fn ell(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine) {
-        match Config::TWIST_TYPE {
-            TwistType::M => {
-                fp2_tmp!(c2 = &coeffs.2);
-                fp2_mul_by_fp(c2, &p.y);
-                fp2_tmp!(c1 = &coeffs.1);
-                fp2_mul_by_fp(c1, &p.x);
-                fp12_mul_by_014(f, &coeffs.0, c1, c2);
+    /// The Miller loop over all the pairs at once: the accumulator is squared once per bit of
+    /// the seed, whatever the number of pairs. The result is the product of the Miller loop
+    /// outputs of the pairs (not conjugated for the negative seed, as
+    /// [`Self::multi_miller_loop_with_initial`]), with the lines of a normalized prepared
+    /// point (`G2PreparedNoAlloc::normalized`) taken as they are: up to a factor in `Fq2`,
+    /// which the pairing check is invariant to.
+    ///
+    /// With `initial`, it is the start of the accumulator, which is also multiplied by it at
+    /// the set bits of the seed, as in [`Self::multi_miller_loop_with_initial`].
+    ///
+    /// A pair with a `G1` point at infinity contributes nothing (`e(O, Q) = 1`); the `G2`
+    /// points must not be points at infinity.
+    pub fn multi_miller_loop_shared<'a>(
+        initial: Option<&Fq12>,
+        pairs: impl Iterator<Item = (&'a G1Affine, &'a G2PreparedNoAlloc)> + Clone,
+    ) -> Fq12 {
+        let mut f = match initial {
+            Some(initial) => *initial,
+            None => Fq12::one(),
+        };
+        let lines = |f: &mut Fq12, index: usize| {
+            for (p, q) in pairs.clone() {
+                debug_assert!(!q.infinity);
+                if p.infinity {
+                    continue;
+                }
+                Self::ell_prepared(f, &q.ell_coeffs[index], p, q.normalized);
             }
-            TwistType::D => {
-                fp2_tmp!(c0 = &coeffs.0);
-                fp2_mul_by_fp(c0, &p.y);
-                fp2_tmp!(c1 = &coeffs.1);
-                fp2_mul_by_fp(c1, &p.x);
-                fp12_mul_by_034(f, c0, c1, &coeffs.2);
+        };
+        let mut index = 0;
+        for (i, bit) in BitIteratorBE::without_leading_zeros(Config::X)
+            .skip(1)
+            .enumerate()
+        {
+            // the first squaring is of `1` unless the accumulator was started elsewhere
+            if i != 0 || initial.is_some() {
+                fp12_square_in_place(&mut f);
             }
+            lines(&mut f, index);
+            index += 1;
+            if bit {
+                lines(&mut f, index);
+                index += 1;
+                if let Some(initial) = initial {
+                    fp12_mul_assign(&mut f, initial);
+                }
+            }
+        }
+        debug_assert_eq!(index, BLS12_381_NUM_ELL_COEFFS);
+        f
+    }
+
+    /// Evaluates a line of a prepared point at `p`, normalized or not
+    fn ell_prepared(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine, normalized: bool) {
+        const { assert!(matches!(Config::TWIST_TYPE, TwistType::M)) };
+        fp2_tmp!(c2 = &coeffs.2);
+        fp2_mul_by_fp(c2, &p.y);
+        fp2_tmp!(c1 = &coeffs.1);
+        fp2_mul_by_fp(c1, &p.x);
+        if normalized {
+            fp12_mul_by_114(f, c1, c2);
+        } else {
+            fp12_mul_by_014(f, &coeffs.0, c1, c2);
         }
     }
 
@@ -273,6 +324,7 @@ impl From<G2Affine> for G2PreparedNoAlloc {
             Self {
                 ell_coeffs: [Default::default(); BLS12_381_NUM_ELL_COEFFS],
                 infinity: true,
+                normalized: false,
             }
         } else {
             use ark_ff::AdditiveGroup;
@@ -297,6 +349,7 @@ impl From<G2Affine> for G2PreparedNoAlloc {
             Self {
                 ell_coeffs: unsafe { ell_coeffs.map(|el| el.assume_init()) },
                 infinity: false,
+                normalized: false,
             }
         }
     }
@@ -488,6 +541,10 @@ pub const BLS12_381_NUM_ELL_COEFFS: usize = const {
 pub struct G2PreparedNoAlloc {
     pub ell_coeffs: [ark_ec::bls12::g2::EllCoeff<Config>; BLS12_381_NUM_ELL_COEFFS],
     pub infinity: bool,
+    /// The lines are divided by their first coefficient, which is then one and is not stored
+    /// (the coefficient of a line is a factor in `Fq2`, which the pairing check is invariant
+    /// to). Only the lines of `multi_miller_loop_shared` may be normalized.
+    pub normalized: bool,
 }
 
 impl CanonicalSerialize for G2PreparedNoAlloc {

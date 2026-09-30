@@ -440,6 +440,118 @@ where
     }
 }
 
+/// `k p + l q` with the divisions of `divider`: the doublings are shared between the two
+/// multiplications
+pub(crate) fn glv_mul_two_affine<C, D>(
+    p: &Affine<C>,
+    k: C::ScalarField,
+    q: &Affine<C>,
+    l: C::ScalarField,
+    divider: &mut D,
+) -> Affine<C>
+where
+    C: SWCurveConfig + GLVConfig + GLVConfigNoAllocator,
+    C::BaseField: CopyAssign,
+    D: Divider<C::BaseField>,
+{
+    debug_assert!(C::COEFF_A.is_zero());
+    if p.infinity {
+        return glv_mul_affine(q, l, divider);
+    }
+    if q.infinity {
+        return glv_mul_affine(p, k, divider);
+    }
+    let (Some(halves_p), Some(halves_q)) = (glv_halves::<C>(k), glv_halves::<C>(l)) else {
+        // see `glv_mul_affine`
+        use ark_ec::{AffineRepr, CurveGroup, PrimeGroup};
+        let sum =
+            p.into_group().mul_bigint(k.into_bigint()) + q.into_group().mul_bigint(l.into_bigint());
+        return sum.into_affine();
+    };
+    let mut digits = [[0i8; DIGITS]; 4];
+    let [digits_p1, digits_p2, digits_q1, digits_q2] = &mut digits;
+    let len = wnaf(digits_p1, halves_p.0 .1)
+        .max(wnaf(digits_p2, halves_p.1 .1))
+        .max(wnaf(digits_q1, halves_q.0 .1))
+        .max(wnaf(digits_q2, halves_q.1 .1));
+    if len == 0 {
+        return Affine::identity();
+    }
+    let beta = &C::ENDO_COEFFS[0];
+    let mut table_p = MaybeUninit::uninit();
+    let table_p = Table::init(&mut table_p, &p.x, &p.y, beta, divider);
+    let mut table_q = MaybeUninit::uninit();
+    let table_q = Table::init(&mut table_q, &q.x, &q.y, beta, divider);
+
+    let mut slot = MaybeUninit::uninit();
+    let r = Point::init_infinity(&mut slot);
+    for i in (0..len).rev() {
+        // the first addition after a doubling goes together with it
+        let mut doubled = false;
+        let streams = [
+            (table_p, digits_p1[i], false, !halves_p.0 .0),
+            (table_p, digits_p2[i], true, !halves_p.1 .0),
+            (table_q, digits_q1[i], false, !halves_q.0 .0),
+            (table_q, digits_q2[i], true, !halves_q.1 .0),
+        ];
+        for (table, digit, image, negate) in streams {
+            if digit == 0 {
+                continue;
+            }
+            let Some(addend) = table.addend(digit, image, negate) else {
+                continue;
+            };
+            if doubled {
+                r.add(addend, divider);
+            } else {
+                r.double_and_add(addend, divider);
+                doubled = true;
+            }
+        }
+        if !doubled {
+            r.double(divider);
+        }
+    }
+
+    if r.infinity {
+        Affine::identity()
+    } else {
+        Affine::new_unchecked(r.x, r.y)
+    }
+}
+
+/// `k p` for a small `k`, by double-and-add, with the divisions of `divider`
+pub(crate) fn mul_u64_affine<C, D>(p: &Affine<C>, k: u64, divider: &mut D) -> Affine<C>
+where
+    C: SWCurveConfig,
+    C::BaseField: CopyAssign,
+    D: Divider<C::BaseField>,
+{
+    debug_assert!(C::COEFF_A.is_zero());
+    if p.infinity || k == 0 {
+        return Affine::identity();
+    }
+    let addend = Addend {
+        x: &p.x,
+        y: &p.y,
+        negate: false,
+    };
+    let mut slot = MaybeUninit::uninit();
+    let r = Point::init_infinity(&mut slot);
+    for i in (0..64 - k.leading_zeros()).rev() {
+        if (k >> i) & 1 == 1 {
+            r.double_and_add(addend, divider);
+        } else {
+            r.double(divider);
+        }
+    }
+    if r.infinity {
+        Affine::identity()
+    } else {
+        Affine::new_unchecked(r.x, r.y)
+    }
+}
+
 /// `a + b` with the division of `divider`
 pub(crate) fn add_affine<C, D>(a: &Affine<C>, b: &Affine<C>, divider: &mut D) -> Affine<C>
 where
@@ -622,16 +734,53 @@ mod tests {
         }
     }
 
+    fn check_two_and_small<C>()
+    where
+        C: SWCurveConfig + GLVConfig + GLVConfigNoAllocator,
+        C::BaseField: CopyAssign,
+    {
+        let mut rng = ark_std::test_rng();
+        let points = multiples::<C>(1);
+        let scalars = [
+            C::ScalarField::ZERO,
+            -C::ScalarField::ONE,
+            C::LAMBDA,
+            C::ScalarField::rand(&mut rng),
+        ];
+        // the pairs of points and of scalars: the products of the emulated delegations are slow
+        for (i, (p, q)) in points.iter().zip(points.iter().rev()).enumerate() {
+            for (k, l) in scalars
+                .iter()
+                .zip(scalars.iter().cycle().skip(i))
+                .chain([(&scalars[3], &scalars[3])])
+            {
+                let expected = (p.into_group().mul_bigint(k.into_bigint())
+                    + q.into_group().mul_bigint(l.into_bigint()))
+                .into_affine();
+                assert_eq!(glv_mul_two_affine(p, *k, q, *l, &mut Counting(0)), expected);
+            }
+        }
+        for p in &points {
+            for k in [0u64, 1, 3, 0xd201000000010000, u64::MAX] {
+                let expected = p.into_group().mul_bigint([k]).into_affine();
+                assert_eq!(mul_u64_affine(p, k, &mut Counting(0)), expected);
+            }
+        }
+    }
+
     #[test]
     fn bn254_g1() {
         check_additions::<crate::bn254::curves::g1::Config>();
         check_steps::<crate::bn254::curves::g1::Config>();
         check_multiplication::<crate::bn254::curves::g1::Config>();
+        check_two_and_small::<crate::bn254::curves::g1::Config>();
     }
 
     #[test]
     fn bls12_381_g1() {
         check_additions::<crate::bls12_381::curves::g1::Config>();
         check_steps::<crate::bls12_381::curves::g1::Config>();
+        check_multiplication::<crate::bls12_381::curves::g1::Config>();
+        check_two_and_small::<crate::bls12_381::curves::g1::Config>();
     }
 }

@@ -307,6 +307,20 @@ pub fn g1_from_compressed_with_sqrt(
     bytes: &[u8],
     sqrt: impl FnOnce(&Fq) -> Option<Fq>,
 ) -> Result<G1Affine, SerializationError> {
+    g1_from_compressed_with_hints(bytes, sqrt, |p| {
+        use ark_ec::short_weierstrass::SWCurveConfig;
+        G1Config::is_in_correct_subgroup_assuming_on_curve(p)
+    })
+}
+
+/// [`g1_from_compressed_with_sqrt`] with the subgroup membership test supplied too (e.g.
+/// `g1::is_in_subgroup_with_divider` with hinted divisions), for a point on the curve that is
+/// not the point at infinity
+pub fn g1_from_compressed_with_hints(
+    bytes: &[u8],
+    sqrt: impl FnOnce(&Fq) -> Option<Fq>,
+    is_in_subgroup: impl FnOnce(&G1Affine) -> bool,
+) -> Result<G1Affine, SerializationError> {
     use ark_ec::short_weierstrass::SWCurveConfig;
     use ark_ff::Field;
 
@@ -340,7 +354,7 @@ pub fn g1_from_compressed_with_sqrt(
         smaller
     };
     let p = G1Affine::new_unchecked(x, y);
-    if !p.is_in_correct_subgroup_assuming_on_curve() {
+    if !is_in_subgroup(&p) {
         return Err(SerializationError::InvalidData);
     }
     Ok(p)

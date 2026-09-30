@@ -628,6 +628,38 @@ where
     fp6_add_assign(&mut a.c0, b);
 }
 
+/// `a *= (1 + c1 v) + c4 v w`, the sparse line multiplication of an M-type twist for a line
+/// normalized to a constant coefficient of one: with `s0 = 1 + c1 v` and `s1 = c4 v`, the
+/// result is `a0 s0 + v a1 s1 + ((a0 + a1)(s0 + s1) - a0 s0 - a1 s1) w`, where a product
+/// with `1 + c v` is the operand plus `c` times its shift by `v`
+pub(crate) fn fp12_mul_by_114<P: Fp12Config>(a: &mut Fp12<P>, c1: &Fp2Of12<P>, c4: &Fp2Of12<P>)
+where
+    P::Fp6Config: MulByXi,
+    <P::Fp6Config as Fp6Config>::Fp2Config: NonresidueMinusOne,
+{
+    // e = (a0 + a1)(1 + (c1 + c4) v)
+    fp6_tmp!(e = &a.c0);
+    fp6_add_assign(e, &a.c1);
+    fp2_tmp!(c1c4 = c1);
+    fp2_add_assign(c1c4, c4);
+    fp6_tmp!(shifted = e);
+    fp6_mul_by_1(shifted, c1c4);
+    fp6_add_assign(e, shifted);
+    // b = a1 c4 v
+    fp6_mul_by_1(&mut a.c1, c4);
+    // p = a0 (1 + c1 v)
+    fp6_assign(shifted, &a.c0);
+    fp6_mul_by_1(shifted, c1);
+    fp6_add_assign(&mut a.c0, shifted);
+    // c1 = e - p - b
+    fp6_sub_assign(e, &a.c0);
+    fp6_sub_assign(e, &a.c1);
+    // c0 = p + v b
+    fp6_mul_by_nonresidue_in_place(&mut a.c1);
+    fp6_add_assign(&mut a.c0, &a.c1);
+    fp6_assign(&mut a.c1, e);
+}
+
 /// `a *= (c0 + c1 v) + c4 v w`, the sparse line multiplication of an M-type twist
 pub(crate) fn fp12_mul_by_014<P: Fp12Config>(
     a: &mut Fp12<P>,
