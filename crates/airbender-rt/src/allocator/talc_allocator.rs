@@ -2,6 +2,17 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
 use core::ptr::{null_mut, NonNull};
 
+/// Largest heap handed to talc in one claim: `isize::MAX` rounded down to a page.
+///
+/// talc walks a free gap with `base.add(size)` / `acme.sub(size)`, which is undefined
+/// behaviour once the gap exceeds `isize::MAX`: 2 GiB on riscv32, which an arena on
+/// the 4 GiB machine image (`RamSize::FourGb`) can exceed. The arena is therefore
+/// claimed as several adjacent heaps. talc never merges across heaps (each heap's
+/// bottom is tagged allocated), so every gap stays within its heap; the only thing
+/// given up is a single allocation straddling two heaps, and `Layout` already caps
+/// one allocation at `isize::MAX`.
+const MAX_HEAP_SIZE: usize = (isize::MAX as usize) & !0xFFF;
+
 pub struct TalcAllocator {
     state: UnsafeCell<TalcState>,
 }
@@ -23,17 +34,25 @@ impl TalcAllocator {
     ///
     /// Caller must ensure `start` and `end` define a writable heap range.
     pub unsafe fn init(&self, start: *mut usize, end: *mut usize) {
+        self.init_with_max_heap_size(start, end, MAX_HEAP_SIZE);
+    }
+
+    unsafe fn init_with_max_heap_size(&self, start: *mut usize, end: *mut usize, max: usize) {
         let state = &mut *self.state.get();
-        let base = start.cast::<u8>();
-        let size = (end as usize).saturating_sub(start as usize);
-        if size == 0 {
+        let end = end as usize;
+        let mut base = start as usize;
+        if end <= base {
             state.allocator = None;
             return;
         }
 
         let mut allocator = talc::Talc::new(talc::ClaimOnOom::new(talc::Span::empty()));
-        let span = talc::Span::from_base_size(base, size);
-        allocator.claim(span).expect("must claim initial heap span");
+        while base < end {
+            let size = (end - base).min(max);
+            let span = talc::Span::from_base_size(base as *mut u8, size);
+            allocator.claim(span).expect("must claim heap span");
+            base += size;
+        }
         state.allocator = Some(allocator);
     }
 
@@ -68,6 +87,9 @@ unsafe impl GlobalAlloc for TalcAllocator {
         self.dealloc_inner(ptr, layout)
     }
 
+    // Deliberately alloc + copy + free rather than talc's `grow_in_place`, which
+    // compares addresses and, near the top of a 32-bit address space, grants a growth
+    // whose end wraps past 2^32 (SFBdragon/talc#56).
     unsafe fn realloc(&self, ptr: *mut u8, old_layout: Layout, new_size: usize) -> *mut u8 {
         // Safety for `from_size_align_unchecked`: `old_layout` _must_ be the same layout that was
         // used to allocate `ptr`.`
@@ -107,3 +129,64 @@ pub unsafe fn init(start: *mut usize, end: *mut usize) {
 /// No-op on non-riscv32 targets; kept for API compatibility.
 #[cfg(not(target_arch = "riscv32"))]
 pub unsafe fn init(_start: *mut usize, _end: *mut usize) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{vec, vec::Vec};
+
+    const ARENA: usize = 1 << 20;
+    const HEAP: usize = 256 << 10;
+
+    /// A 1 MiB host buffer claimed as 256 KiB heaps, so the split is exercised on a
+    /// 64-bit host where `MAX_HEAP_SIZE` is out of reach.
+    fn split_allocator(arena: &mut [u64]) -> (TalcAllocator, usize, usize) {
+        let allocator = TalcAllocator::uninit();
+        let start = arena.as_mut_ptr() as usize;
+        let end = start + core::mem::size_of_val(arena);
+        unsafe { allocator.init_with_max_heap_size(start as *mut usize, end as *mut usize, HEAP) };
+        (allocator, start, end)
+    }
+
+    #[test]
+    fn allocations_across_heaps_stay_in_the_arena_and_do_not_overlap() {
+        let mut arena = vec![0u64; ARENA / 8];
+        let (allocator, start, end) = split_allocator(&mut arena);
+        let layout = Layout::from_size_align(16 << 10, 8).unwrap();
+
+        let mut blocks = Vec::new();
+        loop {
+            let ptr = unsafe { allocator.alloc(layout) };
+            if ptr.is_null() {
+                break;
+            }
+            let addr = ptr as usize;
+            assert!(addr >= start && addr + layout.size() <= end);
+            blocks.push(addr);
+        }
+        // Each 256 KiB heap loses a little to tags (and the first to talc's
+        // metadata), so a few fewer than 64 fit, spread over all four heaps.
+        assert!(blocks.len() >= 56, "only {} blocks fit", blocks.len());
+        assert!(blocks.iter().any(|&a| a >= start + 3 * HEAP));
+
+        blocks.sort_unstable();
+        assert!(blocks.windows(2).all(|w| w[0] + layout.size() <= w[1]));
+
+        for &addr in &blocks {
+            unsafe { allocator.dealloc(addr as *mut u8, layout) };
+        }
+        let again = unsafe { allocator.alloc(layout) };
+        assert!(!again.is_null());
+    }
+
+    #[test]
+    fn an_allocation_larger_than_one_heap_is_refused() {
+        let mut arena = vec![0u64; ARENA / 8];
+        let (allocator, _, _) = split_allocator(&mut arena);
+
+        let fits = Layout::from_size_align(HEAP / 2, 8).unwrap();
+        let straddles = Layout::from_size_align(HEAP + (16 << 10), 8).unwrap();
+        assert!(!unsafe { allocator.alloc(fits) }.is_null());
+        assert!(unsafe { allocator.alloc(straddles) }.is_null());
+    }
+}
