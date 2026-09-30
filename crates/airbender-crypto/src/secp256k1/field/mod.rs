@@ -10,7 +10,7 @@ mod mod_inv32;
 #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
 mod field_5x52;
 #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
-mod mod_inv64;
+pub(crate) mod mod_inv64;
 
 #[cfg(any(
     all(target_arch = "riscv32", feature = "bigint_ops"),

@@ -61,6 +61,8 @@ pub mod bytes32;
 #[cfg(test)]
 mod delegation_counts;
 pub(crate) mod extension_tower;
+#[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
+pub mod field_inverse;
 pub mod hinted_ops;
 pub(crate) mod jacobian;
 pub mod residue_witness;
