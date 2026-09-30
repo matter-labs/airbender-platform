@@ -1,5 +1,6 @@
 use super::{resolve_cycles, ExecutionResult, FlamegraphConfig, Runner};
 use crate::error::{HostError, Result};
+use crate::machine::RamSize;
 use crate::machine::{MachineProfile, TranspilerDecoderConfig};
 use crate::receipt::Receipt;
 use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
@@ -10,7 +11,6 @@ use riscv_transpiler::cycle::CycleMarkerHooks;
 use riscv_transpiler::ir::DecodingOptions;
 #[cfg(target_arch = "x86_64")]
 use riscv_transpiler::jit::JittedCode;
-use riscv_transpiler::jit::RAM_SIZE;
 use riscv_transpiler::vm::{
     DelegationsCounters, FlamegraphConfig as VmFlamegraphConfig, RamWithRomRegion, SimpleTape,
     State, VmFlamegraphProfiler, VM,
@@ -26,6 +26,7 @@ pub struct TranspilerRunnerBuilder {
     flamegraph: Option<FlamegraphConfig>,
     decoder: TranspilerDecoderConfig,
     use_jit: bool,
+    ram_size: RamSize,
 }
 
 impl TranspilerRunnerBuilder {
@@ -37,7 +38,14 @@ impl TranspilerRunnerBuilder {
             flamegraph: None,
             decoder: TranspilerDecoderConfig::default(),
             use_jit: false,
+            ram_size: RamSize::default(),
         }
+    }
+
+    /// Size of the RAM image the machine runs with. Defaults to 1 GiB.
+    pub fn with_ram_size(mut self, ram_size: RamSize) -> Self {
+        self.ram_size = ram_size;
+        self
     }
 
     pub fn with_cycles(mut self, cycles: usize) -> Self {
@@ -137,6 +145,7 @@ impl TranspilerRunnerBuilder {
             flamegraph: self.flamegraph,
             decoder: self.decoder,
             use_jit: self.use_jit,
+            ram_size: self.ram_size,
         })
     }
 }
@@ -149,6 +158,7 @@ pub struct TranspilerRunner {
     flamegraph: Option<FlamegraphConfig>,
     decoder: TranspilerDecoderConfig,
     use_jit: bool,
+    ram_size: RamSize,
 }
 
 impl Runner for TranspilerRunner {
@@ -188,6 +198,7 @@ impl TranspilerRunner {
             &mut non_determinism_source,
             &bin_words,
             cycles_bound,
+            self.ram_size.to_jit(),
         );
         let cycles_executed = ((state.timestamp - INITIAL_TIMESTAMP) / TIMESTAMP_STEP) as usize;
 
@@ -239,8 +250,10 @@ impl TranspilerRunner {
         let text_words = read_u32_words(&self.app_text_path)?;
         let instructions = self.decoder.preprocess(&text_words);
         let instruction_tape = SimpleTape::new(&instructions);
-        let mut ram =
-            RamWithRomRegion::<{ ROM_SECOND_WORD_BITS }>::from_rom_content(&bin_words, RAM_SIZE);
+        let mut ram = RamWithRomRegion::<{ ROM_SECOND_WORD_BITS }>::from_rom_content(
+            &bin_words,
+            self.ram_size.to_jit().ram_size(),
+        );
         let mut state = State::initial_with_counters(DelegationsCounters::default());
         let mut non_determinism_source = QuasiUARTSource::new_with_reads(input_words.to_vec());
 
