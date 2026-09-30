@@ -92,10 +92,20 @@ impl ScalarInner {
         Self::from_words([n as u64, (n >> 64) as u64, 0, 0]).to_representation()
     }
 
+    /// The scalar of a big-endian integer, reduced modulo the order: the Montgomery
+    /// multiplication by `R2` takes any 256-bit integer (the product with a factor below the
+    /// order reduces to below twice the order, and then to below the order)
     pub(super) fn from_be_bytes(bytes: &[u8; 32]) -> Self {
-        let t = Self::from_be_bytes_unchecked(bytes);
+        let t = Self(u256::from_be_bytes(bytes));
 
         t.to_representation()
+    }
+
+    /// The scalar of a big-endian integer, `None` if it is not below the order
+    pub(super) fn from_be_bytes_checked(bytes: &[u8; 32]) -> Option<Self> {
+        let t = Self(u256::from_be_bytes(bytes));
+
+        u256::lt(&t.0, &MODULUS).then(|| t.to_representation())
     }
 
     #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first

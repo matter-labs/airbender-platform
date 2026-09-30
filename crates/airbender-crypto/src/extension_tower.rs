@@ -611,6 +611,23 @@ pub(crate) fn fp12_mul_by_034<P: Fp12Config>(
     fp6_assign(&mut a.c0, b);
 }
 
+/// `a *= 1 + (c3 + c4 v) w`, the sparse line multiplication of a D-type twist for a line
+/// normalized to a constant coefficient of one: with `s = c3 + c4 v`, the result is
+/// `(a0 + v a1 s) + (a1 + a0 s) w`
+pub(crate) fn fp12_mul_by_134<P: Fp12Config>(a: &mut Fp12<P>, c3: &Fp2Of12<P>, c4: &Fp2Of12<P>)
+where
+    P::Fp6Config: MulByXi,
+    <P::Fp6Config as Fp6Config>::Fp2Config: NonresidueMinusOne,
+{
+    fp6_tmp!(b = &a.c1);
+    fp6_mul_by_01(b, c3, c4);
+    fp6_mul_by_nonresidue_in_place(b);
+    fp6_tmp!(t = &a.c0);
+    fp6_mul_by_01(t, c3, c4);
+    fp6_add_assign(&mut a.c1, t);
+    fp6_add_assign(&mut a.c0, b);
+}
+
 /// `a *= (c0 + c1 v) + c4 v w`, the sparse line multiplication of an M-type twist
 pub(crate) fn fp12_mul_by_014<P: Fp12Config>(
     a: &mut Fp12<P>,

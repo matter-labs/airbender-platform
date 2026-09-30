@@ -95,6 +95,25 @@ pub fn add_affine(a: &G1Affine, b: &G1Affine) -> bn::G1Projective<super::Config>
     crate::jacobian::add_affine(a, b)
 }
 
+/// `scalar * base` (little-endian limbs, any value below 2^256) in affine coordinates, with
+/// the field divisions of `divider` (see `crate::affine_glv`)
+pub fn mul_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    base: &G1Affine,
+    scalar: &[u64; 4],
+    divider: &mut D,
+) -> G1Affine {
+    crate::affine_glv::glv_mul_affine::<Config, D>(base, scalar_from_limbs(scalar), divider)
+}
+
+/// `a + b` in affine coordinates, with the field division of `divider`
+pub fn add_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    a: &G1Affine,
+    b: &G1Affine,
+    divider: &mut D,
+) -> G1Affine {
+    crate::affine_glv::add_affine::<Config, D>(a, b, divider)
+}
+
 /// The scalar (little-endian limbs, any value below 2^256) as a field element, reduced modulo
 /// the group order. On the delegated field this is one Montgomery multiplication by `R²`
 /// (`x R^-1 R² = x R`, the Montgomery form of `x`, with the reduction of the multiplication:

@@ -113,6 +113,78 @@ impl Bn254 {
         }
     }
 
+    /// The Miller loop over all the pairs at once: the accumulator is squared once per digit of
+    /// the loop count, whatever the number of pairs, and the lines are evaluated at `G1` points
+    /// normalized to `y = 1` ([`G1Evaluation`]), so that a line in affine coordinates has a
+    /// constant coefficient of one. The result is the product of the Miller loop outputs of the
+    /// pairs up to a factor of the base field, which the final exponentiation maps to one.
+    ///
+    /// With `initial`, its first element is the start of the accumulator, which is also
+    /// multiplied by the first (the second) element at the `1` (`-1`) digits of the loop count,
+    /// as in [`Self::multi_miller_loop_with_initial`]. The second must be the inverse of the
+    /// first.
+    ///
+    /// The points of the pairs must not be points at infinity.
+    pub fn multi_miller_loop_normalized<'a>(
+        initial: Option<(&Fq12, &Fq12)>,
+        pairs: impl Iterator<Item = (&'a G1Evaluation, &'a G2PreparedNoAlloc)> + Clone,
+    ) -> Fq12 {
+        let mut f = match initial {
+            Some((initial, _)) => *initial,
+            None => Fq12::one(),
+        };
+        let lines = |f: &mut Fq12, index: usize| {
+            for (p, q) in pairs.clone() {
+                debug_assert!(!q.infinity);
+                Self::ell_normalized(f, &q.ell_coeffs[index], p, q.affine_lines);
+            }
+        };
+        let mut index = 0;
+        for i in (1..Config::ATE_LOOP_COUNT.len()).rev() {
+            // the first squaring is of `1` unless the accumulator was started elsewhere
+            if i != Config::ATE_LOOP_COUNT.len() - 1 || initial.is_some() {
+                fp12_square_in_place(&mut f);
+            }
+            lines(&mut f, index);
+            index += 1;
+
+            let bit = Config::ATE_LOOP_COUNT[i - 1];
+            if bit == 1 || bit == -1 {
+                lines(&mut f, index);
+                index += 1;
+                if let Some((initial, initial_inverse)) = initial {
+                    let factor = if bit == 1 { initial } else { initial_inverse };
+                    fp12_mul_assign(&mut f, factor);
+                }
+            }
+        }
+        const { assert!(!Config::X_IS_NEGATIVE) };
+        lines(&mut f, index);
+        lines(&mut f, index + 1);
+        debug_assert_eq!(index + 2, BN254_NUM_ELL_COEFFS);
+        f
+    }
+
+    /// Evaluates a line at a normalized point: the line `c0 y + c1 x w + c2 w³` divided by `y`
+    fn ell_normalized(
+        f: &mut Fq12,
+        coeffs: &EllCoeff<Config>,
+        p: &G1Evaluation,
+        affine_lines: bool,
+    ) {
+        const { assert!(matches!(Config::TWIST_TYPE, TwistType::D)) };
+        fp2_tmp!(c1 = &coeffs.1);
+        fp2_mul_by_fp(c1, &p.x_over_y);
+        fp2_tmp!(c2 = &coeffs.2);
+        fp2_mul_by_fp(c2, &p.y_inverse);
+        if affine_lines {
+            // the first coefficient is one
+            fp12_mul_by_134(f, c1, c2);
+        } else {
+            fp12_mul_by_034(f, &coeffs.0, c1, c2);
+        }
+    }
+
     /// Evaluates the line function at point p.
     fn ell(f: &mut Fq12, coeffs: &EllCoeff<Config>, p: &G1Affine, affine_lines: bool) {
         match Config::TWIST_TYPE {
@@ -184,6 +256,33 @@ impl Bn254 {
             }
         }
         fp12_assign(f, &res);
+    }
+}
+
+/// A point of `G1` (not the point at infinity) as the lines of
+/// [`Bn254::multi_miller_loop_normalized`] are evaluated at it: `x / y` and `1 / y`
+#[derive(Clone, Copy, Debug)]
+pub struct G1Evaluation {
+    x_over_y: Fq,
+    y_inverse: Fq,
+}
+
+impl G1Evaluation {
+    /// With the two divisions of `divider`. The curve has no point with `y = 0` (its order is
+    /// odd).
+    pub fn new(p: &G1Affine, divider: &mut impl crate::affine_glv::Divider<Fq>) -> Self {
+        assert!(!p.infinity && !ark_ff::Zero::is_zero(&p.y));
+        let mut this = MaybeUninit::<Self>::uninit();
+        let place = this.as_mut_ptr();
+        // SAFETY: the fields are places inside the value, which the divisions initialize
+        unsafe {
+            divider.divide(&mut [p.x, p.y], &mut *(&raw mut (*place).x_over_y).cast());
+            divider.divide(
+                &mut [Fq::ONE, p.y],
+                &mut *(&raw mut (*place).y_inverse).cast(),
+            );
+            this.assume_init()
+        }
     }
 }
 

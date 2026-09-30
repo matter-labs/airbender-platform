@@ -141,6 +141,11 @@ impl Affine {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_xo_for_tests(&mut self, x: &FieldElement, y_is_odd: bool) -> bool {
+        self.set_xo(x, y_is_odd)
+    }
+
+    #[cfg(test)]
     fn set_xo(&mut self, x: &FieldElement, y_is_odd: bool) -> bool {
         self.set_xo_with_hooks(
             x,
@@ -168,6 +173,24 @@ impl Affine {
                 None
             }
         })
+    }
+
+    /// The point of the curve with the coordinate `x` and the `y` of the given parity, if any
+    pub fn lift_x_with_hooks<H: Secp256k1Hooks>(
+        x: &FieldElement,
+        y_is_odd: bool,
+        hooks: &mut H,
+    ) -> Option<Self> {
+        let mut ret = Affine::DEFAULT;
+        ret.set_xo_with_hooks(x, y_is_odd, hooks).then_some(ret)
+    }
+
+    /// The coordinates `x` and `y` as big-endian bytes, of a point that is not the point at
+    /// infinity
+    pub fn write_coordinates(&self, x: &mut [u8; 32], y: &mut [u8; 32]) {
+        debug_assert!(!self.infinity);
+        self.x.write_bytes(x);
+        self.y.write_bytes(y);
     }
 
     fn set_xo_with_hooks<H: Secp256k1Hooks>(

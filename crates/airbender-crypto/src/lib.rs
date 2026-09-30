@@ -42,6 +42,7 @@ macro_rules! assert_affine_layout {
         };
     };
 }
+pub mod affine_glv;
 #[allow(clippy::all)]
 #[allow(unused_imports, dead_code)]
 #[cfg(any(

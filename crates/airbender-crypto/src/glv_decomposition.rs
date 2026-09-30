@@ -326,6 +326,16 @@ where
     res.to_projective()
 }
 
+/// The GLV halves of `k`, each as whether it is positive and its magnitude, `None` if a half
+/// does not fit 128 bits
+#[allow(clippy::type_complexity)]
+pub(crate) fn glv_halves<C: GLVConfig + GLVConfigNoAllocator>(
+    k: C::ScalarField,
+) -> Option<((bool, u128), (bool, u128))> {
+    let ((sgn_k1, k1), (sgn_k2, k2)) = C::scalar_decomposition(k);
+    Some(((sgn_k1, to_u128(k1)?), (sgn_k2, to_u128(k2)?)))
+}
+
 /// The signs of the GLV halves of `k` and the joint sparse form of their magnitudes, `None`
 /// if a half does not fit 128 bits
 #[allow(clippy::type_complexity)]

@@ -130,7 +130,7 @@ impl FieldElement8x32 {
     #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     #[inline(always)]
     pub(super) fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
-        let mut value = Self(u256::from_bytes_unchecked(bytes));
+        let mut value = Self(u256::from_be_bytes(bytes));
 
         if u256::lt(&value.0, &Self::MODULUS) {
             unsafe {
@@ -155,6 +155,12 @@ impl FieldElement8x32 {
     #[inline(always)]
     pub(super) fn to_bytes(self) -> FieldBytes {
         u256::to_be_bytes(self.to_integer()).into()
+    }
+
+    /// The canonical big-endian bytes of the element into `bytes`
+    #[inline(always)]
+    pub(super) fn write_bytes(self, bytes: &mut [u8; 32]) {
+        u256::write_be_bytes(&self.to_integer(), bytes);
     }
 
     /// NOTE: the words of the Montgomery form, what `to_storage` gives

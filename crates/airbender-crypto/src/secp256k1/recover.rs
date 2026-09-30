@@ -61,7 +61,7 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     context: &ECMultContext,
     hooks: &mut H,
 ) -> Result<Affine, Secp256k1Err> {
-    let (mut sigr, mut sigs) = Scalar::from_signature(signature);
+    let (sigr, sigs) = Scalar::from_signature(signature);
     let message = Scalar::from_k256_scalar(*message);
 
     // We go through bytes because it's mod GROUP_ORDER and later we need mod BASE FIELD
@@ -83,15 +83,61 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     let x =
         Affine::decompress_with_hooks(&brx, is_odd, hooks).ok_or(Secp256k1Err::InvalidParams)?;
 
-    let xj = x.to_jacobian();
+    recover_from_point(&x, sigr, sigs, message, context, hooks)
+}
 
+/// The recovery as the `ecrecover` of Ethereum takes it, from big-endian bytes: `r` and `s` must
+/// be in `[1, order - 1]`, the digest is reduced modulo the order, and the point of the
+/// signature is the one with the coordinate `x = r` (not `r + order`) and the `y` of the
+/// given parity. It is `recover_with_hooks` of
+/// `Signature::from_scalars(r, s)`, `RecoveryId::new(y_is_odd, false)` and the reduced digest,
+/// without the conversions through the types of `k256`.
+#[cfg(feature = "secp256k1-static-context")]
+pub fn recover_from_bytes_with_hooks<H: super::hooks::Secp256k1Hooks>(
+    digest: &[u8; 32],
+    r: &[u8; 32],
+    s: &[u8; 32],
+    y_is_odd: bool,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
+    use super::context::ECRECOVER_CONTEXT;
+
+    let sigr = Scalar::from_be_bytes_checked(r).ok_or(Secp256k1Err::InvalidParams)?;
+    let sigs = Scalar::from_be_bytes_checked(s).ok_or(Secp256k1Err::InvalidParams)?;
+    if sigr.is_zero() || sigs.is_zero() {
+        return Err(Secp256k1Err::InvalidParams);
+    }
+    let message = Scalar::from_be_bytes_reduced(digest);
+
+    // `r` is below the order, which is below the modulus of the base field
+    let x = FieldElement::from_bytes(r).ok_or(Secp256k1Err::InvalidParams)?;
+    let x = Affine::lift_x_with_hooks(&x, y_is_odd, hooks).ok_or(Secp256k1Err::InvalidParams)?;
+
+    recover_from_point(&x, sigr, sigs, message, &ECRECOVER_CONTEXT, hooks)
+}
+
+/// `(s / r) x - (message / r) g` for the point `x` of the signature
+#[inline(always)]
+fn recover_from_point<H: super::hooks::Secp256k1Hooks>(
+    x: &Affine,
+    mut sigr: Scalar,
+    mut sigs: Scalar,
+    message: Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
     hooks.scalar_invert_and_assign(&mut sigr);
     sigs *= sigr;
 
     sigr *= message;
     sigr.negate_in_place();
 
-    let mut pk = ecmult_with_hooks(&xj, &sigs, &sigr, context, hooks).to_affine_with_hooks(hooks);
+    let mut pk = if H::FE_DIVIDE_IS_CHEAP {
+        super::recover_affine::ecmult_affine(x, &sigs, &sigr, context, hooks)
+    } else {
+        ecmult_with_hooks(&x.to_jacobian(), &sigs, &sigr, context, hooks)
+            .to_affine_with_hooks(hooks)
+    };
     pk.normalize_in_place();
 
     if pk.is_infinity() {
@@ -103,7 +149,7 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
 
 /// Runs both flavours (with and without cheap inversions) and checks that they agree
 #[cfg(test)]
-fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Jacobian {
+pub(super) fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Jacobian {
     use super::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
 
     struct CheapInversionHooks;
@@ -290,7 +336,7 @@ fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
 }
 
 /// A digit of a wNAF representation: `|digit| < 2^(w - 1)` for the windows in use
-type WnafDigit = i16;
+pub(super) type WnafDigit = i16;
 const _: () = assert!(WINDOW_A <= 16 && WINDOW_G <= 16);
 
 /// `r += (x, y)` or `r -= (x, y)` for the stored generator multiple, an affine point if `affine`,
@@ -436,7 +482,7 @@ fn table_set_affine_windowa<H: super::hooks::Secp256k1Hooks>(
 ///     - the number of set values in wnaf is returned
 ///
 /// NOTE: the function assumes that `wnaf` is zeroed
-fn wnaf(wnaf: &mut [WnafDigit], s: &Scalar, w: usize) -> i32 {
+pub(super) fn wnaf(wnaf: &mut [WnafDigit], s: &Scalar, w: usize) -> i32 {
     debug_assert!(wnaf.len() <= 224);
     debug_assert!((2..=16).contains(&w));
     debug_assert!(wnaf.iter().all(|&x| x == 0));
@@ -495,7 +541,7 @@ fn wnaf(wnaf: &mut [WnafDigit], s: &Scalar, w: usize) -> i32 {
 
 /// Position of the odd multiple `|n|` in the table, and whether it has to be negated
 #[inline(always)]
-fn table_index(n: WnafDigit, w: usize) -> (usize, bool) {
+pub(super) fn table_index(n: WnafDigit, w: usize) -> (usize, bool) {
     let n = n as i32;
     debug_assert!(table_verify(n, w));
 
@@ -833,5 +879,73 @@ mod tests {
         .unwrap();
 
         assert_eq!(without_hooks, with_hooks);
+    }
+
+    /// The recovery from bytes is the recovery through the types of `k256`, which also tells
+    /// the inputs to reject: for any bytes, for `r` and `s` at the bounds of their range, and
+    /// for signatures that recover a key
+    #[cfg(feature = "secp256k1-static-context")]
+    #[test]
+    fn recover_from_bytes_matches_recover() {
+        use crate::secp256k1::hooks::DefaultSecp256k1Hooks;
+        use k256::ecdsa::{RecoveryId, Signature, SigningKey};
+        use k256::elliptic_curve::ops::Reduce;
+
+        fn check(digest: [u8; 32], r: [u8; 32], s: [u8; 32], y_is_odd: bool) -> bool {
+            let expected = Signature::from_scalars(r, s).ok().and_then(|signature| {
+                let message = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&digest.into());
+                super::recover(&message, &signature, &RecoveryId::new(y_is_odd, false)).ok()
+            });
+            let recovered = super::recover_from_bytes_with_hooks(
+                &digest,
+                &r,
+                &s,
+                y_is_odd,
+                &mut DefaultSecp256k1Hooks,
+            )
+            .ok();
+            assert_eq!(recovered, expected);
+            if let Some(point) = recovered {
+                let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
+                point.write_coordinates(&mut x, &mut y);
+                let encoded = point.to_encoded_point(false);
+                assert_eq!(&encoded.as_bytes()[1..33], &x);
+                assert_eq!(&encoded.as_bytes()[33..], &y);
+            }
+            recovered.is_some()
+        }
+
+        let order: [u8; 32] = k256::elliptic_curve::bigint::Encoding::to_be_bytes(
+            &<k256::Secp256k1 as k256::elliptic_curve::Curve>::ORDER,
+        );
+        let mut below_order = order;
+        below_order[31] -= 1;
+        let mut above_order = order;
+        above_order[31] += 1;
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        let bounds = [[0; 32], one, below_order, order, above_order, [0xff; 32]];
+
+        for r in bounds {
+            for s in bounds {
+                for digest in bounds {
+                    for y_is_odd in [false, true] {
+                        check(digest, r, s, y_is_odd);
+                    }
+                }
+            }
+        }
+
+        proptest!(|(digest: [u8; 32], r: [u8; 32], s: [u8; 32], y_is_odd: bool, key: [u8; 32])| {
+            check(digest, r, s, y_is_odd);
+
+            if let Ok(key) = SigningKey::from_bytes(&key.into()) {
+                let (signature, recovery_id) = key.sign_prehash_recoverable(&digest).unwrap();
+                if !recovery_id.is_x_reduced() {
+                    let (r, s) = signature.split_bytes();
+                    assert!(check(digest, r.into(), s.into(), recovery_id.is_y_odd()));
+                }
+            }
+        });
     }
 }

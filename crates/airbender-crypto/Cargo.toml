@@ -13,6 +13,7 @@ readme = "README.md"
 
 [dependencies]
 common_constants = { workspace = true }
+riscv_common = { workspace = true }
 blake2 = { workspace = true }
 sha3 = { workspace = true }
 sha2 = { workspace = true }

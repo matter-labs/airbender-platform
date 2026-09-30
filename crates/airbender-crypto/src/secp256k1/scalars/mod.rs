@@ -56,6 +56,37 @@ impl Scalar {
         (Self::from_k256_scalar(*r), Self::from_k256_scalar(*s))
     }
 
+    /// The scalar of a big-endian integer, `None` if it is not below the order
+    pub fn from_be_bytes_checked(bytes: &[u8; 32]) -> Option<Self> {
+        #[cfg(feature = "bigint_ops")]
+        {
+            ScalarInner::from_be_bytes_checked(bytes).map(Self)
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            use crate::k256::elliptic_curve::PrimeField;
+
+            Option::from(crate::k256::Scalar::from_repr((*bytes).into()))
+                .map(Self::from_k256_scalar)
+        }
+    }
+
+    /// The scalar of a big-endian integer, reduced modulo the order
+    pub fn from_be_bytes_reduced(bytes: &[u8; 32]) -> Self {
+        #[cfg(feature = "bigint_ops")]
+        {
+            Self(ScalarInner::from_be_bytes(bytes))
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            use crate::k256::elliptic_curve::ops::Reduce;
+
+            Self::from_k256_scalar(
+                <crate::k256::Scalar as Reduce<crate::k256::U256>>::reduce_bytes(&(*bytes).into()),
+            )
+        }
+    }
+
     pub fn to_repr(self) -> FieldBytes {
         self.0.to_be_bytes().into()
     }

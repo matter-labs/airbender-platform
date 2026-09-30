@@ -23,7 +23,7 @@ pub mod g2_affine;
 pub(crate) mod g2_subgroup;
 
 mod pairing_impl;
-pub use self::pairing_impl::{G2PreparedNoAlloc, BN254_NUM_ELL_COEFFS};
+pub use self::pairing_impl::{G1Evaluation, G2PreparedNoAlloc, BN254_NUM_ELL_COEFFS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config;

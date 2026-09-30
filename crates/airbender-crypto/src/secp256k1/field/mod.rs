@@ -363,6 +363,19 @@ impl FieldElement {
         self.0.to_bytes()
     }
 
+    /// The canonical big-endian bytes of the element into `bytes`
+    #[inline(always)]
+    pub fn write_bytes(self, bytes: &mut [u8; 32]) {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.write_bytes(bytes);
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            bytes.copy_from_slice(&self.to_bytes());
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn to_storage(mut self) -> FieldStorage {
         self.normalize_in_place();

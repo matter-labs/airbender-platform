@@ -6,6 +6,7 @@ pub mod field;
 pub mod hooks;
 mod points;
 mod recover;
+mod recover_affine;
 #[cfg(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"))]
 mod recover_shamir;
 pub mod scalars;
@@ -21,7 +22,7 @@ pub use recover::recover_with_context;
 pub use recover::recover_with_context_and_hooks;
 
 #[cfg(feature = "secp256k1-static-context")]
-pub use recover::{recover, recover_with_hooks};
+pub use recover::{recover, recover_from_bytes_with_hooks, recover_with_hooks};
 
 #[derive(Debug, PartialEq)]
 pub enum Secp256k1Err {

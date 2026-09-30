@@ -76,12 +76,77 @@ pub const fn from_bytes_unchecked(bytes: &[u8; 32]) -> U256 {
     ])
 }
 
+/// The words of the integer, from the lowest
+#[cfg(target_endian = "little")]
+#[inline(always)]
+fn words(a: &U256) -> &[u32; 8] {
+    // SAFETY: 4 `u64` limbs from the lowest are 8 `u32` words from the lowest on a little-endian
+    // target, and the alignment of `u64` is enough for `u32`
+    unsafe { &*core::ptr::from_ref(&a.0).cast::<[u32; 8]>() }
+}
+
+#[cfg(target_endian = "little")]
+#[inline(always)]
+fn words_mut(a: &mut U256) -> &mut [u32; 8] {
+    // SAFETY: as in `words`, and every value of the words is an integer
+    unsafe { &mut *core::ptr::from_mut(&mut a.0).cast::<[u32; 8]>() }
+}
+
+/// The bytes as words, if they are aligned for that
+#[cfg(target_endian = "little")]
+#[inline(always)]
+fn as_aligned_words(bytes: &[u8; 32]) -> Option<&[u32; 8]> {
+    let pointer = bytes.as_ptr().cast::<[u32; 8]>();
+    // SAFETY: the pointer is aligned, and every value of 32 bytes is 8 words
+    pointer.is_aligned().then(|| unsafe { &*pointer })
+}
+
+#[cfg(target_endian = "little")]
+#[inline(always)]
+fn as_aligned_words_mut(bytes: &mut [u8; 32]) -> Option<&mut [u32; 8]> {
+    let pointer = bytes.as_mut_ptr().cast::<[u32; 8]>();
+    // SAFETY: as in `as_aligned_words`
+    pointer.is_aligned().then(|| unsafe { &mut *pointer })
+}
+
+/// The integer of big-endian bytes. Aligned bytes are read by words, which are byte-reversed
+/// (one cycle each on the RISC-V guest, see `riscv_common::byte_swap`); the machine has no
+/// unaligned loads, so the bytes are put together one by one otherwise.
+#[inline(always)]
+pub fn from_be_bytes(bytes: &[u8; 32]) -> U256 {
+    #[cfg(target_endian = "little")]
+    if let Some(source) = as_aligned_words(bytes) {
+        let mut integer = BigInt::<4>([0; 4]);
+        let destination = words_mut(&mut integer);
+        for i in 0..8 {
+            destination[i] = riscv_common::byte_swap(source[7 - i]);
+        }
+        return integer;
+    }
+    from_bytes_unchecked(bytes)
+}
+
+/// The integer as big-endian bytes into `bytes`, by words if the bytes are aligned (see
+/// `from_be_bytes`)
+#[inline(always)]
+pub fn write_be_bytes(a: &U256, bytes: &mut [u8; 32]) {
+    #[cfg(target_endian = "little")]
+    if let Some(destination) = as_aligned_words_mut(bytes) {
+        let source = words(a);
+        for i in 0..8 {
+            destination[i] = riscv_common::byte_swap(source[7 - i]);
+        }
+        return;
+    }
+    bytes[0..8].copy_from_slice(&a.0[3].to_be_bytes());
+    bytes[8..16].copy_from_slice(&a.0[2].to_be_bytes());
+    bytes[16..24].copy_from_slice(&a.0[1].to_be_bytes());
+    bytes[24..32].copy_from_slice(&a.0[0].to_be_bytes());
+}
+
 pub fn to_be_bytes(a: U256) -> [u8; 32] {
     let mut r = [0u8; 32];
-    r[0..8].copy_from_slice(&a.0[3].to_be_bytes());
-    r[8..16].copy_from_slice(&a.0[2].to_be_bytes());
-    r[16..24].copy_from_slice(&a.0[1].to_be_bytes());
-    r[24..32].copy_from_slice(&a.0[0].to_be_bytes());
+    write_be_bytes(&a, &mut r);
 
     r
 }
@@ -810,6 +875,31 @@ mod tests {
                 let expected = if a.0 == [0; 4] { [0; 4] } else { ODD_MODULUS.0 };
                 prop_assert_eq!(sum.0, expected);
             }
+        })
+    }
+
+    /// The conversions by words (aligned bytes) and by bytes (at every other offset) agree
+    /// with the reference one, and touch only their 32 bytes
+    #[test]
+    fn big_endian_bytes() {
+        #[repr(C, align(8))]
+        struct Aligned([u8; 48]);
+
+        proptest!(|(bytes: [u8; 32], offset in 0usize..8)| {
+            let expected = from_bytes_unchecked(&bytes);
+
+            let mut buffer = Aligned([0xa5; 48]);
+            buffer.0[offset..offset + 32].copy_from_slice(&bytes);
+            let place: &mut [u8; 32] = (&mut buffer.0[offset..offset + 32]).try_into().unwrap();
+            prop_assert_eq!(from_be_bytes(place).0, expected.0);
+
+            place.fill(0);
+            write_be_bytes(&expected, place);
+            prop_assert_eq!(&*place, &bytes);
+            prop_assert!(buffer.0[..offset].iter().all(|byte| *byte == 0xa5));
+            prop_assert!(buffer.0[offset + 32..].iter().all(|byte| *byte == 0xa5));
+
+            prop_assert_eq!(to_be_bytes(expected), bytes);
         })
     }
 }
