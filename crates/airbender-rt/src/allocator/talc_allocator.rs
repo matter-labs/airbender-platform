@@ -11,7 +11,9 @@ use core::ptr::{null_mut, NonNull};
 /// bottom is tagged allocated), so every gap stays within its heap; the only thing
 /// given up is a single allocation straddling two heaps, and `Layout` already caps
 /// one allocation at `isize::MAX`.
-const MAX_HEAP_SIZE: usize = (isize::MAX as usize) & !0xFFF;
+const MAX_HEAP_SIZE: usize = (isize::MAX as usize) & !(PAGE - 1);
+
+const PAGE: usize = 4096;
 
 pub struct TalcAllocator {
     state: UnsafeCell<TalcState>,
@@ -37,7 +39,9 @@ impl TalcAllocator {
         self.init_with_max_heap_size(start, end, MAX_HEAP_SIZE);
     }
 
+    /// `max` must be a multiple of `PAGE`.
     unsafe fn init_with_max_heap_size(&self, start: *mut usize, end: *mut usize, max: usize) {
+        debug_assert!(max.is_multiple_of(PAGE));
         let state = &mut *self.state.get();
         let end = end as usize;
         let mut base = start as usize;
@@ -46,9 +50,15 @@ impl TalcAllocator {
             return;
         }
 
+        // Equal heaps rather than `max`-sized ones plus a remainder: a remainder
+        // can be too small for talc to claim. Rounding up to a page keeps each
+        // heap within `max`, and the last one within a few pages of the others.
+        let total = end - base;
+        let heap_size = total.div_ceil(total.div_ceil(max)).next_multiple_of(PAGE);
+
         let mut allocator = talc::Talc::new(talc::ClaimOnOom::new(talc::Span::empty()));
         while base < end {
-            let size = (end - base).min(max);
+            let size = (end - base).min(heap_size);
             let span = talc::Span::from_base_size(base as *mut u8, size);
             allocator.claim(span).expect("must claim heap span");
             base += size;
@@ -177,6 +187,27 @@ mod tests {
         }
         let again = unsafe { allocator.alloc(layout) };
         assert!(!again.is_null());
+    }
+
+    #[test]
+    fn an_arena_just_past_a_multiple_of_the_heap_limit_is_claimed_in_full() {
+        // Four heaps' worth plus one word: split greedily, the last heap would be
+        // eight bytes, which talc cannot claim.
+        let mut arena = vec![0u64; ARENA / 8 + 1];
+        let (allocator, start, end) = split_allocator(&mut arena);
+
+        let layout = Layout::from_size_align(HEAP / 2, 8).unwrap();
+        let mut blocks = Vec::new();
+        loop {
+            let ptr = unsafe { allocator.alloc(layout) };
+            if ptr.is_null() {
+                break;
+            }
+            assert!(ptr as usize >= start && ptr as usize + layout.size() <= end);
+            blocks.push(ptr);
+        }
+        // Five heaps of 192-208 KiB each hold one 128 KiB block apiece.
+        assert_eq!(blocks.len(), 5);
     }
 
     #[test]
