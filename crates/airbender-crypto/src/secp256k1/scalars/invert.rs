@@ -94,6 +94,27 @@ impl Scalar {
             self.0.square_in_place();
         }
     }
+
+    /// The inverse in variable time, by safegcd; zero for zero
+    #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
+    pub fn invert_vartime(&self) -> Self {
+        const ORDER: [u64; 4] = [
+            0xBFD2_5E8C_D036_4141,
+            0xBAAE_DCE6_AF48_A03B,
+            0xFFFF_FFFF_FFFF_FFFE,
+            0xFFFF_FFFF_FFFF_FFFF,
+        ];
+        let be = self.to_repr();
+        let words: [u64; 4] = core::array::from_fn(|i| {
+            u64::from_be_bytes(be[24 - 8 * i..32 - 8 * i].try_into().expect("8 bytes"))
+        });
+        let inverse = crate::field_inverse::inverse_words(words, ORDER);
+        let mut bytes = [0u8; 32];
+        for (i, word) in inverse.iter().enumerate() {
+            bytes[24 - 8 * i..32 - 8 * i].copy_from_slice(&word.to_be_bytes());
+        }
+        Self::from_be_bytes_checked(&bytes).expect("below the order")
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +138,10 @@ mod tests {
             } else {
                 prop_assert_eq!(a, Scalar::ONE);
             }
+
+            a = x;
+            a.invert_in_place();
+            prop_assert_eq!(x.invert_vartime(), a);
         })
     }
 }
