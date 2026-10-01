@@ -460,6 +460,61 @@ mod mul_tests {
             }
         }
     }
+
+    /// Scalars below 2^256 at the edges of the reduction modulo the group order `r` and of the
+    /// decomposition, against the plain double-and-add on the arkworks field, from points that
+    /// are not multiplied out by GLV
+    #[test]
+    fn scalar_multiplication_of_edge_scalars_matches_the_reference() {
+        use ark_ec::scalar_mul::sw_double_and_add_affine;
+        use ark_std::rand::Rng;
+        use num_bigint::BigUint;
+        let mut rng = ark_std::test_rng();
+        let r: BigUint = ark_bls12_381::Fr::MODULUS.into();
+        let x = BigUint::from(crate::bls12_381::curves::Config::X[0]);
+        let one = BigUint::from(1u32);
+        let mut scalars = vec![
+            &one << 255u32,
+            &r * 2u32,
+            &r * 2u32 + 1u32,
+            (&r - 1u32) / 2u32,
+            (&r + 1u32) / 2u32,
+            x.clone(),
+        ];
+        // full-width (about half of them at least r) and 50-bit
+        scalars.extend((0..16).map(|_| BigUint::from_bytes_le(&rng.gen::<[u8; 32]>())));
+        scalars.extend((0..4).map(|_| BigUint::from(rng.gen::<u64>() >> 14)));
+        // the decomposition rounds `s (X² - 1) / r` to the nearest integer: the scalars on both
+        // sides of the rounding points `j + 1/2` for `j` in `[0, X² - 2]`, and the same plus r
+        let n22 = &x * &x - 1u32;
+        for j in [BigUint::from(0u32), one.clone(), &n22 / 2u32, &n22 - 1u32] {
+            let s = (j * 2u32 + 1u32) * &r / (&n22 * 2u32);
+            scalars.extend([s.clone(), &s + 1u32, &s + &r, &s + 1u32 + &r]);
+        }
+        let limbs = |s: &BigUint| {
+            assert!(s.bits() <= 256);
+            let mut limbs = [0u64; 4];
+            for (limb, digit) in limbs.iter_mut().zip(s.iter_u64_digits()) {
+                *limb = digit;
+            }
+            limbs
+        };
+
+        let mut points = vec![G1Affine::identity(), G1Affine::generator()];
+        for _ in 0..4 {
+            let k = ark_bls12_381::Fr::rand(&mut rng).into_bigint();
+            points.push(sw_double_and_add_affine(&G1Affine::generator(), k).into_affine());
+        }
+        for p in &points {
+            let reference = to_ref(*p);
+            for s in &scalars {
+                let s = limbs(s);
+                let expected = sw_double_and_add_affine(&reference, s).into_affine();
+                let ours = Config::mul_affine(p, &s).into_affine();
+                assert_eq!(to_ref(ours), expected, "{p:?} * {s:?}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
