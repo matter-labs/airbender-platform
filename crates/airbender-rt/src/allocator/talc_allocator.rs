@@ -11,9 +11,14 @@ use core::ptr::{null_mut, NonNull};
 /// bottom is tagged allocated), so every gap stays within its heap; the only thing
 /// given up is a single allocation straddling two heaps, and `Layout` already caps
 /// one allocation at `isize::MAX`.
-const MAX_HEAP_SIZE: usize = (isize::MAX as usize) & !(PAGE - 1);
+const MAX_HEAP_SIZE: usize = (isize::MAX as usize) & PAGE_MASK;
 
+/// Granularity of heap sizes. talc only needs its own word-sized chunk alignment;
+/// a page keeps every heap boundary as aligned as the arena start.
 const PAGE: usize = 4096;
+
+/// Clears the in-page offset bits: `x & PAGE_MASK` rounds `x` down to a page.
+const PAGE_MASK: usize = !(PAGE - 1);
 
 pub struct TalcAllocator {
     state: UnsafeCell<TalcState>,
@@ -39,9 +44,13 @@ impl TalcAllocator {
         self.init_with_max_heap_size(start, end, MAX_HEAP_SIZE);
     }
 
-    /// `max` must be a multiple of `PAGE`.
+    /// # Safety
+    ///
+    /// Same as [`Self::init`]. Additionally, `max` must be a multiple of `PAGE` and at
+    /// most `MAX_HEAP_SIZE`: heap sizes are rounded up to a page, and a heap larger
+    /// than `isize::MAX` is undefined behaviour inside talc.
     unsafe fn init_with_max_heap_size(&self, start: *mut usize, end: *mut usize, max: usize) {
-        debug_assert!(max.is_multiple_of(PAGE));
+        debug_assert!(max.is_multiple_of(PAGE) && max <= MAX_HEAP_SIZE);
         let state = &mut *self.state.get();
         let end = end as usize;
         let mut base = start as usize;
