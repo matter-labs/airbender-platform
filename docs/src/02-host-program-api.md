@@ -109,8 +109,7 @@ Real CPU and GPU provers run the GKR-based `prover_pipeline` from `zksync-airben
 `SecurityLevel::default()` is the single accepted value. All provers share the same
 interface: `prover.prove(inputs.words())`. `ProveResult::cycles` is the cycle count of the
 final proven layer (the program itself for `ProverLevel::Base`, the last recursion verifier
-otherwise); use a transpiler run when you need the program's own cycle count next to a
-recursion proof.
+otherwise); `ProveResult::program_cycles` is the program's own cycle count at every level.
 
 ## Verification
 
