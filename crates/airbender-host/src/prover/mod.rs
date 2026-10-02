@@ -57,10 +57,10 @@ pub struct ProveResult {
     pub proof: Proof,
     /// Cycles executed by the final proven layer. For [`ProverLevel::Base`]
     /// this is the program's own cycle count; for recursion levels it is the
-    /// cycle count of the last recursion verifier run. Use a transpiler run
-    /// (`Program::transpiler_runner`) when the program's cycle count is needed
-    /// alongside a recursion proof.
+    /// cycle count of the last recursion verifier run.
     pub cycles: u64,
+    /// Cycles the program itself executed (the base layer), at every level.
+    pub program_cycles: u64,
     pub receipt: Receipt,
 }
 
@@ -161,10 +161,12 @@ pub(super) fn real_prove_result(
 ) -> ProveResult {
     let receipt = receipt_from_artifact(&artifact);
     let cycles = artifact.cycles;
+    let program_cycles = artifact.program_cycles;
     let proof = Proof::Real(RealProof::new(security, level, artifact));
     ProveResult {
         proof,
         cycles,
+        program_cycles,
         receipt,
     }
 }

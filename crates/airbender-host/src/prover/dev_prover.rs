@@ -109,6 +109,7 @@ impl Prover for DevProver {
         Ok(ProveResult {
             proof,
             cycles,
+            program_cycles: cycles,
             receipt,
         })
     }
