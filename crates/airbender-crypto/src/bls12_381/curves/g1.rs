@@ -4,8 +4,8 @@ use ark_ec::{
     hashing::curve_maps::wb::{IsogenyMap, WBConfig},
     models::CurveConfig,
     scalar_mul::glv::GLVConfig,
-    short_weierstrass::{Affine, SWCurveConfig},
-    AffineRepr, PrimeGroup,
+    short_weierstrass::{Affine, Projective, SWCurveConfig},
+    AffineRepr,
 };
 use ark_ff::{AdditiveGroup, One, PrimeField, Zero};
 use ruint::aliases::U512;
@@ -23,7 +23,6 @@ use crate::ark_ff_delegation::{BigIntMacro as BigInt, MontFp};
 )))]
 use ark_ff::{BigInt, MontFp};
 use ark_serialize::{Compress, SerializationError};
-use core::ops::Neg;
 
 use super::g1_swu_iso;
 use crate::{
@@ -34,6 +33,7 @@ use crate::{
         },
         Fq, Fr,
     },
+    extension_tower::CopyAssign,
     glv_decomposition::GLVConfigNoAllocator,
 };
 
@@ -84,23 +84,24 @@ impl SWCurveConfig for Config {
 
     #[inline]
     fn is_in_correct_subgroup_assuming_on_curve(p: &G1Affine) -> bool {
-        // Algorithm from Section 6 of https://eprint.iacr.org/2021/1130.
+        // Algorithm from Section 6 of https://eprint.iacr.org/2021/1130: P is in G1 iff
+        // endomorphism(P) == -[X^2]P.
         //
-        // Check that endomorphism_p(P) == -[X^2]P
-
-        // An early-out optimization described in Section 6.
-        // If uP == P but P != point of infinity, then the point is not in the right
-        // subgroup.
-        let x_times_p = p.mul_bigint(crate::bls12_381::curves::Config::X);
-        if x_times_p.eq(p) && !p.infinity {
-            return false;
+        // [X^2]P = [X]([X]P) by two double-and-adds over the bits of X on the Jacobian group
+        // law, which handles every case (doubling, P + (-P), the point at infinity): the
+        // multiples are exact for any point of the curve, in G1 or not. The GLV multiplication
+        // computes the same two multiples (X decomposes as (X, 0)), but normalizes [X]P to
+        // affine for the second one: a field inversion.
+        //
+        // The early-out of Section 6 (reject [X]P == P for P != O) is not needed: [X]P == P
+        // gives -[X^2]P == -P, and -P == endomorphism(P) = (BETA x, y) needs x = y = 0, which
+        // is not a point of the curve (and X - 1 is coprime to the group order, so [X]P == P
+        // only for O).
+        if p.infinity {
+            return true;
         }
-
-        let minus_x_squared_times_p = x_times_p
-            .mul_bigint(crate::bls12_381::curves::Config::X)
-            .neg();
-        let endomorphism_p = endomorphism(p);
-        minus_x_squared_times_p.eq(&endomorphism_p)
+        let (_, x_squared_times_p) = x_and_x_squared_times(p);
+        -x_squared_times_p == endomorphism(p)
     }
 
     #[inline]
@@ -345,6 +346,48 @@ pub fn endomorphism(p: &Affine<Config>) -> Affine<Config> {
     res
 }
 
+/// `([X]P, [X²]P)` for the absolute value `X` of the curve parameter: two double-and-adds over
+/// the bits of `X` on the Jacobian group law, mixed additions of `P` for the first, full
+/// additions of the (not normalized) `[X]P` for the second. Exact for any point of the curve,
+/// in G1 or not: the scalar is not reduced and nothing is normalized. Generic over the curve
+/// configuration so that the tests can also run it on the arkworks field.
+#[inline(always)]
+fn x_and_x_squared_times<C: SWCurveConfig>(p: &Affine<C>) -> (Projective<C>, Projective<C>)
+where
+    C::BaseField: CopyAssign,
+{
+    use crate::jacobian::Jacobian;
+    use core::mem::MaybeUninit;
+    const X_LIMBS: &[u64] = <crate::bls12_381::curves::Config as Bls12Config>::X;
+    const _: () = assert!(X_LIMBS.len() == 1);
+    const X: u64 = X_LIMBS[0];
+    // the most significant bit of X (63), which starts both chains
+    const TOP: u32 = u64::BITS - 1 - X.leading_zeros();
+
+    // [X]P, mixed additions of the affine P
+    let mut x_p_slot = MaybeUninit::uninit();
+    let x_p = Jacobian::<C>::init_infinity(&mut x_p_slot);
+    x_p.add_assign_affine(p);
+    for i in (0..TOP).rev() {
+        x_p.double_in_place();
+        if (X >> i) & 1 == 1 {
+            x_p.add_assign_affine(p);
+        }
+    }
+
+    // [X]([X]P), full additions of [X]P
+    let mut x2_p_slot = MaybeUninit::uninit();
+    let x2_p = Jacobian::<C>::init_copy(&mut x2_p_slot, x_p);
+    for i in (0..TOP).rev() {
+        x2_p.double_in_place();
+        if (X >> i) & 1 == 1 {
+            x2_p.add_assign(x_p);
+        }
+    }
+
+    (x_p.to_projective(), x2_p.to_projective())
+}
+
 #[cfg(test)]
 mod mul_tests {
     use super::*;
@@ -414,6 +457,61 @@ mod mul_tests {
                 let expected = p.into_group() * k + q.into_group() * l;
                 let ours = super::mul_two(&p.into_group(), k, &q.into_group(), l);
                 assert_eq!(ours.into_affine(), expected.into_affine());
+            }
+        }
+    }
+
+    /// Scalars below 2^256 at the edges of the reduction modulo the group order `r` and of the
+    /// decomposition, against the plain double-and-add on the arkworks field, from points that
+    /// are not multiplied out by GLV
+    #[test]
+    fn scalar_multiplication_of_edge_scalars_matches_the_reference() {
+        use ark_ec::scalar_mul::sw_double_and_add_affine;
+        use ark_std::rand::Rng;
+        use num_bigint::BigUint;
+        let mut rng = ark_std::test_rng();
+        let r: BigUint = ark_bls12_381::Fr::MODULUS.into();
+        let x = BigUint::from(crate::bls12_381::curves::Config::X[0]);
+        let one = BigUint::from(1u32);
+        let mut scalars = vec![
+            &one << 255u32,
+            &r * 2u32,
+            &r * 2u32 + 1u32,
+            (&r - 1u32) / 2u32,
+            (&r + 1u32) / 2u32,
+            x.clone(),
+        ];
+        // full-width (about half of them at least r) and 50-bit
+        scalars.extend((0..16).map(|_| BigUint::from_bytes_le(&rng.gen::<[u8; 32]>())));
+        scalars.extend((0..4).map(|_| BigUint::from(rng.gen::<u64>() >> 14)));
+        // the decomposition rounds `s (X² - 1) / r` to the nearest integer: the scalars on both
+        // sides of the rounding points `j + 1/2` for `j` in `[0, X² - 2]`, and the same plus r
+        let n22 = &x * &x - 1u32;
+        for j in [BigUint::from(0u32), one.clone(), &n22 / 2u32, &n22 - 1u32] {
+            let s = (j * 2u32 + 1u32) * &r / (&n22 * 2u32);
+            scalars.extend([s.clone(), &s + 1u32, &s + &r, &s + 1u32 + &r]);
+        }
+        let limbs = |s: &BigUint| {
+            assert!(s.bits() <= 256);
+            let mut limbs = [0u64; 4];
+            for (limb, digit) in limbs.iter_mut().zip(s.iter_u64_digits()) {
+                *limb = digit;
+            }
+            limbs
+        };
+
+        let mut points = vec![G1Affine::identity(), G1Affine::generator()];
+        for _ in 0..4 {
+            let k = ark_bls12_381::Fr::rand(&mut rng).into_bigint();
+            points.push(sw_double_and_add_affine(&G1Affine::generator(), k).into_affine());
+        }
+        for p in &points {
+            let reference = to_ref(*p);
+            for s in &scalars {
+                let s = limbs(s);
+                let expected = sw_double_and_add_affine(&reference, s).into_affine();
+                let ours = Config::mul_affine(p, &s).into_affine();
+                assert_eq!(to_ref(ours), expected, "{p:?} * {s:?}");
             }
         }
     }
@@ -518,5 +616,426 @@ mod tests {
             &G1Affine::identity(),
             &mut InvertingDivider
         ));
+    }
+}
+
+/// The subgroup check in the delegated field representation of the `cfg(test)` build (the
+/// forward one: `tests/bls12_381_g1_subgroup.rs`) against its previous implementation (kept
+/// here verbatim), upstream arkworks and the ground truth `[r]P == O`, and both multiples of
+/// `x_and_x_squared_times` (in the delegated and in the arkworks field) against exact ones
+#[cfg(test)]
+mod subgroup_tests {
+    use super::*;
+    use ark_ec::{CurveGroup, PrimeGroup};
+    use ark_ff::{Field, UniformRand};
+    use ark_std::rand::{rngs::StdRng, Rng, SeedableRng};
+    use ark_std::test_rng;
+    use core::ops::Neg;
+    use num_bigint::BigUint;
+
+    type RefFq = ark_bls12_381::Fq;
+    type RefFr = ark_bls12_381::Fr;
+    type RefAffine = ark_bls12_381::G1Affine;
+    type RefProjective = ark_bls12_381::G1Projective;
+
+    /// The primes of `m = (X + 1) / 3`: the cofactor is `h = 3 m²`, and the points of order
+    /// dividing it form `Z/m × Z/3m` (there are no points of order `ℓ²`)
+    const PRIMES_OF_M: [u64; 4] = [11, 10177, 859267, 52437899];
+
+    /// The body of `is_in_correct_subgroup_assuming_on_curve` before the double-and-adds (GLV
+    /// multiplications, an inversion, the early-out), verbatim
+    fn subgroup_check_before(p: &G1Affine) -> bool {
+        // Algorithm from Section 6 of https://eprint.iacr.org/2021/1130.
+        //
+        // Check that endomorphism_p(P) == -[X^2]P
+
+        // An early-out optimization described in Section 6.
+        // If uP == P but P != point of infinity, then the point is not in the right
+        // subgroup.
+        let x_times_p = p.mul_bigint(crate::bls12_381::curves::Config::X);
+        if x_times_p.eq(p) && !p.infinity {
+            return false;
+        }
+
+        let minus_x_squared_times_p = x_times_p
+            .mul_bigint(crate::bls12_381::curves::Config::X)
+            .neg();
+        let endomorphism_p = endomorphism(p);
+        minus_x_squared_times_p.eq(&endomorphism_p)
+    }
+
+    fn x_abs() -> BigUint {
+        BigUint::from(crate::bls12_381::curves::Config::X[0])
+    }
+
+    fn r() -> BigUint {
+        RefFr::MODULUS.into()
+    }
+
+    /// The cofactor `h = (X + 1)² / 3`: `#E(Fq) = h r`
+    fn h() -> BigUint {
+        (x_abs() + 1u32).pow(2) / 3u32
+    }
+
+    /// `[k]P` by a plain double-and-add on arkworks' projective group law, which handles every
+    /// case: exact for any point of the curve (`k` is not reduced modulo `r`, no GLV)
+    fn mul_exact(p: &RefAffine, k: &BigUint) -> RefProjective {
+        let mut acc = RefProjective::zero();
+        for i in (0..k.bits()).rev() {
+            acc.double_in_place();
+            if k.bit(i) {
+                acc += p;
+            }
+        }
+        acc
+    }
+
+    /// The ground truth
+    fn in_g1(p: &RefAffine) -> bool {
+        mul_exact(p, &r()).is_zero()
+    }
+
+    fn fq(x: RefFq) -> Fq {
+        // from the canonical limbs: `From<BigUint>` goes through `from_le_bytes_mod_order`,
+        // whose chunks are shorter than the debug-asserted input of the delegated
+        // representation's byte reader
+        let src = x.into_bigint().0;
+        let mut limbs = <Fq as PrimeField>::BigInt::default();
+        limbs.0[..src.len()].copy_from_slice(&src);
+        Fq::from_bigint(limbs).expect("a canonical value")
+    }
+
+    fn ref_fq(x: Fq) -> RefFq {
+        RefFq::from(BigUint::from(x))
+    }
+
+    /// The same coordinates (any, the flag kept)
+    fn from_ref(p: &RefAffine) -> G1Affine {
+        G1Affine {
+            x: fq(p.x),
+            y: fq(p.y),
+            infinity: p.infinity,
+        }
+    }
+
+    fn to_ref(p: &G1Affine) -> RefAffine {
+        RefAffine {
+            x: ref_fq(p.x),
+            y: ref_fq(p.y),
+            infinity: p.infinity,
+        }
+    }
+
+    fn to_ref_projective(p: &G1Projective) -> RefProjective {
+        RefProjective::new_unchecked(ref_fq(p.x), ref_fq(p.y), ref_fq(p.z))
+    }
+
+    /// A random point of the curve (in G1 with probability 1/h)
+    fn random_point(rng: &mut impl Rng) -> RefAffine {
+        for _ in 0..64 {
+            if let Some(p) = RefAffine::get_point_from_x_unchecked(RefFq::rand(rng), rng.gen()) {
+                return p;
+            }
+        }
+        panic!("no point of the curve at 64 random x");
+    }
+
+    fn random_g1(rng: &mut impl Rng) -> RefAffine {
+        (RefProjective::generator() * RefFr::rand(rng)).into_affine()
+    }
+
+    /// A point of order `order`: `[multiple]R` for a random point `R`, resampled while it is O
+    fn torsion_point(rng: &mut impl Rng, multiple: &BigUint, order: u64) -> RefAffine {
+        for _ in 0..64 {
+            let t = mul_exact(&random_point(rng), multiple).into_affine();
+            if !t.is_zero() {
+                assert!(mul_exact(&t, &BigUint::from(order)).is_zero());
+                return t;
+            }
+        }
+        panic!("[{multiple}]R is O for 64 random R");
+    }
+
+    /// Points of order dividing the cofactor, none O: two `[r]R` (order dividing `X + 1`), one
+    /// of order 3 (`(0, ±2)`) and, for every prime `ℓ | m`, two of order `ℓ` (generically
+    /// independent) and their sum (unless O)
+    fn cofactor_points(rng: &mut impl Rng) -> Vec<RefAffine> {
+        let (r, h) = (r(), h());
+        let mut points = vec![];
+        for _ in 0..2 {
+            let t = mul_exact(&random_point(rng), &r).into_affine();
+            assert!(!t.is_zero() && mul_exact(&t, &(x_abs() + 1u32)).is_zero());
+            points.push(t);
+        }
+        let t = torsion_point(rng, &(&r * &h / 3u32), 3);
+        assert!(t.x.is_zero());
+        points.push(t);
+        for l in PRIMES_OF_M {
+            let multiple = &r * &h / BigUint::from(l * l);
+            let (a, b) = (
+                torsion_point(rng, &multiple, l),
+                torsion_point(rng, &multiple, l),
+            );
+            points.extend([a, b]);
+            let sum = (a + b).into_affine();
+            if !sum.is_zero() {
+                points.push(sum);
+            }
+        }
+        points
+    }
+
+    /// The new check against the old one and, for a point of the curve, against upstream
+    /// arkworks and the ground truth; both multiples against the exact ones (from the
+    /// delegated field and from the arkworks field); the result
+    fn check(p: &G1Affine) -> bool {
+        let new = p.is_in_correct_subgroup_assuming_on_curve();
+        assert_eq!(new, subgroup_check_before(p), "old != new at {p:?}");
+        let reference = to_ref(p);
+        if reference.is_on_curve() {
+            assert_eq!(
+                new,
+                reference.is_in_correct_subgroup_assuming_on_curve(),
+                "arkworks at {p:?}"
+            );
+            assert_eq!(new, in_g1(&reference), "[r]P == O at {p:?}");
+        }
+        // off the curve too: no formula uses b, so both are the group law of the curve
+        // y² = x³ + b' through the point
+        let expected = (
+            mul_exact(&reference, &x_abs()),
+            mul_exact(&reference, &(x_abs() * x_abs())),
+        );
+        let (x_p, x2_p) = x_and_x_squared_times(p);
+        let multiples = (to_ref_projective(&x_p), to_ref_projective(&x2_p));
+        assert_eq!(multiples, expected, "multiples at {p:?}");
+        let multiples = x_and_x_squared_times(&reference);
+        assert_eq!(multiples, expected, "multiples (arkworks field) at {p:?}");
+        new
+    }
+
+    /// The other representative of the same residue below `2p` (the delegated field keeps any)
+    fn other_representative(a: Fq) -> Fq {
+        let modulus = BigUint::from(<Fq as PrimeField>::MODULUS);
+        let limbs = BigUint::from(a.0);
+        let other = match limbs < modulus {
+            true => limbs + &modulus,
+            false => limbs - &modulus,
+        };
+        assert!(other < &modulus * 2u32);
+        let b = Fq::new_unchecked(other.try_into().unwrap());
+        assert!(b.0 != a.0 && b == a);
+        b
+    }
+
+    #[test]
+    fn curve_constants_and_exact_multiples() {
+        let mut rng = test_rng();
+        let (x, r, h) = (x_abs(), r(), h());
+        let q: BigUint = RefFq::MODULUS.into();
+        // #E(Fq) = q + 1 - t with the trace t = 1 - X
+        assert_eq!(&h * &r, q + &x);
+        let cofactor = Config::COFACTOR
+            .iter()
+            .rev()
+            .fold(BigUint::from(0u32), |acc, limb| (acc << 64u32) + *limb);
+        assert_eq!(h, cofactor);
+        let m = PRIMES_OF_M
+            .iter()
+            .fold(BigUint::from(1u32), |acc, l| acc * *l);
+        assert_eq!(&m * 3u32, &x + 1u32);
+        assert_eq!(&m * &m * 3u32, h);
+        // the structure of the part of order dividing the cofactor: exponent X + 1, no points
+        // of order ℓ²
+        for _ in 0..4 {
+            let p = random_point(&mut rng);
+            assert!(!in_g1(&p));
+            assert!(mul_exact(&p, &(&r * (&x + 1u32))).is_zero());
+            for l in PRIMES_OF_M {
+                assert!(mul_exact(&p, &(&r * &h / BigUint::from(l))).is_zero());
+            }
+        }
+        // exact multiples are not reduced modulo r: (0, 2) has order 3 and r = 1 (mod 3),
+        // while arkworks' projective multiplication (GLV) reduces the scalar
+        let t = RefAffine::new_unchecked(RefFq::ZERO, RefFq::from(2u32));
+        assert!(t.is_on_curve());
+        assert_eq!(mul_exact(&t, &r).into_affine(), t);
+        assert!(mul_exact(&t, &BigUint::from(3u32)).is_zero());
+        assert!(t.into_group().mul_bigint(RefFr::MODULUS).is_zero());
+    }
+
+    /// The old check (both GLV multiplications) is exact outside G1 because X decomposes as
+    /// (X, 0): no endomorphism is involved
+    #[test]
+    fn x_decomposes_as_x_and_zero() {
+        let x = Fr::from(crate::bls12_381::curves::Config::X[0]);
+        let ((positive, k1), (_, k2)) = Config::scalar_decomposition(x);
+        assert!(positive && k1 == x && k2.is_zero());
+    }
+
+    #[test]
+    fn subgroup_points() {
+        let mut rng = test_rng();
+        let g = RefAffine::generator();
+        let mut points = vec![
+            G1Affine::identity(),
+            G1Affine {
+                x: Fq::ONE,
+                y: Fq::ONE,
+                infinity: true,
+            },
+            G1Affine::generator(),
+            -G1Affine::generator(),
+        ];
+        for k in [BigUint::from(1u32), BigUint::from(2u32), r() - 1u32] {
+            points.push(from_ref(&mul_exact(&g, &k).into_affine()));
+        }
+        for _ in 0..16 {
+            points.push(from_ref(&random_g1(&mut rng)));
+        }
+        // cleared cofactors: [h]R and [k h]R
+        for _ in 0..4 {
+            let p = random_point(&mut rng);
+            let k: BigUint = RefFr::rand(&mut rng).into();
+            for multiple in [h(), k * h()] {
+                points.push(from_ref(&mul_exact(&p, &multiple).into_affine()));
+            }
+        }
+        for p in &points {
+            assert!(check(p), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn points_outside_the_subgroup() {
+        let mut rng = test_rng();
+        let two = RefFq::from(2u32);
+        let order_3 = [
+            RefAffine::new_unchecked(RefFq::ZERO, two),
+            RefAffine::new_unchecked(RefFq::ZERO, -two),
+        ];
+        let cofactor_points = cofactor_points(&mut rng);
+        // not in G1 by construction
+        let mut points = order_3.to_vec();
+        points.extend(&cofactor_points);
+        for t in order_3.iter().chain(&cofactor_points) {
+            points.push((random_g1(&mut rng) + t).into_affine());
+        }
+        for _ in 0..32 {
+            let p = random_point(&mut rng);
+            points.extend([p, -p]);
+        }
+        for p in &points {
+            assert!(!p.is_zero() && p.is_on_curve());
+            assert!(!check(&from_ref(p)), "{p:?}");
+        }
+        // random multiples of points of the cofactor part and of random points, labelled by
+        // the ground truth only
+        for i in 0..8 {
+            let k: BigUint = RefFr::rand(&mut rng).into();
+            let t = cofactor_points[i % cofactor_points.len()];
+            let p = random_point(&mut rng);
+            for q in [
+                mul_exact(&t, &k),
+                mul_exact(&p, &k),
+                mul_exact(&p, &(&k * r())),
+            ] {
+                check(&from_ref(&q.into_affine()));
+            }
+        }
+    }
+
+    /// Outside the contract of the check (`deserialize_with_mode` without compression calls it
+    /// on points off the curve): the old and the new check are compared, and the multiples
+    #[test]
+    fn points_off_the_curve() {
+        let mut rng = test_rng();
+        let f = |a: u64| RefFq::from(a);
+        // incl. points of the cusp y² = x³, whose non-singular points are a group
+        let mut points = vec![
+            (f(0), f(0)),
+            (f(0), f(1)),
+            (f(1), f(0)),
+            (f(1), f(1)),
+            (f(1), -f(1)),
+            (f(4), f(8)),
+            (f(4), -f(8)),
+        ];
+        for _ in 0..16 {
+            points.push((RefFq::rand(&mut rng), RefFq::rand(&mut rng)));
+        }
+        for _ in 0..4 {
+            points.push((RefFq::rand(&mut rng), RefFq::ZERO));
+            let t = RefFq::rand(&mut rng);
+            let (x, y) = (t.square(), t.square() * t);
+            points.extend([(x, y), (x, -y)]);
+        }
+        for (x, y) in points {
+            let p = RefAffine::new_unchecked(x, y);
+            assert!(!p.is_on_curve());
+            check(&from_ref(&p));
+        }
+    }
+
+    /// Every coordinate is any representative below `2p` in the delegated field: the other
+    /// representative of `x`, `y` or both gives the same answer
+    #[test]
+    fn redundant_representatives() {
+        let mut rng = test_rng();
+        let g = RefAffine::generator();
+        let two = RefFq::from(2u32);
+        let cofactor_points = cofactor_points(&mut rng);
+        let mut points = vec![
+            g,
+            -g,
+            RefAffine::new_unchecked(RefFq::ZERO, two),
+            RefAffine::new_unchecked(RefFq::ZERO, -two),
+            random_point(&mut rng),
+            (random_g1(&mut rng) + cofactor_points[3]).into_affine(),
+            // off the curve, y = 0 (then encoded as p): a doubling gives Z = 2YZ = p
+            RefAffine::new_unchecked(RefFq::rand(&mut rng), RefFq::ZERO),
+            RefAffine::new_unchecked(RefFq::ZERO, RefFq::ZERO),
+        ];
+        points.extend(&cofactor_points);
+        for p in &points {
+            let p = from_ref(p);
+            let expected = check(&p);
+            let (x, y) = (other_representative(p.x), other_representative(p.y));
+            for (x, y) in [(x, p.y), (p.x, y), (x, y)] {
+                let q = G1Affine {
+                    x,
+                    y,
+                    infinity: false,
+                };
+                assert_eq!(check(&q), expected, "{p:?}");
+            }
+        }
+        // the point at infinity with coordinates 0, zero as p, junk
+        let zero_as_p = Fq::new_unchecked(<Fq as PrimeField>::MODULUS);
+        for (x, y) in [
+            (Fq::ZERO, Fq::ZERO),
+            (zero_as_p, zero_as_p),
+            (Fq::ONE, other_representative(Fq::ONE)),
+            (zero_as_p, Fq::ONE),
+        ] {
+            assert!(check(&G1Affine {
+                x,
+                y,
+                infinity: true
+            }));
+        }
+    }
+
+    #[test]
+    fn random_sweep() {
+        let mut rng = StdRng::seed_from_u64(39);
+        let cofactor_points = cofactor_points(&mut rng);
+        for i in 0..96 {
+            check(&from_ref(&random_point(&mut rng)));
+            let g = random_g1(&mut rng);
+            assert!(check(&from_ref(&g)));
+            let t = cofactor_points[i % cofactor_points.len()];
+            assert!(!check(&from_ref(&(g + t).into_affine())));
+        }
     }
 }
