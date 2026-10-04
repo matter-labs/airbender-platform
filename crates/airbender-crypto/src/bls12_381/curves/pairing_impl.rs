@@ -49,6 +49,21 @@ impl Bls12_381 {
         Self::miller_loop_impl::<MILLER_LOOP_CHUNK, _>(Some(initial), a, b)
     }
 
+    /// The unsigned seeded loop with streaming preparation of owned G2 inputs. At most
+    /// `OWNED_MILLER_LOOP_CHUNK` prepared points are retained, with the same host stack bound
+    /// as `Pairing::multi_miller_loop`.
+    pub fn multi_miller_loop_with_initial_owned(
+        initial: &Fq12,
+        a: impl IntoIterator<Item = impl Into<<Self as Pairing>::G1Prepared>>,
+        b: impl IntoIterator<Item = impl Into<G2PreparedNoAlloc>>,
+    ) -> Fq12 {
+        Self::miller_loop_impl::<OWNED_MILLER_LOOP_CHUNK, _>(
+            Some(initial),
+            a,
+            b.into_iter().map(Into::<G2PreparedNoAlloc>::into),
+        )
+    }
+
     /// The Miller loop over borrowed prepared `G2` points: the same as the `Pairing` trait's
     /// `multi_miller_loop` (conjugated for the negative seed), which converts its points to
     /// the prepared form by value, but with precomputed lines read in place (a chunk of items is
