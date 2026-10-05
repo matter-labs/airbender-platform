@@ -7,7 +7,7 @@ use ark_ec::{
     short_weierstrass::{Affine, SWCurveConfig},
     AffineRepr, PrimeGroup,
 };
-use ark_ff::{AdditiveGroup, One, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, Field, One, PrimeField, Zero};
 use ruint::aliases::U512;
 
 #[cfg(any(
@@ -39,6 +39,38 @@ use crate::{
 
 pub type G1Affine = bls12::G1Affine<crate::bls12_381::curves::Config>;
 pub type G1Projective = bls12::G1Projective<crate::bls12_381::curves::Config>;
+
+/// Normalize a projective point using a checked inverse; infinity and z = 1 consume no hint.
+pub fn into_affine_with_inverse(
+    p: &G1Projective,
+    inverse: impl FnOnce(&Fq) -> Option<Fq>,
+) -> G1Affine {
+    if p.is_zero() {
+        return G1Affine::identity();
+    }
+    // A point with z = 1 is already affine, on the host and the guest alike, so it takes no hint
+    if p.z.is_one() {
+        return G1Affine::new_unchecked(p.x, p.y);
+    }
+    let z_inv = inverse(&p.z).expect("nonzero projective coordinate has an inverse");
+    assert_eq!(p.z * z_inv, Fq::ONE, "invalid inverse hint");
+    let z_inv_squared = z_inv.square();
+    G1Affine::new_unchecked(p.x * z_inv_squared, p.y * z_inv_squared * z_inv)
+}
+
+/// Clear the effective cofactor without scalar reduction or subgroup assumptions.
+pub fn clear_cofactor_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    p: &G1Affine,
+    divider: &mut D,
+) -> G1Affine {
+    const _: () = assert!(crate::bls12_381::curves::Config::X.len() == 1);
+    // The BLS seed is negative, so the effective cofactor 1 - x fits in u64.
+    crate::affine_glv::mul_u64_affine::<Config, D>(
+        p,
+        crate::bls12_381::curves::Config::X[0] + 1,
+        divider,
+    )
+}
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Config;
@@ -174,11 +206,6 @@ impl SWCurveConfig for Config {
     }
 }
 
-/// The scalar (little-endian limbs, any value below 2^256) as a field element, reduced modulo
-/// the group order. On the delegated field this is one Montgomery multiplication by `R²`
-/// (`x R^-1 R² = x R`, the Montgomery form of `x`, with the reduction of the multiplication:
-/// `x R² < 2^256 r`, so the product is below `2r` and one conditional subtraction makes it
-/// canonical), where `from_sign_and_limbs` would run arkworks' software multiplication.
 #[inline(always)]
 /// `k P + l Q` with the doublings shared between the two GLV multiplications
 pub fn mul_two(p: &G1Projective, k: Fr, q: &G1Projective, l: Fr) -> G1Projective {
@@ -225,7 +252,13 @@ pub fn is_in_subgroup_with_divider<D: crate::affine_glv::Divider<Fq>>(
     endomorphism(p) == -x_squared_times_p
 }
 
-fn scalar_from_limbs(scalar: &[u64]) -> Fr {
+/// The scalar (little-endian limbs, any value below 2^256) as a field element, fully reduced
+/// modulo the group order `r`. On the delegated field this is one Montgomery multiplication by
+/// `R²` (`x R^-1 R² = x R`, the Montgomery form of `x`, with the reduction of the
+/// multiplication: `x R² < 2^256 r`, so the product is below `2r` and one conditional
+/// subtraction makes it canonical), where `from_sign_and_limbs` would run arkworks' software
+/// multiplication. Longer inputs take `from_sign_and_limbs`.
+pub fn scalar_from_limbs(scalar: &[u64]) -> Fr {
     #[cfg(any(
         all(target_arch = "riscv32", feature = "bigint_ops"),
         test,
@@ -425,6 +458,47 @@ mod tests {
     use super::{Config, CurveConfig, GLVConfig, PrimeField};
     use proptest::{prop_assert_eq, proptest};
     type ScalarField = <Config as CurveConfig>::ScalarField;
+
+    /// `scalar_from_limbs` reduces every 256-bit integer fully modulo `r`, to the canonical
+    /// representation (the limbs of `Fr` are compared as they are), as the arkworks reference
+    /// does: at `0, 1, r - 1, r, r + 1, 2r + 1, 2^256 - 1` and at random integers
+    #[test]
+    fn scalar_from_limbs_reduces_every_256_bit_integer() {
+        use super::{scalar_from_limbs, Fr};
+        use num_bigint::BigUint;
+        let check = |limbs: [u64; 4]| {
+            let ours = scalar_from_limbs(&limbs);
+            let bytes: Vec<u8> = limbs.iter().flat_map(|limb| limb.to_le_bytes()).collect();
+            let reference = ark_bls12_381::Fr::from_le_bytes_mod_order(&bytes)
+                .into_bigint()
+                .0;
+            assert!(!ours.is_geq_modulus(), "{limbs:x?}");
+            assert_eq!(
+                ours,
+                Fr::from_bigint(crate::BigInt(reference)).unwrap(),
+                "{limbs:x?}"
+            );
+            assert_eq!(ours.into_bigint().0, reference, "{limbs:x?}");
+        };
+        let r = BigUint::from(<Fr as PrimeField>::MODULUS);
+        let one = BigUint::from(1u32);
+        for n in [
+            BigUint::from(0u32),
+            one.clone(),
+            &r - 1u32,
+            r.clone(),
+            &r + 1u32,
+            &r * 2u32 + 1u32,
+            (&one << 256u32) - 1u32,
+        ] {
+            let mut limbs = [0u64; 4];
+            for (limb, digit) in limbs.iter_mut().zip(n.iter_u64_digits()) {
+                *limb = digit;
+            }
+            check(limbs);
+        }
+        proptest!(|(limbs: [u64; 4])| check(limbs));
+    }
 
     #[test]
     fn compare_scalar_decomposition() {

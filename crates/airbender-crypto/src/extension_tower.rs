@@ -89,6 +89,25 @@ impl<P: ark_ff::FpConfig<N>, const N: usize> CopyAssign for ark_ff::Fp<P, N> {
     }
 }
 
+// Component-wise copies keep extension-field affine arithmetic compatible with delegated Fp.
+impl<P: Fp2Config> CopyAssign for Fp2<P>
+where
+    P::Fp: CopyAssign,
+{
+    #[inline(always)]
+    fn copy_assign(&mut self, src: &Self) {
+        self.c0.copy_assign(&src.c0);
+        self.c1.copy_assign(&src.c1);
+    }
+
+    #[inline(always)]
+    unsafe fn init_copy(dst: *mut Self, src: &Self) {
+        // SAFETY: the caller supplies aligned writable memory for the entire Fp2.
+        P::Fp::init_copy(core::ptr::addr_of_mut!((*dst).c0), &src.c0);
+        P::Fp::init_copy(core::ptr::addr_of_mut!((*dst).c1), &src.c1);
+    }
+}
+
 /// Quadratic extensions with `u² = -1`: the `Fp2` products below hard-code that non-residue,
 /// so it is opted into per configuration
 pub(crate) trait NonresidueMinusOne: Fp2Config<Fp: CopyAssign> {
