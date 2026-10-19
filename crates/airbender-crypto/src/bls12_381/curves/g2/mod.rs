@@ -9,7 +9,7 @@ use ark_ec::{
     short_weierstrass::{Affine, Projective, SWCurveConfig},
     AffineRepr, CurveGroup, PrimeGroup,
 };
-use ark_ff::{AdditiveGroup, Field, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, Field, One, PrimeField, Zero};
 use ark_serialize::{Compress, SerializationError};
 
 #[cfg(any(
@@ -36,6 +36,72 @@ use crate::bls12_381::{
 
 pub type G2Affine = bls12::G2Affine<crate::bls12_381::curves::Config>;
 pub type G2Projective = bls12::G2Projective<crate::bls12_381::curves::Config>;
+
+/// Normalize a projective point using a checked inverse; infinity and z = 1 consume no hint.
+pub fn into_affine_with_inverse(
+    p: &G2Projective,
+    inverse: impl FnOnce(&Fq2) -> Option<Fq2>,
+) -> G2Affine {
+    if p.is_zero() {
+        return G2Affine::identity();
+    }
+    // A point with z = 1 is already affine, on the host and the guest alike, so it takes no hint
+    if p.z.is_one() {
+        return G2Affine::new_unchecked(p.x, p.y);
+    }
+    let z_inv = inverse(&p.z).expect("nonzero projective coordinate has an inverse");
+    assert_eq!(p.z * z_inv, Fq2::ONE, "invalid inverse hint");
+    let z_inv_squared = z_inv.square();
+    G2Affine::new_unchecked(p.x * z_inv_squared, p.y * z_inv_squared * z_inv)
+}
+
+/// Add on-curve affine points using the divider, including exceptional cases.
+pub fn add_affine_with_divider<D: crate::affine_glv::Divider<Fq2>>(
+    a: &G2Affine,
+    b: &G2Affine,
+    divider: &mut D,
+) -> G2Affine {
+    crate::affine_glv::add_affine::<Config, D>(a, b, divider)
+}
+
+/// Test subgroup membership of an on-curve point with the fixed integer BLS seed.
+pub fn is_in_subgroup_with_divider<D: crate::affine_glv::Divider<Fq2>>(
+    p: &G2Affine,
+    divider: &mut D,
+) -> bool {
+    const _: () = assert!(crate::bls12_381::curves::Config::X.len() == 1);
+    let mut x_p = crate::affine_glv::mul_u64_affine::<Config, D>(
+        p,
+        crate::bls12_381::curves::Config::X[0],
+        divider,
+    );
+    if crate::bls12_381::curves::Config::X_IS_NEGATIVE {
+        x_p = -x_p;
+    }
+    x_p == p_power_endomorphism(p)
+}
+
+/// Clear the cofactor with the same endomorphism formula as the projective reference.
+/// All multiplications use the integer seed, without reduction modulo the subgroup order.
+pub fn clear_cofactor_with_divider<D: crate::affine_glv::Divider<Fq2>>(
+    p: &G2Affine,
+    divider: &mut D,
+) -> G2Affine {
+    const _: () = assert!(crate::bls12_381::curves::Config::X.len() == 1);
+    let x = crate::bls12_381::curves::Config::X[0];
+    let x_p = -crate::affine_glv::mul_u64_affine::<Config, D>(p, x, divider);
+    let psi_p = p_power_endomorphism(p);
+    let twice_p = add_affine_with_divider(p, p, divider);
+    let mut result = twice_p;
+    result.x *= DOUBLE_P_POWER_ENDOMORPHISM_COEFF_0;
+    result.y = -result.y;
+    let sum = add_affine_with_divider(&x_p, &psi_p, divider);
+    let x_sum = -crate::affine_glv::mul_u64_affine::<Config, D>(&sum, x, divider);
+    result = add_affine_with_divider(&result, &x_sum, divider);
+    result = add_affine_with_divider(&result, &-x_p, divider);
+    result = add_affine_with_divider(&result, &-psi_p, divider);
+    add_affine_with_divider(&result, &-*p, divider)
+}
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Config;
@@ -315,3 +381,6 @@ impl WBConfig for Config {
     const ISOGENY_MAP: IsogenyMap<'static, Self::IsogenousCurve, Self> =
         g2_swu_iso::ISOGENY_MAP_TO_G2;
 }
+
+#[cfg(test)]
+mod tests;
