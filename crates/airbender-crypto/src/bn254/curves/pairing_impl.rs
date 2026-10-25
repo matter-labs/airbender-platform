@@ -1,4 +1,10 @@
 use super::*;
+#[cfg(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+))]
+use crate::ark_ff_delegation::MontFp;
 use crate::bn254::Fq12;
 use crate::extension_tower::*;
 use ark_ec::bn::g2::EllCoeff;
@@ -7,6 +13,12 @@ use ark_ec::pairing::PairingOutput;
 use ark_ec::short_weierstrass::SWCurveConfig;
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
+#[cfg(not(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+)))]
+use ark_ff::MontFp;
 use ark_ff::One;
 use ark_ff::{AdditiveGroup, Field};
 use ark_serialize::CanonicalDeserialize;
@@ -407,8 +419,11 @@ impl From<G2Affine> for G2PreparedNoAlloc {
                 affine_lines: false,
             }
         } else {
-            use ark_ff::{AdditiveGroup, One};
-            let two_inv = Fq::one().double().inverse().unwrap();
+            use ark_ff::One;
+            const TWO_INV: Fq = MontFp!(
+                "10944121435919637611123202872628637544348155578648911831344518947322613104292"
+            );
+            let two_inv = TWO_INV;
             let mut i = 0;
             let mut ell_coeffs: [core::mem::MaybeUninit<EllCoeff<Config>>; BN254_NUM_ELL_COEFFS] =
                 [const { core::mem::MaybeUninit::uninit() }; BN254_NUM_ELL_COEFFS];

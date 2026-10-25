@@ -44,7 +44,7 @@ macro_rules! assert_affine_layout {
 }
 pub mod affine_glv;
 #[allow(clippy::all)]
-#[allow(unused_imports, dead_code)]
+#[allow(unused_imports)]
 #[cfg(any(
     all(target_arch = "riscv32", feature = "bigint_ops"),
     feature = "proving",
@@ -149,7 +149,7 @@ pub trait MiniDigest: Sized {
     // Allow to reorder and avoid copying in finalize - output - reset operations sequence if hasher supports
     // such case due to it's internal structure
     #[inline(always)]
-    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput) -> ()>(&mut self, closure: FN) {
+    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput)>(&mut self, closure: FN) {
         let t = self.finalize_reset();
         (closure)(&t);
     }

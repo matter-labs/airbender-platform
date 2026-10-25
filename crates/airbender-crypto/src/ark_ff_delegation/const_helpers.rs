@@ -68,18 +68,6 @@ impl<const N: usize> SerBuffer<N> {
         }
     }
 
-    #[allow(unsafe_code)]
-    pub(super) fn as_slice(&self) -> &[u8] {
-        unsafe { ark_std::slice::from_raw_parts((self as *const Self) as *const u8, 8 * N + 1) }
-    }
-
-    #[inline(always)]
-    pub(super) fn last_n_plus_1_bytes_mut(&mut self) -> impl Iterator<Item = &mut u8> {
-        self.buffers[N - 1]
-            .iter_mut()
-            .chain(ark_std::iter::once(&mut self.last))
-    }
-
     #[inline(always)]
     pub(super) fn copy_from_u8_slice(&mut self, other: &[u8]) {
         other.chunks(8).enumerate().for_each(|(i, chunk)| {
@@ -112,25 +100,24 @@ impl<const N: usize> SerBuffer<N> {
 
     #[inline(always)]
     /// Write up to `num_bytes` bytes from `self` to `other`.
-    /// `num_bytes` is allowed to range from `8 * (N - 1) + 1` to `8 * N + 1`.
+    /// `num_bytes` may range from zero to `8 * N + 1`, including padded fields.
     pub(super) fn write_up_to(
         &self,
         mut other: impl Write,
         num_bytes: usize,
     ) -> ark_std::io::Result<()> {
         debug_assert!(num_bytes <= 8 * N + 1, "index too large");
-        debug_assert!(num_bytes > 8 * (N - 1), "index too small");
-        // unconditionally write first `N - 1` limbs.
-        for i in 0..(N - 1) {
-            other.write_all(&self.buffers[i])?;
+        // Delegated fields may have more storage limbs than their canonical encoding.
+        let mut remaining = num_bytes;
+        for buffer in &self.buffers {
+            if remaining == 0 {
+                break;
+            }
+            let len = remaining.min(8);
+            other.write_all(&buffer[..len])?;
+            remaining -= len;
         }
-        // for the `N`-th limb, depending on `index`, we can write anywhere from
-        // 1 to all bytes.
-        let remaining_bytes = num_bytes - (8 * (N - 1));
-        let write_last_byte = remaining_bytes > 8;
-        let num_last_limb_bytes = ark_std::cmp::min(8, remaining_bytes);
-        other.write_all(&self.buffers[N - 1][..num_last_limb_bytes])?;
-        if write_last_byte {
+        if remaining != 0 {
             other.write_all(&[self.last])?;
         }
         Ok(())
@@ -138,26 +125,25 @@ impl<const N: usize> SerBuffer<N> {
 
     #[inline(always)]
     /// Read up to `num_bytes` bytes from `other` to `self`.
-    /// `num_bytes` is allowed to range from `8 * (N - 1)` to `8 * N + 1`.
+    /// `num_bytes` may range from zero to `8 * N + 1`, including padded fields.
     pub(super) fn read_exact_up_to(
         &mut self,
         mut other: impl Read,
         num_bytes: usize,
     ) -> ark_std::io::Result<()> {
         debug_assert!(num_bytes <= 8 * N + 1, "index too large");
-        debug_assert!(num_bytes > 8 * (N - 1), "index too small");
-        // unconditionally write first `N - 1` limbs.
-        for i in 0..(N - 1) {
-            other.read_exact(&mut self.buffers[i])?;
+        // Delegated fields may have more storage limbs than their canonical encoding.
+        let mut remaining = num_bytes;
+        for buffer in &mut self.buffers {
+            if remaining == 0 {
+                break;
+            }
+            let len = remaining.min(8);
+            other.read_exact(&mut buffer[..len])?;
+            remaining -= len;
         }
-        // for the `N`-th limb, depending on `index`, we can write anywhere from
-        // 1 to all bytes.
-        let remaining_bytes = num_bytes - (8 * (N - 1));
-        let write_last_byte = remaining_bytes > 8;
-        let num_last_limb_bytes = ark_std::cmp::min(8, remaining_bytes);
-        other.read_exact(&mut self.buffers[N - 1][..num_last_limb_bytes])?;
-        if write_last_byte {
-            let mut last = [0u8; 1];
+        if remaining != 0 {
+            let mut last = [0];
             other.read_exact(&mut last)?;
             self.last = last[0];
         }
@@ -227,6 +213,41 @@ impl<const N: usize> R2Buffer<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn padded_bls_storage_uses_reference_canonical_encoding() {
+        use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+        let value = crate::bls12_381::Fq::from(17u64);
+        let mut actual = Vec::new();
+        value.serialize_compressed(&mut actual).unwrap();
+        let mut expected = Vec::new();
+        ark_bls12_381::Fq::from(17u64)
+            .serialize_compressed(&mut expected)
+            .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            crate::bls12_381::Fq::deserialize_compressed(actual.as_slice()).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn padded_bls_sampling_and_random_bytes_match_reference() {
+        use ark_ff::{BigInteger, Field, PrimeField, UniformRand};
+        assert_eq!(crate::bls12_381::Fq::MODULUS_BIT_SIZE, 381);
+        for bytes in [[0; 48], [1; 48], [0xff; 48], [0x42; 48]] {
+            let ours = crate::bls12_381::Fq::from_random_bytes(&bytes)
+                .map(|x| x.into_bigint().to_bytes_le());
+            let reference =
+                ark_bls12_381::Fq::from_random_bytes(&bytes).map(|x| x.into_bigint().to_bytes_le());
+            assert_eq!(ours.as_deref().map(|x| &x[..48]), reference.as_deref());
+        }
+        let mut rng = ark_std::test_rng();
+        for _ in 0..8 {
+            let value = crate::bls12_381::Fq::rand(&mut rng);
+            assert!(value.into_bigint() < crate::bls12_381::Fq::MODULUS);
+        }
+    }
 
     #[test]
     fn test_const_for_macro() {

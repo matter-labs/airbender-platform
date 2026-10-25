@@ -112,7 +112,7 @@ impl ScalarInner {
         (Self(r1), Self(r2))
     }
 
-    pub(super) fn eq_mod(&self, other: &Self, modulus: &Self) -> bool {
+    pub(super) fn eq_mod(&self, other: &Self, _modulus: &Self) -> bool {
         let (order, _) =
             crate::k256::elliptic_curve::bigint::NonZero::<crate::k256::U256>::const_new(
                 Self::ORDER.0,
