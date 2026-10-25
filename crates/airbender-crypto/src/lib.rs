@@ -55,6 +55,7 @@ pub mod ark_ff_delegation;
 #[allow(clippy::all)]
 #[allow(unused_imports, dead_code)]
 mod bigint_delegation;
+pub mod blake2f;
 #[allow(unexpected_cfgs)]
 pub mod blake2s;
 pub mod bytes32;
