@@ -240,6 +240,8 @@ fn set(r: &mut Affine, x: &FieldElement, y: &FieldElement, negate: bool) {
     assign(&mut r.x, x);
     assign(&mut r.y, y);
     if negate {
+        // A valid input point can carry a non-normalized field representation.
+        settle(&mut r.y);
         r.y.negate_in_place(1);
         settle(&mut r.y);
     }
@@ -747,6 +749,16 @@ mod tests {
         point.y.negate_in_place(1);
         point.y.normalize_in_place();
         point
+    }
+
+    #[test]
+    fn set_negates_a_non_normalized_coordinate() {
+        let g = Affine::GENERATOR;
+        let mut y = g.y;
+        y.negate_in_place(1);
+        let mut result = Affine::INFINITY;
+        set(&mut result, &g.x, &y, true);
+        assert_eq!(normalized(result), g);
     }
 
     #[test]
