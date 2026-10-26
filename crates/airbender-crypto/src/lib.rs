@@ -178,3 +178,6 @@ pub fn parse_u256_be<const N: usize>(input: &[u8; N]) -> BigInt<4> {
     }
     BigInt::new(repr)
 }
+
+#[cfg(test)]
+mod signature_tests;

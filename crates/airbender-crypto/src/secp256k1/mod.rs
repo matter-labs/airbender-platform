@@ -30,7 +30,9 @@ pub use recover::recover_with_context_and_hooks;
 pub use recover_witnessed::WITNESS_COEFFICIENT_BITS;
 
 #[cfg(feature = "secp256k1-static-context")]
-pub use recover::{recover, recover_from_bytes_with_hooks, recover_with_hooks};
+pub use recover::{
+    recover, recover_from_bytes_with_hooks, recover_with_hooks, verify_prehash_with_hooks,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum Secp256k1Err {
@@ -107,6 +109,12 @@ pub fn ecrecover_test() {
     let recovered_key = recover(&msg, &signature, &recovery_id).unwrap();
 
     assert_eq!(recovered_key.to_bytes(), public_key.to_bytes());
+}
+
+/// Verify prehashed ECDSA. Malformed inputs return None, false claims Some(false).
+#[cfg(feature = "secp256k1-static-context")]
+pub fn verify_prehash(msg: &[u8; 32], sig: &[u8; 64], pubkey: &[u8; 64]) -> Option<bool> {
+    recover::verify_prehash_with_hooks(msg, sig, pubkey, &mut hooks::DefaultSecp256k1Hooks)
 }
 
 #[cfg(test)]

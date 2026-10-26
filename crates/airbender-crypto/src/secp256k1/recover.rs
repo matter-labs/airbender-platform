@@ -577,6 +577,45 @@ fn table_verify(n: i32, w: usize) -> bool {
     (2..=31).contains(&w) && ((n & 1) == 1) && (n >= -((1 << (w - 1)) - 1)) && (n < (1 << (w - 1)))
 }
 
+/// Verify prehashed ECDSA using the same delegated arithmetic and `hooks` as recovery
+/// (`Secp256k1HooksWithOracle` takes the field operations from hints and checks them,
+/// `DefaultSecp256k1Hooks` computes them). Public keys are canonical uncompressed x || y bytes.
+#[cfg(feature = "secp256k1-static-context")]
+pub fn verify_prehash_with_hooks<H: super::hooks::Secp256k1Hooks>(
+    digest: &[u8; 32],
+    signature: &[u8; 64],
+    public_key: &[u8; 64],
+    hooks: &mut H,
+) -> Option<bool> {
+    use super::context::ECRECOVER_CONTEXT;
+    let r = Scalar::from_be_bytes_checked(signature[..32].try_into().unwrap())?;
+    let mut s = Scalar::from_be_bytes_checked(signature[32..].try_into().unwrap())?;
+    if r.is_zero() || s.is_zero() {
+        return None;
+    }
+    let q = Affine::from_coordinates(public_key)?;
+    let z = Scalar::from_be_bytes_reduced(digest);
+    hooks.scalar_invert_and_assign(&mut s);
+    let mut u = z;
+    u *= s;
+    let mut v = r;
+    v *= s;
+    let mut sum = if H::FE_DIVIDE_IS_CHEAP {
+        super::recover_affine::ecmult_affine(&q, &v, &u, &ECRECOVER_CONTEXT, hooks)
+    } else {
+        ecmult_with_hooks(&q.to_jacobian(), &v, &u, &ECRECOVER_CONTEXT, hooks)
+            .to_affine_with_hooks(hooks)
+    };
+    if sum.is_infinity() {
+        return Some(false);
+    }
+    sum.normalize_in_place();
+    let mut x = [0; 32];
+    let mut y = [0; 32];
+    sum.write_coordinates(&mut x, &mut y);
+    Some(Scalar::from_be_bytes_reduced(&x).to_repr() == r.to_repr())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(non_snake_case)]
