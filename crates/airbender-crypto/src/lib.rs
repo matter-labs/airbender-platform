@@ -3,13 +3,14 @@
 #![allow(static_mut_refs)]
 #![allow(clippy::uninit_assumed_init)]
 #![allow(clippy::new_without_default)]
-// Only `secp256k1::context::ECMultContext::new_in` needs it, and that is behind
-// `alloc`. Declaring it unconditionally trips `unused_features` on every build
-// without that feature.
-#![cfg_attr(feature = "alloc", feature(allocator_api))]
+// `secp256k1::context::ECMultContext::new_in` and the precompile endpoints that
+// allocate need it, and those are behind `alloc` (or `cfg(test)`). Declaring it
+// unconditionally trips `unused_features` on every build without them.
+#![cfg_attr(any(feature = "alloc", test), feature(allocator_api))]
 // The crate is `no_std`, so `context.rs`'s `use alloc::boxed::Box` needs the
 // crate linked explicitly. Without this, `--features alloc` does not build at all.
-#[cfg(feature = "alloc")]
+// Tests use `alloc` too (the oracle side of `hints`), with or without the feature.
+#[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
 // Compile-time checks of the memory layout of the extension field towers and of the affine points,
@@ -58,6 +59,9 @@ mod bigint_delegation;
 pub mod blake2f;
 #[allow(unexpected_cfgs)]
 pub mod blake2s;
+// The byte-order conversions of zksync-os, which the precompiles and ModExp use on RV32 only
+#[cfg(any(target_arch = "riscv32", test))]
+mod byte_order;
 pub mod bytes32;
 #[cfg(test)]
 mod delegation_counts;
@@ -65,7 +69,12 @@ pub(crate) mod extension_tower;
 #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
 pub mod field_inverse;
 pub mod hinted_ops;
+pub mod hints;
 pub(crate) mod jacobian;
+// The ModExp of zksync-os: its operands and its digits are allocated
+#[cfg(any(feature = "alloc", test))]
+pub mod modexp;
+pub mod precompiles;
 pub mod residue_witness;
 pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
