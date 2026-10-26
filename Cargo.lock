@@ -123,6 +123,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "airbender-crypto-c"
+version = "0.3.0"
+dependencies = [
+ "airbender-crypto",
+ "airbender-rt",
+]
+
+[[package]]
 name = "airbender-guest"
 version = "0.3.0"
 dependencies = [
@@ -1629,7 +1637,6 @@ version = "0.1.0"
 dependencies = [
  "common_constants",
  "flate2",
- "riscv_transpiler",
  "serde",
  "serde_json",
  "setups",
@@ -2153,7 +2160,6 @@ dependencies = [
 name = "inits_and_teardowns"
 version = "0.1.0"
 dependencies = [
- "circuit_common",
  "common_constants",
  "prover",
  "serde",
@@ -3400,7 +3406,6 @@ dependencies = [
  "sha3 0.12.0",
  "shift_binary",
  "syn 2.0.117",
- "unified_extended_machine",
  "unified_reduced_machine",
  "verifier_common",
 ]
@@ -3943,16 +3948,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unified_extended_machine"
-version = "0.1.0"
-dependencies = [
- "circuit_common",
- "common_constants",
- "prover",
- "witness_eval_generator",
-]
 
 [[package]]
 name = "unified_reduced_machine"
