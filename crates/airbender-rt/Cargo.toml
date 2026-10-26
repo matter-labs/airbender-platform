@@ -12,18 +12,21 @@ description = "Guest runtime support for Airbender programs"
 readme = "README.md"
 
 [dependencies]
-riscv_common = { workspace = true, features = ["boot_sequence", "custom_allocator", "custom_panic"] }
+riscv_common = { workspace = true, features = ["custom_allocator", "custom_panic"] }
 getrandom = { workspace = true, default-features = false, features = ["custom"] }
 talc = { workspace = true, default-features = false, features = ["allocator", "nightly_api"], optional = true }
 
 [features]
 default = ["allocator-talc", "ram-1gb"]
 std = []
+boot = ["riscv_common/boot_sequence"]
+# Reuse allocator/handlers in an image whose C runtime owns startup and libc.
+external-startup = ["riscv_common/no_memcpy_override", "riscv_common/no_memmove_override", "riscv_common/no_memset_override"]
 allocator-bump = []
 allocator-talc = ["dep:talc"]
 allocator-custom = []
 # Total guest memory layout (ROM + RAM). Exactly one must be enabled; the
 # linker scripts come from `riscv_common`.
-ram-32mb-no-heap = ["riscv_common/ram_32mb_no_heap"]
-ram-1gb = ["riscv_common/ram_1gb"]
-ram-4gb = ["riscv_common/ram_4gb"]
+ram-32mb-no-heap = ["boot", "riscv_common/ram_32mb_no_heap"]
+ram-1gb = ["boot", "riscv_common/ram_1gb"]
+ram-4gb = ["boot", "riscv_common/ram_4gb"]
