@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/airbender-crypto",
+    "crates/airbender-crypto-c",
     "crates/airbender-core",
     "crates/airbender-build",
     "crates/airbender-codec",
