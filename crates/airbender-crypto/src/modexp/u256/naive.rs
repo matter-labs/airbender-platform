@@ -1,6 +1,4 @@
-// Ported from zksync-os 185a0568:supporting_crates/u256/src/naive/mod.rs
-//! The `U256` of the targets without the bigint delegation: plain arithmetic on `ruint`. Only the
-//! operations that ModExp uses are ported.
+//! The `U256` without the bigint delegation, over `ruint`.
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -9,7 +7,6 @@ pub struct U256(ruint::aliases::U256);
 impl Clone for U256 {
     #[inline(always)]
     fn clone(&self) -> Self {
-        // copy
         Self(self.0)
     }
 
@@ -43,7 +40,7 @@ impl U256 {
         Self(ruint::aliases::U256::from_limbs(limbs))
     }
 
-    /// Same as `write_into_ptr`; the source location does not matter on this backend.
+    /// Writes `source` to `dst`; unlike the delegated one, any source location works.
     ///
     /// # Safety
     /// `dst` must be valid for a write of `Self`.

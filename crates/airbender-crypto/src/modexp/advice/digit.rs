@@ -1,12 +1,11 @@
-// Ported from zksync-os 185a0568:basic_system/src/system_functions/modexp/advice/u256.rs
 use crate::{bigint_op_delegation_raw, BigIntOps};
 use core::mem::MaybeUninit;
 
-// Immutable statics land in `.rodata`, which the linker places above the ROM bound, so they are
-// valid delegation operands without a runtime initialization
+// Immutable statics land in `.rodata`, above the ROM bound, so they are valid delegation operands
 static ZERO: DelegatedU256 = DelegatedU256::ZERO;
 static ONE: DelegatedU256 = DelegatedU256::ONE;
 
+/// A 256-bit digit of the multi-digit path, aligned for the delegation
 #[repr(align(32))]
 pub(crate) struct DelegatedU256([u64; 4]);
 
@@ -138,7 +137,7 @@ impl DelegatedU256 {
 impl Clone for DelegatedU256 {
     #[inline(always)]
     fn clone(&self) -> Self {
-        // custom clone by using precompile
+        // one delegated copy
         unsafe { Self::copy_from_ptr(self as *const Self) }
     }
 

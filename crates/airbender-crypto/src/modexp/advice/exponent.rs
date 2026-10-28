@@ -1,8 +1,6 @@
-// Ported from zksync-os 185a0568:basic_system/src/system_functions/modexp/advice/exponent.rs
-//! The exponent walk of modexp, shared by the single-digit and the multi-digit modulus
-//! paths, over the modular multiplication a `ModMul` provides.
+//! The exponent walk, shared by the single-digit and the multi-digit paths.
 
-/// Modular squaring and multiplication of one representation of residues
+/// Modular squaring and multiplication over one representation of residues
 pub(crate) trait ModMul {
     type Elem;
 
@@ -16,9 +14,8 @@ pub(crate) trait ModMul {
     fn mul_assign(&mut self, x: &mut Self::Elem, y: &Self::Elem);
 }
 
-/// Exponents at least this long (in bits) are walked in 4-bit windows with a table of 16
-/// powers of the base; shorter ones bit by bit. The table costs 14 multiplications and
-/// saves about one multiplication per 4 exponent bits.
+/// Exponents of at least this many bits are walked in 4-bit windows over a table of powers of
+/// the base (14 products to build); shorter ones bit by bit.
 const WINDOW_MIN_BITS: usize = 64;
 const WINDOW_BITS: usize = 4;
 const TABLE_SIZE: usize = 1 << WINDOW_BITS;

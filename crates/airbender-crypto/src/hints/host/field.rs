@@ -1,14 +1,6 @@
-// Ported from zksync-os e855bca2:callable_oracles/src/field_hints/mod.rs
-// Ported from zksync-os e855bca2:callable_oracles/src/field_hints/impls.rs
-//! The answers to the field hints (square roots, inverses and quotients of the secp256k1, bn254
-//! and bls12-381 fields).
-//!
-//! The hints are served with the memory-based protocol: the input word is the address of the
-//! request, which points to the operand where the querier keeps it. The field elements of the
-//! operands and of the answers are in the representation of the target of the querier (see
-//! `FieldHintOp`, `HintAnswer` and `Secp256k1Element`), which differs between the RISC-V guest and
-//! native builds. The responses asked for tell which the querier is, and whether the guest is
-//! answered too, when a native run records the prover input (see `answer_query`).
+//! The answers to the field hints. Operands and answers are in the representation of the
+//! querier's target (see `FieldHintOp`, `HintAnswer` and `Secp256k1Element`); the responses asked
+//! for tell which target the querier is (see `answer_query`).
 
 use super::read_querier_u32_words;
 use crate::hints::{
@@ -21,13 +13,11 @@ use alloc::vec::Vec;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{Field, One, PrimeField, Zero};
 
-/// The op and the operand of the hint request at `input_word` in the memory of `querier`
+/// The op and the operand of the hint request at `input_word`
 ///
 /// # Safety
 ///
-/// For a querier in this process (`HintTarget::Native`), `memory` must be the memory of this
-/// process, and `input_word` the address of a live request whose operand references live values
-/// of the operand types of its op (see `Operand::new`).
+/// For a native querier, as for `Operand::new`: `input_word` is a live request in this process.
 unsafe fn read_request<'m>(
     memory: &'m dyn QuerierMemory,
     input_word: usize,
@@ -38,15 +28,13 @@ unsafe fn read_request<'m>(
     let Some(op) = FieldHintOp::parse_u32(op) else {
         panic!("Unknown field hint op {op}");
     };
-    // SAFETY: guaranteed by the caller: the operand of a querier in this process is live values
-    // of the operand types of `op`
+    // SAFETY: guaranteed by the caller
     (op, unsafe {
         Operand::new(memory, querier, address, len_u32_words)
     })
 }
 
-/// The responses of a processor to a hint query: the answer as a querier in this process reads
-/// it (a native run), and as the RISC-V guest reads it, for those of the runs it is produced for
+/// The responses asked for: the answer as a native querier reads it, and as the guest does
 struct Responses<'a> {
     native_run: Option<&'a mut Vec<u32>>,
     guest_run: Option<&'a mut Vec<u32>>,
@@ -106,23 +94,17 @@ fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) {
     }
 }
 
-/// The answer, as a querier in this process reads it, to its pairing request (the bn254 pairing,
-/// the KZG proof pairing, or the BLS12-381 pairing: `Bn254PairingResidueWitness`,
-/// `Bls12381KzgResidueWitness` or `Bls12381PairingResidueWitness`) at `input_word` that claims a
-/// non-identity, with the inverse the exact path needs, whatever the product is: for tests of
-/// that path
+/// A native answer to the pairing request at `input_word` that claims a non-identity whatever the
+/// product, with the inverse the exact path needs: for tests of that path.
 ///
 /// # Panics
 ///
-/// Panics if the request is not one of those three ops, or if it is malformed (as
-/// [`answer_query`](super::answer_query) does).
+/// If the request is not a pairing op (`Bn254PairingResidueWitness`, `Bls12381KzgResidueWitness`
+/// or `Bls12381PairingResidueWitness`), or is malformed.
 ///
 /// # Safety
 ///
-/// `memory` must be the memory of this process, and `input_word` the address of a live request
-/// whose operand references live values of the operand types of its op, for the duration of the
-/// call (the contract of [`answer_query`](super::answer_query) for a querier in this process): the
-/// operand is read as values of those types, in place.
+/// As for [`answer_query`](super::answer_query) with a querier in this process.
 pub unsafe fn not_identity_claim(memory: &dyn QuerierMemory, input_word: usize) -> Vec<u32> {
     let mut response = Vec::new();
     let mut responses = Responses {
@@ -145,7 +127,7 @@ pub unsafe fn not_identity_claim(memory: &dyn QuerierMemory, input_word: usize) 
     response
 }
 
-/// Serves a hint query for the runs whose responses are asked for (see `answer_query`)
+/// Serves a field hint query (see `answer_query`)
 ///
 /// # Safety
 ///
@@ -158,9 +140,7 @@ pub(super) unsafe fn process_field_hint_query(
     guest_run_responses: Option<&mut Vec<u32>>,
 ) {
     assert_eq!(query_id, FIELD_OPS_ADVISE_QUERY_ID);
-    // the querier, whose memory holds the request and the operand, in its representation: as in
-    // the run modes of zksync-os, the runs whose responses are asked for tell it, a native run
-    // (only, or saving the responses for the RISC-V guest) answering a querier in this process
+    // the querier is in this process exactly when the native response is asked for
     let (querier, word_size) = if native_run_responses.is_some() {
         (HintTarget::Native, size_of::<usize>())
     } else {
@@ -175,14 +155,12 @@ pub(super) unsafe fn process_field_hint_query(
         native_run: native_run_responses,
         guest_run: guest_run_responses,
     };
-    // SAFETY: the querier is in this process exactly when the native responses are asked for,
-    // and then its memory and its request are as `read_request` needs (the caller's obligation)
+    // SAFETY: a native querier's request is live (the caller's obligation)
     let (op, operand) = unsafe { read_request(memory, input_word, querier) };
     answer(op, &operand, &mut responses);
 }
 
-/// The operand of a hint query where the querier keeps it: its address and size in the memory of
-/// the querier, in the representation of the target of the querier (see `FieldHintOp`)
+/// The operand of a hint query, in the querier's memory and representation
 pub(crate) struct Operand<'m> {
     memory: &'m dyn QuerierMemory,
     querier: HintTarget,
@@ -193,10 +171,8 @@ pub(crate) struct Operand<'m> {
 impl<'m> Operand<'m> {
     /// # Safety
     ///
-    /// For a querier in this process (`HintTarget::Native`), `address` must be the address of
-    /// `len_u32_words` words of live values of the operand types of the op of the request, which
-    /// stay alive and unchanged while the operand is used: they are read as values of those types,
-    /// in place (see `native_values`).
+    /// For a native querier, `address` must point to `len_u32_words` words of live values of the
+    /// op's operand types, alive and unchanged while the operand is used: they are read in place.
     pub(crate) unsafe fn new(
         memory: &'m dyn QuerierMemory,
         querier: HintTarget,
@@ -229,10 +205,8 @@ impl<'m> Operand<'m> {
             "the operand is aligned for the type"
         );
         let values = core::ptr::with_exposed_provenance::<T>(self.address);
-        // SAFETY: the querier, code of this process, exposes its operand, live values of the
-        // operand type of the op, which is `T` here, while it sends the query, i.e. during this
-        // call (the obligation of the creator of the operand, see `Operand::new`); the size and
-        // the alignment are checked above
+        // SAFETY: the operand is live values of `T` (see `Operand::new`); size and alignment are
+        // checked above
         unsafe { core::slice::from_raw_parts(values, self.size() / size_of::<T>()) }.to_vec()
     }
 
@@ -289,8 +263,7 @@ impl<'m> Operand<'m> {
     }
 }
 
-/// The base field element of its Montgomery limbs on the RISC-V guest (`R = 2^(32 words)`), any
-/// representative
+/// The base field element of its guest Montgomery limbs (`R = 2^(32 words)`), any representative
 fn from_guest_montgomery<F: PrimeField>(words: &[u32]) -> F {
     let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
     let r = F::from(2u64).pow([32 * words.len() as u64]);
@@ -324,19 +297,11 @@ fn secp256k1_element<T: Secp256k1Element>(operand: &Operand) -> T {
     }
 }
 
-/// Computes the square root candidate for a secp256k1 base field element.
-///
-/// Returns `(candidate, is_quadratic_non_residue)` where:
-/// - `candidate` is `input^((p+1)/4)` (the square root if one exists)
-/// - `is_quadratic_non_residue` is `true` if `input` has no square root in the field
-///
-/// When `is_quadratic_non_residue` is false: `candidate² == input`
-/// When `is_quadratic_non_residue` is true:  `candidate² == -input`
+/// `(candidate, is_quadratic_non_residue)`: `candidate² == input` for a square, `-input` otherwise
 pub(crate) fn secp256k1_base_field_sqrt(operand: &Operand) -> (FieldElement, bool) {
     let el: FieldElement = secp256k1_element(operand);
     assert!(!el.is_zero());
     let mut candidate = el;
-    // sqrt_in_place returns true if the input is a quadratic residue (has a square root)
     let is_quadratic_residue = candidate.sqrt_in_place();
     (candidate, !is_quadratic_residue)
 }
@@ -401,9 +366,7 @@ pub(crate) fn division<F: HintEncoding + PrimeField>(operand: &Operand) -> F {
     numerator * crate::field_inverse::inverse(&denominator).expect("the denominator is non-zero")
 }
 
-/// The square root candidate of a bls12-381 base field element, as `secp256k1_base_field_sqrt`:
-/// `(candidate, is_quadratic_non_residue)` with `candidate² == input` for a square and
-/// `candidate² == -input` otherwise (`p = 3 mod 4`, so exactly one of them is a square)
+/// As `secp256k1_base_field_sqrt` (`p = 3 mod 4`, so exactly one of `±input` is a square)
 pub(crate) fn bls12_381_base_field_sqrt(operand: &Operand) -> (crate::bls12_381::Fq, bool) {
     let el: crate::bls12_381::Fq = element(operand);
     assert!(!el.is_zero());
@@ -416,10 +379,8 @@ pub(crate) fn bls12_381_base_field_sqrt(operand: &Operand) -> (crate::bls12_381:
     }
 }
 
-/// The claim about the bn254 pairing product over the affine pairs of the operand, see
-/// `hints::PairingClaim`: the identity flag, then `c`, `d = c^-1` and the scaling factor
-/// (`crate::residue_witness::bn254`) for an identity, or the inverse of the Miller loop output
-/// otherwise. `claim_not_identity` forces the latter (for tests of the exact path).
+/// The claim about the bn254 pairing product (see `hints::PairingClaim`). `claim_not_identity`
+/// forces a non-identity claim (for tests of the exact path).
 fn bn254_pairing_residue_witness(
     operand: &Operand,
     claim_not_identity: bool,
@@ -449,8 +410,7 @@ fn bn254_pairing_residue_witness(
         }
     };
     assert!(!pairs.is_empty(), "the operand has pairs");
-    // the Miller loop as the verifier computes it (the affine lines from hinted slopes, at
-    // normalized `G1` points): the witness equation holds for the verifier's output only
+    // the witness equation holds for the verifier's Miller loop output only
     let prepared: Vec<G2PreparedNoAlloc> = pairs
         .iter()
         .map(|(_, g2)| crate::bn254::curves::g2_affine::prepare_as_verifier(g2))
@@ -474,10 +434,7 @@ fn bn254_pairing_residue_witness(
     }
 }
 
-/// The claim about `e(p1, G2) e(p2, tau G2)` for the affine points `[p1, p2]` of the operand, as
-/// `bn254_pairing_residue_witness`: the identity flag, then `d` and the scaling factor
-/// (`crate::residue_witness::bls12_381`) for an identity, or the inverse of the Miller loop
-/// output otherwise
+/// The claim about `e(p1, G2) e(p2, tau G2)`, as `bn254_pairing_residue_witness`
 fn bls12_381_kzg_residue_witness(
     operand: &Operand,
     claim_not_identity: bool,
@@ -503,8 +460,7 @@ fn bls12_381_kzg_residue_witness(
         &crate::bls12_381::consts::PREPARED_G2_BY_TAU,
     ];
     let points = [p1, p2];
-    // the Miller loop as the verifier computes it: over both pairs at once, with the normalized
-    // lines of the fixed points (the witness equation holds for the verifier's output only)
+    // the witness equation holds for the verifier's Miller loop output only
     let pairs = points.iter().zip(g2);
     let f = Bls12_381::multi_miller_loop_shared(None, pairs.clone());
     let is_identity = !claim_not_identity
@@ -517,16 +473,15 @@ fn bls12_381_kzg_residue_witness(
             .expect("the final exponentiation found an identity, which has a witness");
         responses.write(&(true, witness));
     } else {
-        // the inverse of the output of the plain (conjugated) loop, which the exact path runs
+        // the inverse of the conjugated loop output, which the exact path computes
         let mut conjugated = f;
         conjugated.conjugate_in_place();
         responses.write(&(false, conjugated.inverse().expect("non-zero")));
     }
 }
 
-/// The slopes of the two affine `G2` chains of the pairing input point of the operand, see
-/// `hints::bn254_g2_pairing_slopes`: a flag and the subgroup test slopes, a flag and the
-/// line precomputation slopes (zeros behind a cleared flag)
+/// The slopes of the two affine `G2` chains of the operand (see `hints::G2SlopeHints`); an
+/// exceptional chain is a cleared flag and zeros
 fn bn254_g2_pairing_slopes(operand: &Operand, responses: &mut Responses) {
     use crate::bn254::curves::g2_affine::{line_slopes, subgroup_slopes};
     use crate::bn254::{Fq2, G2Affine};
@@ -553,7 +508,7 @@ fn bn254_g2_pairing_slopes(operand: &Operand, responses: &mut Responses) {
     chain(line_slopes(&q), responses);
 }
 
-/// Arbitrary pairing claim, using exactly the projective prepared lines of the verifier.
+/// The claim about the bls12-381 pairing product, from the verifier's projective lines
 fn bls12_381_pairing_residue_witness(
     operand: &Operand,
     claim_not_identity: bool,
@@ -610,64 +565,33 @@ fn bls12_381_pairing_residue_witness(
 #[cfg(test)]
 mod native_query_tests {
     use super::*;
-    use crate::hints::guest_layout;
     use crate::hints::host::{answer_query, NativeQuerierMemory};
     use crate::hints::test_support::{GuestMemory, TestMemorySource};
-    use crate::hints::{FieldOpsHint64, Secp256k1Element, FIELD_OPS_ADVISE_QUERY_ID};
-    use crate::secp256k1::field::FieldElement;
-    use crate::secp256k1::scalars::Scalar;
+    use crate::hints::FieldOpsHint64;
     use ark_ec::AffineRepr;
-    use ark_ff::{AdditiveGroup, BigInteger, Field, PrimeField};
+    use ark_ff::BigInteger;
 
-    /// The run an oracle serves, as `oracle_provider::RunMode`: `answer_query` produces the
-    /// responses of the runs the mode produces
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum RunMode {
-        NativeRunOnly,
-        NativeRunSavingForRiscV,
-        RiscVRun,
-    }
-
-    impl RunMode {
-        const fn produces_native_run_responses(self) -> bool {
-            match self {
-                Self::NativeRunOnly | Self::NativeRunSavingForRiscV => true,
-                Self::RiscVRun => false,
-            }
-        }
-
-        const fn produces_guest_run_responses(self) -> bool {
-            match self {
-                Self::NativeRunOnly => false,
-                Self::NativeRunSavingForRiscV | Self::RiscVRun => true,
-            }
-        }
-    }
-
-    /// The responses of the runs of `mode` to a hint query of the querier of `memory`
-    fn process_memory_query(
+    /// The native and guest responses of `answer_query` to the field hint request at `input_word`
+    fn respond(
         input_word: usize,
         memory: &dyn QuerierMemory,
-        mode: RunMode,
+        native: bool,
+        guest: bool,
     ) -> (Vec<u32>, Vec<u32>) {
         let (mut native_run, mut guest_run) = (Vec::new(), Vec::new());
-        // SAFETY: for a querier in this process, the tests pass the memory of this process and a
-        // live request made by `request`, of a live operand of the type of its op. The tests of
-        // the null request and operand pointers are outside this contract on purpose: those
-        // pointers are rejected before they are read
+        // SAFETY: a native request is made by `request`, of a live operand, and is alive during
+        // the call; the null pointer tests are outside this contract on purpose, as those pointers
+        // are rejected before they are read
         let answered = unsafe {
             answer_query(
                 FIELD_OPS_ADVISE_QUERY_ID,
                 input_word,
                 memory,
-                mode.produces_native_run_responses()
-                    .then_some(&mut native_run),
-                mode.produces_guest_run_responses()
-                    .then_some(&mut guest_run),
+                native.then_some(&mut native_run),
+                guest.then_some(&mut guest_run),
             )
-        }
-        .expect("must answer the field hint query");
-        assert!(answered);
+        };
+        assert_eq!(answered, Ok(true));
         (native_run, guest_run)
     }
 
@@ -682,66 +606,46 @@ mod native_query_tests {
         }
     }
 
-    /// The responses of the native run and of the guest run of `mode` to the hint request `hint` of a
-    /// querier in this process
-    fn process(mode: RunMode, hint: &FieldOpsHint64) -> (Vec<u32>, Vec<u32>) {
-        // SAFETY: the request and the operand it points to are alive during the call
+    /// The responses to the native request `hint`
+    fn process(hint: &FieldOpsHint64, native: bool, guest: bool) -> (Vec<u32>, Vec<u32>) {
+        // SAFETY: the request and its operand are alive during the call
         let memory = unsafe { NativeQuerierMemory::new() };
-        process_memory_query(core::ptr::from_ref(hint).expose_provenance(), &memory, mode)
+        respond(
+            core::ptr::from_ref(hint).expose_provenance(),
+            &memory,
+            native,
+            guest,
+        )
     }
 
-    /// The response of a run on the RISC-V guest to its request for the hint `op` on the words
-    /// `operand` (at 0x1000 of its memory)
+    /// The response to a guest request for `op` on the words `operand`: the request (a
+    /// `FieldOpsHint`) at 0x100 of its memory, the operand at 0x1000
     fn process_guest(op: FieldHintOp, operand: &[u32]) -> Vec<u32> {
-        // guest memory: the request (a `FieldOpsHint`) at 0x100, the operand at 0x1000
         let mut memory = TestMemorySource::default();
-        memory.insert_u32(0x100, op as u32);
-        memory.insert_u32(0x104, 0x1000);
-        memory.insert_u32(0x108, operand.len() as u32);
-        for (i, word) in operand.iter().enumerate() {
-            memory.insert_u32(0x1000 + 4 * i as u32, *word);
+        let request = [op as u32, 0x1000, operand.len() as u32];
+        for (address, words) in [(0x100, &request[..]), (0x1000, operand)] {
+            for (i, word) in words.iter().enumerate() {
+                memory.insert_u32(address + 4 * i as u32, *word);
+            }
         }
-        let (native_run, guest_run) =
-            process_memory_query(0x100, &GuestMemory(&memory), RunMode::RiscVRun);
-        assert!(native_run.is_empty());
-        guest_run
-    }
-
-    /// An element and its inverse
-    fn element_and_inverse() -> (FieldElement, FieldElement) {
-        let x = FieldElement::from_bytes(&[7; 32]).unwrap();
-        let mut inverse = x;
-        inverse.invert_in_place();
-        (x, inverse)
+        respond(0x100, &GuestMemory(&memory), false, true).1
     }
 
     #[test]
     fn a_native_querier_is_answered_for_the_runs_of_the_mode() {
-        let (x, inverse) = element_and_inverse();
+        let x = FieldElement::from_bytes(&[7; 32]).unwrap();
+        let mut inverse = x;
+        inverse.invert_in_place();
         let hint = request(FieldHintOp::Secp256k1BaseFieldInverse, &x);
-
-        let (native_run, guest_run) = process(RunMode::NativeRunOnly, &hint);
-        assert_eq!(native_run, inverse.to_canonical_words());
-        assert!(guest_run.is_empty());
-
-        // a native run that records the prover input also answers the guest
-        let (native_run, guest_run) = process(RunMode::NativeRunSavingForRiscV, &hint);
-        assert_eq!(native_run, inverse.to_canonical_words());
-        assert_eq!(guest_run, inverse.to_montgomery_words());
+        let native = inverse.to_canonical_words().to_vec();
+        assert_eq!(process(&hint, true, false), (native.clone(), vec![]));
+        // a recording native run also answers the guest
+        let guest = inverse.to_montgomery_words().to_vec();
+        assert_eq!(process(&hint, true, true), (native, guest));
     }
 
-    #[test]
-    fn the_guest_is_answered_in_a_risc_v_run() {
-        let (x, inverse) = element_and_inverse();
-        let guest_run = process_guest(
-            FieldHintOp::Secp256k1BaseFieldInverse,
-            &x.to_montgomery_words(),
-        );
-        assert_eq!(guest_run, inverse.to_montgomery_words());
-    }
-
-    /// The limbs of `x` in the memory of the RISC-V guest: its Montgomery form with
-    /// `R = 2^(64 limbs)`, plus `extra` moduli (another representative)
+    /// The limbs of `x` in guest memory: its Montgomery form with `R = 2^(64 limbs)`, plus `extra`
+    /// moduli (another representative)
     fn guest_limbs<F: PrimeField>(x: F, limbs: usize, extra: u64) -> Vec<u32> {
         let r = F::from(2u64).pow([64 * limbs as u64]);
         let mut value = (x * r).into_bigint();
@@ -757,38 +661,27 @@ mod native_query_tests {
         words
     }
 
-    /// Both answers to the guest agree: from the operand of a native run, and from the same
-    /// operand in the memory of the guest
+    /// The guest's answer to the operand in its memory is the one a recording native run gives
     fn assert_same_guest_answers<T: ?Sized>(op: FieldHintOp, native: &T, guest: &[u32]) {
-        let (_, from_native) = process(RunMode::NativeRunSavingForRiscV, &request(op, native));
+        let (_, from_native) = process(&request(op, native), true, true);
         assert_eq!(process_guest(op, guest), from_native);
     }
 
     #[test]
     fn guest_elements_are_read_in_their_montgomery_form() {
         let x = crate::bn254::Fq::from(0x1234_5678u64).square();
+        let y = crate::bls12_381::Fq::from(0x1234_5678u64).square();
         for extra in [0, 1] {
             let guest = guest_limbs(x, 4, extra);
             assert_same_guest_answers(FieldHintOp::Bn254BaseFieldInverse, &x, &guest);
-        }
-        let y = crate::bls12_381::Fq::from(0x1234_5678u64).square();
-        for extra in [0, 1] {
             let guest = guest_limbs(y, 8, extra);
             assert_same_guest_answers(FieldHintOp::Bls12381BaseFieldInverse, &y, &guest);
             assert_same_guest_answers(FieldHintOp::Bls12381BaseFieldSqrt, &y, &guest);
         }
-        let f = crate::bn254::Fq12::new(
-            crate::bn254::Fq6::new(
-                crate::bn254::Fq2::new(x, x.double()),
-                crate::bn254::Fq2::new(x.square(), x + x.square()),
-                crate::bn254::Fq2::new(x.inverse().unwrap(), x),
-            ),
-            crate::bn254::Fq6::new(
-                crate::bn254::Fq2::new(x.double().square(), x),
-                crate::bn254::Fq2::new(x, x.double()),
-                crate::bn254::Fq2::new(x.square().square(), x),
-            ),
-        );
+        let f = crate::bn254::Fq12::from_base_prime_field_elems(
+            (1..=12u64).map(|i| x * crate::bn254::Fq::from(i)),
+        )
+        .unwrap();
         // the components in order, `c0` first, recursively
         let mut guest = Vec::new();
         for fq6 in [&f.c0, &f.c1] {
@@ -800,7 +693,7 @@ mod native_query_tests {
         assert_same_guest_answers(FieldHintOp::Bn254Fq12Inverse, &f, &guest);
     }
 
-    /// The words of an affine point in the memory of the RISC-V guest
+    /// The words of an affine point in guest memory
     fn guest_point(
         layout: guest_layout::AffinePoint,
         x: Vec<u32>,
@@ -827,8 +720,7 @@ mod native_query_tests {
         let guest_g2 = guest_point(BN254_G2_AFFINE, guest_fq2(&g2.x), guest_fq2(&g2.y), false);
         assert_same_guest_answers(FieldHintOp::Bn254G2PairingSlopes, &g2, &guest_g2);
 
-        let g1 = (bn254::G1Affine::generator() * bn254::Fr::from(5u64)).into();
-        let g1: bn254::G1Affine = g1;
+        let g1: bn254::G1Affine = (bn254::G1Affine::generator() * bn254::Fr::from(5u64)).into();
         let guest_g1 = guest_point(
             BN254_G1_AFFINE,
             guest_limbs(g1.x, 4, 0),
@@ -838,10 +730,9 @@ mod native_query_tests {
         let mut guest_pair = vec![0u32; BN254_PAIR_SIZE / 4];
         guest_pair[BN254_PAIR_G1 / 4..][..guest_g1.len()].copy_from_slice(&guest_g1);
         guest_pair[BN254_PAIR_G2 / 4..][..guest_g2.len()].copy_from_slice(&guest_g2);
-        let pairs = [(g1, g2), (g1, g2)];
         assert_same_guest_answers(
             FieldHintOp::Bn254PairingResidueWitness,
-            &pairs[..],
+            &[(g1, g2), (g1, g2)][..],
             &[guest_pair.clone(), guest_pair].concat(),
         );
 
@@ -853,11 +744,10 @@ mod native_query_tests {
             false,
         );
         // the point at infinity is the flag
-        let infinity = bls12_381::G1Affine::identity();
         let guest_infinity = guest_point(BLS12_381_G1_AFFINE, vec![], vec![], true);
         assert_same_guest_answers(
             FieldHintOp::Bls12381KzgResidueWitness,
-            &[p, infinity],
+            &[p, bls12_381::G1Affine::identity()],
             &[guest_p, guest_infinity].concat(),
         );
     }
@@ -875,26 +765,15 @@ mod native_query_tests {
         sum
     }
 
-    /// The big-endian bytes of `n`
-    fn be_bytes_of(n: u8) -> [u8; 32] {
-        let mut bytes = [0u8; 32];
-        bytes[31] = n;
-        bytes
-    }
-
-    // Not in zksync-os, whose tests answer the guest for the base field inverse only: every
-    // secp256k1 op answers the guest alike from either querier, also for an operand of the guest
-    // above the modulus (another 256-bit representative of its Montgomery form).
+    /// Every secp256k1 op reads a guest operand as Montgomery words, also above the modulus
     #[test]
     fn secp256k1_guest_operands_are_read_as_montgomery_words() {
-        // elements of small Montgomery words, which have another representative below `2^256`:
-        // the words plus the modulus, as they are below `2^256 - p = 2^32 + 977` (`2^256 - n`)
+        // small Montgomery words, whose other representative (plus the modulus) is below `2^256`
         let small = |word: u32| [word, 0, 0, 0, 0, 0, 0, 0];
         let (xm, ym, sm) = (small(3), small(5), small(7));
         let x = FieldElement::from_montgomery_words(&xm);
         let y = FieldElement::from_montgomery_words(&ym);
         let s = Scalar::from_montgomery_words(&sm);
-        assert_eq!((x.to_montgomery_words(), s.to_montgomery_words()), (xm, sm));
         let p = <FieldElement as Secp256k1Element>::MODULUS;
         let n = <Scalar as Secp256k1Element>::MODULUS;
         for (xw, yw, sw) in [(xm, ym, sm), (plus(xm, p), plus(ym, p), plus(sm, n))] {
@@ -907,72 +786,35 @@ mod native_query_tests {
                 &[xw, yw].concat(),
             );
         }
-        // both answers of the sqrt: 4 is a square, -4 is not (-1 is not, as `p = 3 mod 4`), and
-        // its candidate is the same root of 4 (`(p + 1) / 4` is even)
-        let four = FieldElement::from_bytes(&be_bytes_of(4)).unwrap();
-        let mut minus_four = four;
-        minus_four.negate_in_place(1);
-        minus_four.normalize_in_place();
-        let mut root = four;
-        assert!(root.sqrt_in_place());
-        for (element, flag) in [(four, 0), (minus_four, 1)] {
-            let words = element.to_montgomery_words();
-            assert_same_guest_answers(FieldHintOp::Secp256k1BaseFieldSqrt, &element, &words);
-            assert_eq!(
-                process_guest(FieldHintOp::Secp256k1BaseFieldSqrt, &words),
-                [&root.to_montgomery_words()[..], &[flag]].concat()
-            );
-        }
-        // and the guest answers are the Montgomery words of the results
-        let mut quotient = y;
-        quotient.invert_in_place();
-        quotient.mul_in_place(&x);
-        assert_eq!(
-            process_guest(FieldHintOp::Secp256k1BaseFieldDivision, &[xm, ym].concat()),
-            quotient.to_montgomery_words()
-        );
-        let inverse = s.invert_vartime();
-        assert_eq!(
-            process_guest(FieldHintOp::Secp256k1ScalarFieldInverse, &sm),
-            inverse.to_montgomery_words()
-        );
     }
 
     #[test]
     #[should_panic(expected = "not the querier of the run mode")]
     fn a_querier_in_this_process_is_not_answered_in_a_risc_v_run() {
-        let (x, _) = element_and_inverse();
+        let x = FieldElement::ONE;
         let _ = process(
-            RunMode::RiscVRun,
             &request(FieldHintOp::Secp256k1BaseFieldInverse, &x),
+            false,
+            true,
         );
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "must read the field hint request")]
     fn native_field_ops_query_rejects_null_query_pointer() {
         // SAFETY: nothing is read at a null address
         let memory = unsafe { NativeQuerierMemory::new() };
-        // SAFETY: outside the contract on purpose: the null request is rejected before it is read
-        let _ = unsafe {
-            answer_query(
-                FIELD_OPS_ADVISE_QUERY_ID,
-                0,
-                &memory,
-                Some(&mut Vec::new()),
-                None,
-            )
-        };
+        let _ = respond(0, &memory, true, false);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "the operand is not at the null address")]
     fn native_field_ops_query_rejects_null_operand_pointer() {
         let hint = FieldOpsHint64 {
             op: FieldHintOp::Secp256k1BaseFieldInverse as u32,
             src_ptr: 0,
             src_len_u32_words: 8,
         };
-        let _ = process(RunMode::NativeRunOnly, &hint);
+        let _ = process(&hint, true, false);
     }
 }

@@ -1,4 +1,3 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/field_ops.rs
 //! The secp256k1 hints: the elements in the answers, and the hooks of the recovery that use them.
 
 #[cfg(any(feature = "alloc", test))]
@@ -73,19 +72,12 @@ fn words_of_be_bytes(bytes: &[u8; 32]) -> [u32; 8] {
     words
 }
 
-/// A secp256k1 element, `FieldElement` (modulo `p`) or `Scalar` (modulo `n`), in the secp256k1
-/// hints. The operand is the element itself, which the oracle reads where it is, and the answer an
-/// integer in 8 little-endian `u32` words, in the representation of the target of the querier.
-/// - On the RISC-V guest it is the Montgomery form `x 2^256 mod m`, which is the in-memory
-///   representation of both types there (checked at compile time): the element is treated as an
-///   opaque 32-byte value, the oracle reads an operand as those words (any 256-bit
-///   representative), and writes an answer straight into the destination element, which is then
-///   only checked to be below the modulus.
-/// - For a querier in this process (native builds, whose representations are private to the
-///   types) the oracle reads an operand as a value of the type, and an answer is the canonical
-///   integer, through the API of the types.
-///
-/// The oracle converts between them (see `HintAnswer::write`).
+/// A secp256k1 `FieldElement` (modulo `p`) or `Scalar` (modulo `n`) in the hints. Operands are
+/// read in place; answers are 8 little-endian `u32` words in the querier's representation:
+/// - on the guest, the Montgomery form `x 2^256 mod m`, which is both types' memory layout there
+///   (checked at compile time). Operands may be any 256-bit representative; answers are written
+///   straight into the destination and checked to be below the modulus.
+/// - natively, the canonical integer, through the types' API.
 pub trait Secp256k1Element: Copy {
     /// The modulus, in little-endian words
     const MODULUS: [u32; 8];
@@ -93,8 +85,7 @@ pub trait Secp256k1Element: Copy {
     const MONTGOMERY_ONE: [u32; 8];
     /// `2^-256 mod m`, big-endian
     const R_INVERSE: [u8; 32];
-    /// Whether the representation of the element in this build is its Montgomery words, as on the
-    /// RISC-V guest
+    /// Whether this build's representation is the Montgomery words, as on the guest
     const IS_MONTGOMERY_WORDS: bool;
 
     /// The canonical big-endian bytes of the element
@@ -130,8 +121,7 @@ pub trait Secp256k1Element: Copy {
             .multiply(r_inverse)
     }
 
-    /// The element of the words of an operand of the RISC-V guest: Montgomery words, which may be
-    /// any 256-bit representative (below `2^256 < 2 m`)
+    /// The element of a guest operand's Montgomery words, any 256-bit representative (`2^256 < 2 m`)
     fn from_guest_operand_words(words: &[u32; 8]) -> Self {
         let mut reduced = *words;
         if !is_below(&reduced, &Self::MODULUS) {
@@ -146,8 +136,8 @@ pub trait Secp256k1Element: Copy {
         Self::from_montgomery_words(&reduced)
     }
 
-    /// Checks the Montgomery words the oracle answered the RISC-V guest with, in place at `words`,
-    /// to be below the modulus, with the bigint delegation (see `check_below_with_delegation`)
+    /// Checks a guest answer's Montgomery words at `words` are below the modulus, with the bigint
+    /// delegation
     ///
     /// # Safety
     ///
@@ -155,8 +145,8 @@ pub trait Secp256k1Element: Copy {
     unsafe fn validate(words: *mut [u32; 8]) -> Result<(), HintError>;
 }
 
-/// A 32-byte value as an operand of the bigint delegation, which works on 32-byte aligned memory.
-/// As an immutable static it lands in `.rodata`, which the linker places above the ROM bound.
+/// A 32-byte aligned operand of the bigint delegation. As an immutable static it lands in
+/// `.rodata`, which the linker places above the ROM bound.
 #[repr(C, align(32))]
 struct DelegationOperand([u32; 8]);
 
@@ -164,8 +154,8 @@ static FIELD_MODULUS: DelegationOperand =
     DelegationOperand(<FieldElement as Secp256k1Element>::MODULUS);
 static SCALAR_MODULUS: DelegationOperand = DelegationOperand(<Scalar as Secp256k1Element>::MODULUS);
 
-/// Checks the value at `words` to be below `modulus` with the bigint delegation: subtracting the
-/// modulus borrows exactly then, and adding it back restores the value.
+/// Checks the value at `words` is below `modulus`: subtracting the modulus borrows exactly then,
+/// and adding it back restores the value.
 ///
 /// # Safety
 ///
@@ -197,9 +187,8 @@ impl Secp256k1Element for FieldElement {
     const R_INVERSE: [u8; 32] = R_INVERSE_MOD_P;
     const IS_MONTGOMERY_WORDS: bool = core::mem::size_of::<Self>() == 32
         && core::mem::align_of::<Self>() >= core::mem::align_of::<u32>()
-        // SAFETY: the element is 32 bytes, aligned for `u32`: the 4 limbs of the delegated
-        // representation, without padding (reading padding would fail the compile-time evaluation,
-        // not go unnoticed); `ONE` and `ZERO` then tell whether they are the Montgomery words
+        // SAFETY: the element is 32 bytes aligned for `u32` (reading padding would fail const
+        // evaluation); `ONE` and `ZERO` tell whether they are the Montgomery words
         && words_eq(unsafe { &leading_words(&Self::ONE) }, &Self::MONTGOMERY_ONE)
         && words_eq(unsafe { &leading_words(&Self::ZERO) }, &[0; 8]);
 
@@ -262,8 +251,7 @@ fn scalar_of_be_bytes(bytes: &[u8; 32]) -> Scalar {
     ))
 }
 
-/// Receives an element in the representation of this target (see [`Secp256k1Element`]), validated:
-/// on the RISC-V guest straight into the destination.
+/// Receives an element in this target's representation (see [`Secp256k1Element`]), validated.
 #[inline(always)]
 fn read_secp256k1_element<'a, T: Secp256k1Element, O: HintOracle>(
     oracle: &mut O,
@@ -271,9 +259,7 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: HintOracle>(
 ) -> Result<&'a mut T, HintError> {
     #[cfg(target_arch = "riscv32")]
     {
-        // a change of the representation in `airbender-crypto` must be noticed here: the element is
-        // its Montgomery words, 32-byte aligned as the delegated representation, which `validate`
-        // relies on
+        // `validate` relies on the element being its Montgomery words, 32-byte aligned
         const { assert!(T::IS_MONTGOMERY_WORDS && core::mem::align_of::<T>() >= 32) };
         let words = dst.as_mut_ptr().cast::<[u32; 8]>();
         // SAFETY: the element is 8 words, 32-byte aligned (checked above), which initialize it
@@ -294,11 +280,9 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: HintOracle>(
     }
 }
 
-/// Receives a quotient of the base field, which the caller checks against the fraction: on the
-/// RISC-V guest the words are taken as they are. The delegated representation works on any
-/// 256-bit representative of an element (it is "weakly reduced" between the operations), and
-/// the check of the quotient is modulo `p`, so a representative above `p` is the same element
-/// as the canonical one, and costs the comparison with `p` less.
+/// Receives a base field quotient, which the caller checks against the fraction. On the guest the
+/// words are taken unchecked: the delegated representation accepts any 256-bit representative and
+/// the caller's check is modulo `p`, so a representative above `p` is the same element.
 #[inline(always)]
 fn read_secp256k1_quotient<'a, O: HintOracle>(
     oracle: &mut O,
@@ -312,8 +296,7 @@ fn read_secp256k1_quotient<'a, O: HintOracle>(
                     && core::mem::align_of::<FieldElement>() >= core::mem::align_of::<u32>()
             )
         };
-        // SAFETY: the element is 8 words (checked above), aligned for them, and any value of
-        // them is an element
+        // SAFETY: the element is 8 aligned words (checked above), and any value of them is valid
         unsafe {
             oracle.write_words(dst.as_mut_ptr().cast::<u32>(), 8)?;
             Ok(dst.assume_init_mut())
@@ -363,12 +346,12 @@ impl<'a, O: HintOracle> Secp256k1HooksWithOracle<'a, O> {
 impl<'a, O: HintOracle> crate::secp256k1::hooks::Secp256k1Hooks
     for Secp256k1HooksWithOracle<'a, O>
 {
-    /// An inversion is a hint checked with one multiplication, so the scalar multiplication
-    /// makes its table affine (one inversion) instead of carrying a shared denominator
+    /// A hinted inversion costs one multiplication, so the scalar multiplication makes its table
+    /// affine
     const FE_INVERT_IS_CHEAP: bool = true;
 
-    /// A division is a hint checked with one multiplication, so the scalar multiplication works
-    /// in affine coordinates
+    /// A hinted division costs one multiplication, so the scalar multiplication works in affine
+    /// coordinates
     const FE_DIVIDE_IS_CHEAP: bool = true;
 
     fn fe_divide<'q>(
@@ -376,8 +359,7 @@ impl<'a, O: HintOracle> crate::secp256k1::hooks::Secp256k1Hooks
         fraction: &mut [FieldElement; 2],
         quotient: &'q mut MaybeUninit<FieldElement>,
     ) -> &'q mut FieldElement {
-        // SAFETY: the operand is `[FieldElement; 2]`, the numerator and the denominator, the
-        // operand type of the division
+        // SAFETY: `[FieldElement; 2]` is the operand type of the division
         unsafe {
             send_field_hint_query(
                 self.oracle,
@@ -392,9 +374,8 @@ impl<'a, O: HintOracle> crate::secp256k1::hooks::Secp256k1Hooks
             .finish_query()
             .expect("the hint answer has no excess data");
 
-        // we must check that hint was correct: quotient * denominator == numerator. The
-        // denominator is not zero (the caller's obligation), so the quotient is the only
-        // element that passes. The fraction is ours to overwrite.
+        // quotient * denominator == numerator: the denominator is non-zero (the caller's
+        // obligation), so only the quotient passes. The fraction is ours to overwrite.
         let [numerator, denominator] = fraction;
         denominator.mul_in_place(quotient);
         denominator.sub_in_place(numerator);
@@ -403,77 +384,68 @@ impl<'a, O: HintOracle> crate::secp256k1::hooks::Secp256k1Hooks
         quotient
     }
 
-    // zksync-os's `basic_system` allows `clippy::bool_comparison` crate-wide
     #[allow(clippy::bool_comparison)]
     fn fe_sqrt_and_assign(&mut self, x: &mut FieldElement) -> bool {
-        // Match default hook semantics: sqrt(0) exists and equals 0.
+        // as the default hooks: sqrt(0) = 0
         if x.is_zero() {
             return true;
         }
 
         let operand = *x;
-        // SAFETY: `x` is a `FieldElement`, the operand type of the base field sqrt
+        // SAFETY: `FieldElement` is the operand type of the base field sqrt
         let is_quadratic_non_residue: bool = unsafe {
             self.query_into(FieldHintOp::Secp256k1BaseFieldSqrt, x, |oracle| {
                 read_hint_answer(oracle)
             })
         };
 
-        // Verify the oracle's hint is correct.
-        // The oracle computes candidate = x^((p+1)/4). For secp256k1's prime p ≡ 3 (mod 4):
-        // - If x is a quadratic residue (has a sqrt): candidate² == x
-        // - If x is a quadratic non-residue (no sqrt): candidate² == -x
+        // candidate² == x for a square, candidate² == -x otherwise: as p = 3 mod 4, -1 is a
+        // non-residue, so a valid answer of either kind proves the flag
         let mut squared = *x;
         squared.square_in_place();
         if is_quadratic_non_residue == false {
             squared.sub_in_place(&operand);
-            assert!(squared.is_zero()); // candidate² - x == 0
+            assert!(squared.is_zero());
         } else {
             squared.add_in_place(&operand);
-            assert!(squared.is_zero()); // candidate² + x == 0  (i.e., candidate² == -x)
+            assert!(squared.is_zero());
         }
 
-        // Return true if square root exists (x is a quadratic residue)
         !is_quadratic_non_residue
     }
 
     fn fe_invert_and_assign(&mut self, x: &mut FieldElement) {
-        // Match default hook semantics: invert(0) == 0.
+        // as the default hooks: invert(0) = 0
         if x.is_zero() {
             return;
         }
 
-        // the operand, multiplied by the answer below
         let mut product = *x;
-        // SAFETY: `x` is a `FieldElement`, the operand type of the base field inverse
+        // SAFETY: `FieldElement` is the operand type of the base field inverse
         unsafe { self.query_into(FieldHintOp::Secp256k1BaseFieldInverse, x, |_| Ok(())) };
 
-        // we must check that hint was correct
         product.mul_in_place(x);
         assert!(product.is_one());
     }
 
     fn scalar_invert_and_assign(&mut self, x: &mut Scalar) {
-        // Match default hook semantics: invert(0) == 0.
+        // as the default hooks: invert(0) = 0
         if x.is_zero() {
             return;
         }
 
-        // the operand, multiplied by the answer below
         let mut product = *x;
-        // SAFETY: `x` is a `Scalar`, the operand type of the scalar field inverse
+        // SAFETY: `Scalar` is the operand type of the scalar field inverse
         unsafe { self.query_into(FieldHintOp::Secp256k1ScalarFieldInverse, x, |_| Ok(())) };
 
-        // we must check that hint was correct
         product *= &*x;
         assert!(product.is_one());
     }
 }
 
 impl<'a, O: HintOracle> Secp256k1HooksWithOracle<'a, O> {
-    /// Asks for the hint `op` on `x`, and receives the answer, an element, into `x` (on the RISC-V
-    /// guest straight, see [`Secp256k1Element`]), then the rest of the answer with `rest`. The
-    /// oracle reads the operand when it receives the query, before the answer overwrites it.
+    /// Asks for the hint `op` on `x` and receives the answer element into `x`, then the rest of
+    /// the answer with `rest`. The oracle reads the operand before the answer overwrites it.
     ///
     /// # Safety
     ///
@@ -488,9 +460,8 @@ impl<'a, O: HintOracle> Secp256k1HooksWithOracle<'a, O> {
         // SAFETY: `x` is a value of the operand type of `op` (the caller's obligation)
         unsafe { send_field_hint_query(self.oracle, op, &*x) }
             .expect("must send the field hint query");
-        // SAFETY: `MaybeUninit<T>` has the layout of `T`, and `read` writes a valid `T` into it, or
-        // on the RISC-V guest the oracle's words, which are a valid `T` too (plain integers), so `x`
-        // stays valid even if the answer is rejected
+        // SAFETY: `MaybeUninit<T>` has the layout of `T`, and `read` writes a valid `T` (on the
+        // guest any words are one), so `x` stays valid even if the answer is rejected
         let dst = unsafe { &mut *core::ptr::from_mut(x).cast::<MaybeUninit<T>>() };
         T::read(self.oracle, dst).expect("the hint answer is well-formed");
         let rest = rest(self.oracle).expect("the hint answer is well-formed");
@@ -501,21 +472,13 @@ impl<'a, O: HintOracle> Secp256k1HooksWithOracle<'a, O> {
     }
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
-    use crate::hints::host::{answer_query, RecordingHintOracle};
-    use crate::hints::test_support::InProcessMemoryOracle;
-    use crate::hints::QuerierMemory;
+    use crate::hints::host::RecordingHintOracle;
+    use crate::hints::test_support::{lying_oracle, lying_oracle_last_word, TapeOracle};
     use crate::secp256k1::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
-    use proptest::{prop_assert, prop_assert_eq, proptest};
-
-    /// The oracle of a native run, which answers with `answer_query` (the processor of the field
-    /// hints of zksync-os)
-    fn create_oracle_with_field_ops() -> RecordingHintOracle {
-        RecordingHintOracle::new()
-    }
+    use proptest::{prop_assert_eq, proptest};
 
     /// The integer of little-endian words plus the modulus, if it stays below `2^256`
     fn plus_modulus(words: &[u32; 8], modulus: &[u32; 8]) -> Option<[u32; 8]> {
@@ -529,61 +492,52 @@ mod tests {
         (carry == 0).then_some(sum)
     }
 
+    /// The conversions of `x` to and from Montgomery and canonical words
+    fn check_round_trip<T: Secp256k1Element>(x: T) {
+        let words = x.to_montgomery_words();
+        assert!(is_below(&words, &T::MODULUS));
+        assert_eq!(
+            T::from_montgomery_words(&words).to_be_bytes(),
+            x.to_be_bytes()
+        );
+        // a guest operand may be any representative below 2^256
+        if let Some(unreduced) = plus_modulus(&words, &T::MODULUS) {
+            assert_eq!(
+                T::from_guest_operand_words(&unreduced).to_be_bytes(),
+                x.to_be_bytes()
+            );
+        }
+        let words = x.to_canonical_words();
+        assert_eq!(be_bytes(&words), x.to_be_bytes());
+        assert_eq!(
+            T::from_canonical_words(&words).map(T::to_be_bytes),
+            Some(x.to_be_bytes())
+        );
+    }
+
     #[test]
     fn secp256k1_montgomery_words_round_trip() {
-        // the Montgomery form of 1 is `2^256` reduced; `from_montgomery_words` multiplies by the
-        // inverse constants, so this also checks them
+        // the Montgomery form of 1 is `2^256` reduced; converting back checks `R_INVERSE`
         assert_eq!(FieldElement::ONE.to_montgomery_words(), R_MOD_P_WORDS);
         assert_eq!(Scalar::ONE.to_montgomery_words(), R_MOD_N_WORDS);
-        assert_eq!(
-            FieldElement::from_montgomery_words(&R_MOD_P_WORDS).to_bytes(),
-            FieldElement::ONE.to_bytes()
-        );
-        assert_eq!(
-            Scalar::from_montgomery_words(&R_MOD_N_WORDS).to_repr(),
-            Scalar::ONE.to_repr()
-        );
+        check_round_trip(FieldElement::ONE);
+        check_round_trip(Scalar::ONE);
         proptest!(|(bytes: [u8; 32])| {
-            if let Some(fe) = FieldElement::from_bytes(&bytes) {
-                let words = fe.to_montgomery_words();
-                prop_assert!(is_below(&words, &FieldElement::MODULUS));
-                prop_assert_eq!(FieldElement::from_montgomery_words(&words).to_bytes(), fe.to_bytes());
-                // an operand of the guest may be any representative below 2^256
-                if let Some(unreduced) = plus_modulus(&words, &FieldElement::MODULUS) {
-                    prop_assert_eq!(FieldElement::from_guest_operand_words(&unreduced).to_bytes(), fe.to_bytes());
-                }
-                let words = fe.to_canonical_words();
-                prop_assert_eq!(be_bytes(&words), <[u8; 32]>::from(fe.to_bytes()));
-                prop_assert_eq!(FieldElement::from_canonical_words(&words).map(|fe| fe.to_bytes()), Some(fe.to_bytes()));
+            if let Some(x) = FieldElement::from_be_bytes(&bytes) {
+                check_round_trip(x);
             }
-            use crate::k256::elliptic_curve::Curve;
-            if crate::k256::U256::from_be_slice(&bytes) < crate::k256::Secp256k1::ORDER {
-                let scalar = scalar_of_be_bytes(&bytes);
-                let words = scalar.to_montgomery_words();
-                prop_assert!(is_below(&words, &Scalar::MODULUS));
-                prop_assert_eq!(Scalar::from_montgomery_words(&words).to_repr(), scalar.to_repr());
-                if let Some(unreduced) = plus_modulus(&words, &Scalar::MODULUS) {
-                    prop_assert_eq!(Scalar::from_guest_operand_words(&unreduced).to_repr(), scalar.to_repr());
-                }
-                let words = scalar.to_canonical_words();
-                prop_assert_eq!(be_bytes(&words), bytes);
-                prop_assert_eq!(Scalar::from_canonical_words(&words).map(|s| s.to_repr()), Some(scalar.to_repr()));
+            if let Some(x) = Scalar::from_be_bytes(&bytes) {
+                check_round_trip(x);
             }
         });
     }
 
-    /// The delegated check of the words of a guest answer, and the words it leaves
-    fn validate<T: Secp256k1Element>(words: [u32; 8]) -> (bool, [u32; 8]) {
+    /// The delegated check of a guest answer, which must leave the words as they were
+    fn below<T: Secp256k1Element>(words: [u32; 8]) -> bool {
         let mut operand = DelegationOperand(words);
         // SAFETY: the words are a 32-byte aligned local
         let valid = unsafe { T::validate(&raw mut operand.0) }.is_ok();
-        (valid, operand.0)
-    }
-
-    fn below<T: Secp256k1Element>(words: [u32; 8]) -> bool {
-        let (valid, left) = validate::<T>(words);
-        // the check leaves the value as it was
-        assert_eq!(left, words);
+        assert_eq!(operand.0, words);
         valid
     }
 
@@ -596,7 +550,6 @@ mod tests {
             assert!(!below::<T>([u32::MAX; 8]));
             assert!(below::<T>(below_modulus));
             assert!(below::<T>([0; 8]));
-            assert!(below::<T>(T::MONTGOMERY_ONE));
             assert!(T::from_canonical_words(&T::MODULUS).is_none());
             assert!(T::from_canonical_words(&below_modulus).is_some());
         }
@@ -608,629 +561,126 @@ mod tests {
         });
     }
 
-    fn answer_words<T: HintAnswer>(value: &T, target: HintTarget) -> Vec<u32> {
-        let mut response = Vec::new();
-        value.write(target, &mut response);
-        response
-    }
-
     #[test]
     fn secp256k1_answers_follow_the_target() {
-        let fe = FieldElement::from_bytes(&[7; 32]).unwrap();
-        let scalar = scalar_of_be_bytes(&[7; 32]);
-        assert_eq!(
-            answer_words(&fe, HintTarget::Native),
-            fe.to_canonical_words()
-        );
-        assert_eq!(
-            answer_words(&fe, HintTarget::Guest),
-            fe.to_montgomery_words()
-        );
-        assert_eq!(
-            answer_words(&scalar, HintTarget::Native),
-            scalar.to_canonical_words()
-        );
-        assert_eq!(
-            answer_words(&scalar, HintTarget::Guest),
-            scalar.to_montgomery_words()
-        );
-        assert_ne!(fe.to_canonical_words(), fe.to_montgomery_words());
+        fn check<T: Secp256k1Element + HintAnswer>(x: T) {
+            for (target, words) in [
+                (HintTarget::Native, x.to_canonical_words()),
+                (HintTarget::Guest, x.to_montgomery_words()),
+            ] {
+                let mut response = Vec::new();
+                x.write(target, &mut response);
+                assert_eq!(response, words);
+            }
+        }
+        check(FieldElement::from_be_bytes(&[7; 32]).unwrap());
+        check(Scalar::from_be_bytes(&[7; 32]).unwrap());
     }
 
     #[test]
-    fn test_fe_sqrt_oracle_matches_default() {
-        proptest!(|(bytes: [u8; 32])| {
-            let Some(fe) = FieldElement::from_bytes(&bytes) else {
+    fn hooks_with_oracle_match_the_default_hooks() {
+        proptest!(|(a: [u8; 32], b: [u8; 32])| {
+            let (Some(x), Some(y)) = (FieldElement::from_be_bytes(&a), FieldElement::from_be_bytes(&b))
+            else {
                 return Ok(());
             };
-            if fe.normalizes_to_zero() {
-                return Ok(());
+            let mut default = DefaultSecp256k1Hooks;
+            let mut oracle = RecordingHintOracle::new();
+            let mut hinted = Secp256k1HooksWithOracle::new(&mut oracle);
+
+            let (mut d, mut h) = (x, x);
+            prop_assert_eq!(default.fe_sqrt_and_assign(&mut d), hinted.fe_sqrt_and_assign(&mut h));
+            prop_assert_eq!(d.to_bytes(), h.to_bytes());
+
+            let (mut d, mut h) = (x, x);
+            default.fe_invert_and_assign(&mut d);
+            hinted.fe_invert_and_assign(&mut h);
+            prop_assert_eq!(d.to_bytes(), h.to_bytes());
+
+            if !y.normalizes_to_zero() {
+                let (mut d, mut h) = (MaybeUninit::uninit(), MaybeUninit::uninit());
+                let d = *default.fe_divide(&mut [x, y], &mut d);
+                let h = *hinted.fe_divide(&mut [x, y], &mut h);
+                prop_assert_eq!(d.to_bytes(), h.to_bytes());
             }
 
-            let mut fe_default = fe;
-            let result_default = DefaultSecp256k1Hooks.fe_sqrt_and_assign(&mut fe_default);
-
-            let mut oracle = create_oracle_with_field_ops();
-            let mut fe_oracle = fe;
-            let result_oracle = Secp256k1HooksWithOracle::new(&mut oracle)
-                .fe_sqrt_and_assign(&mut fe_oracle);
-
-            prop_assert_eq!(result_default, result_oracle, "sqrt existence should match");
-            prop_assert_eq!(fe_default.to_bytes(), fe_oracle.to_bytes(), "sqrt values should match");
+            if let Some(s) = Scalar::from_be_bytes(&a) {
+                let (mut d, mut h) = (s, s);
+                default.scalar_invert_and_assign(&mut d);
+                hinted.scalar_invert_and_assign(&mut h);
+                prop_assert_eq!(d.to_repr(), h.to_repr());
+            }
         });
     }
 
+    /// Zero inputs are answered as by the default hooks, without a query
     #[test]
-    fn test_fe_invert_oracle_matches_default() {
-        proptest!(|(bytes: [u8; 32])| {
-            let Some(fe) = FieldElement::from_bytes(&bytes) else {
-                return Ok(());
-            };
-            if fe.normalizes_to_zero() {
-                return Ok(());
-            }
-
-            let mut fe_default = fe;
-            DefaultSecp256k1Hooks.fe_invert_and_assign(&mut fe_default);
-
-            let mut oracle = create_oracle_with_field_ops();
-            let mut fe_oracle = fe;
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut fe_oracle);
-
-            prop_assert_eq!(fe_default.to_bytes(), fe_oracle.to_bytes(), "inverse values should match");
-        });
+    fn zero_inputs_send_no_query() {
+        let mut oracle = TapeOracle::new([]);
+        let mut hooks = Secp256k1HooksWithOracle::new(&mut oracle);
+        let mut x = FieldElement::ZERO;
+        assert!(hooks.fe_sqrt_and_assign(&mut x));
+        hooks.fe_invert_and_assign(&mut x);
+        assert!(x.normalizes_to_zero());
+        let mut s = Scalar::ZERO;
+        hooks.scalar_invert_and_assign(&mut s);
+        assert!(s.is_zero());
+        assert!(oracle.queries.is_empty());
     }
 
-    #[test]
-    fn test_fe_divide_oracle_matches_default() {
-        proptest!(|(numerator: [u8; 32], denominator: [u8; 32])| {
-            let (Some(numerator), Some(denominator)) = (
-                FieldElement::from_bytes(&numerator),
-                FieldElement::from_bytes(&denominator),
-            ) else {
-                return Ok(());
-            };
-            if denominator.normalizes_to_zero() {
-                return Ok(());
-            }
-
-            let mut quotient_default = MaybeUninit::uninit();
-            let quotient_default = DefaultSecp256k1Hooks
-                .fe_divide(&mut [numerator, denominator], &mut quotient_default);
-
-            let mut oracle = create_oracle_with_field_ops();
-            let mut quotient_oracle = MaybeUninit::uninit();
-            let quotient_oracle = Secp256k1HooksWithOracle::new(&mut oracle)
-                .fe_divide(&mut [numerator, denominator], &mut quotient_oracle);
-
-            prop_assert_eq!(quotient_default.to_bytes(), quotient_oracle.to_bytes(), "quotients should match");
-
-            let mut product = *quotient_oracle;
-            product.mul_in_place(&denominator);
-            prop_assert_eq!(product.to_bytes(), numerator.to_bytes());
-        });
+    fn seven() -> FieldElement {
+        FieldElement::from_be_bytes(&be_bytes_of(7)).unwrap()
     }
 
-    /// An oracle that answers every query with the integer 1
-    struct OneOracle;
-
-    impl HintOracle for OneOracle {
-        unsafe fn send_query(
-            &mut self,
-            _query_id: u32,
-            _input_word: usize,
-        ) -> Result<(), HintError> {
-            Ok(())
-        }
-
-        // the default of `zk_ee`'s `MemoryOracle`, which `OneOracle` keeps there
-        fn read_word(&mut self) -> Result<u32, HintError> {
-            Err(HintError("oracle does not serve the memory-based protocol"))
-        }
-
-        unsafe fn write_words(&mut self, dst: *mut u32, num_words: usize) -> Result<(), HintError> {
-            for i in 0..num_words {
-                // SAFETY: the destination is valid for the words (the caller's obligation)
-                unsafe { dst.add(i).write(u32::from(i == 0)) };
-            }
-            Ok(())
-        }
-    }
-
-    fn fe_of(n: u8) -> FieldElement {
+    /// The big-endian bytes of `n`
+    fn be_bytes_of(n: u8) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         bytes[31] = n;
-        FieldElement::from_bytes(&bytes).unwrap()
+        bytes
     }
 
     #[test]
-    fn test_fe_divide_accepts_the_quotient() {
-        // 5 / 5 is the 1 of the oracle
-        let mut quotient = MaybeUninit::uninit();
-        let quotient = Secp256k1HooksWithOracle::new(&mut OneOracle)
-            .fe_divide(&mut [fe_of(5), fe_of(5)], &mut quotient);
-        assert_eq!(quotient.to_bytes(), FieldElement::ONE.to_bytes());
+    #[should_panic(expected = "assertion failed")]
+    fn wrong_fe_inverse_is_rejected() {
+        let mut oracle = lying_oracle(&[FieldHintOp::Secp256k1BaseFieldInverse]);
+        Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut seven());
     }
 
     #[test]
-    #[should_panic]
-    fn test_fe_divide_rejects_a_wrong_quotient() {
-        // 6 / 5 is not
-        let mut quotient = MaybeUninit::uninit();
-        Secp256k1HooksWithOracle::new(&mut OneOracle)
-            .fe_divide(&mut [fe_of(6), fe_of(5)], &mut quotient);
+    #[should_panic(expected = "assertion failed")]
+    fn wrong_scalar_inverse_is_rejected() {
+        let mut oracle = lying_oracle(&[FieldHintOp::Secp256k1ScalarFieldInverse]);
+        let mut s = Scalar::from_be_bytes(&be_bytes_of(7)).unwrap();
+        Secp256k1HooksWithOracle::new(&mut oracle).scalar_invert_and_assign(&mut s);
     }
 
     #[test]
-    fn test_scalar_invert_oracle_matches_default() {
-        proptest!(|(bytes: [u8; 32])| {
-            use crate::k256::elliptic_curve::scalar::FromUintUnchecked;
-            use crate::k256::elliptic_curve::Curve;
-            use crate::k256::U256;
-
-            let val = U256::from_be_slice(&bytes);
-            if val >= crate::k256::Secp256k1::ORDER || val == U256::ZERO {
-                return Ok(());
-            }
-
-            let scalar = Scalar::from_k256_scalar(
-                crate::k256::Scalar::from_uint_unchecked(val)
-            );
-
-            let mut scalar_default = scalar;
-            DefaultSecp256k1Hooks.scalar_invert_and_assign(&mut scalar_default);
-
-            let mut oracle = create_oracle_with_field_ops();
-            let mut scalar_oracle = scalar;
-            Secp256k1HooksWithOracle::new(&mut oracle).scalar_invert_and_assign(&mut scalar_oracle);
-
-            prop_assert_eq!(scalar_default.to_repr(), scalar_oracle.to_repr(), "scalar inverse values should match");
-        });
+    #[should_panic(expected = "assertion failed")]
+    fn wrong_fe_sqrt_is_rejected() {
+        let mut oracle = lying_oracle(&[FieldHintOp::Secp256k1BaseFieldSqrt]);
+        Secp256k1HooksWithOracle::new(&mut oracle).fe_sqrt_and_assign(&mut seven());
     }
 
-    /// Tests that verify the validation logic catches lying oracles.
-    /// These tests ensure that incorrect oracle responses are rejected.
-    mod malicious_oracle_tests {
-        use super::*;
-        use proptest::prop_assert;
-
-        /// Ways to corrupt oracle responses
-        enum Corruption {
-            /// Return all zeros
-            ReturnZero,
-            /// Flip the least significant bit of the result
-            FlipLsb,
-            /// Add 1 to the result (wrapping)
-            AddOne,
-            /// Return a fixed arbitrary value
-            ReturnArbitrary([u8; 32]),
-        }
-
-        impl Corruption {
-            fn apply(&self, data: &mut [u8]) {
-                match self {
-                    Corruption::ReturnZero => data.fill(0),
-                    Corruption::FlipLsb => {
-                        if !data.is_empty() {
-                            data[data.len() - 1] ^= 1;
-                        }
-                    }
-                    Corruption::AddOne => {
-                        // Add 1 with carry propagation (big-endian)
-                        let mut carry = 1u16;
-                        for byte in data.iter_mut().rev() {
-                            let sum = *byte as u16 + carry;
-                            *byte = sum as u8;
-                            carry = sum >> 8;
-                        }
-                    }
-                    Corruption::ReturnArbitrary(val) => {
-                        data.copy_from_slice(val);
-                    }
-                }
-            }
-        }
-
-        /// A malicious oracle processor that wraps a correct one and corrupts its output
-        struct LyingFieldOpsQuery {
-            corruption: Corruption,
-            /// If set, lie about sqrt existence (flip the boolean)
-            lie_about_sqrt_existence: bool,
-        }
-
-        impl LyingFieldOpsQuery {
-            fn new(corruption: Corruption) -> Self {
-                Self {
-                    corruption,
-                    lie_about_sqrt_existence: false,
-                }
-            }
-
-            fn with_sqrt_existence_lie(mut self) -> Self {
-                self.lie_about_sqrt_existence = true;
-                self
-            }
-
-            fn process_memory_query(
-                &mut self,
-                query_id: u32,
-                input_word: usize,
-                memory: &dyn QuerierMemory,
-            ) -> Vec<u32> {
-                // Get the correct response of the native run (the querier of the tests)
-                let mut correct_response = Vec::new();
-                // SAFETY: the handler of an `InProcessMemoryOracle` runs during the query of the
-                // hooks, with the memory of this process, where the request and its operand are
-                // live, of the types of the op
-                assert!(unsafe {
-                    answer_query(
-                        query_id,
-                        input_word,
-                        memory,
-                        Some(&mut correct_response),
-                        None,
-                    )
-                }
-                .expect("must answer the field hint query"));
-
-                // Determine if this is a sqrt query (returns an element + bool) or inverse query (returns an element)
-                // sqrt response: 8 words for the element + 1 word for bool = 9 words
-                // inverse response: 8 words for the element
-                let is_sqrt_query = correct_response.len() == 9;
-
-                let mut corrupted = correct_response.clone();
-
-                if is_sqrt_query && self.lie_about_sqrt_existence {
-                    // Flip the boolean (last element)
-                    corrupted[8] ^= 1;
-                } else {
-                    // Corrupt the element (the first 8 words), as the big-endian bytes of the
-                    // integer of its words
-                    let words: [u32; 8] = corrupted[..8].try_into().unwrap();
-                    let mut bytes = be_bytes(&words);
-                    self.corruption.apply(&mut bytes);
-                    corrupted[..8].copy_from_slice(&words_of_be_bytes(&bytes));
-                }
-
-                corrupted
-            }
-        }
-
-        fn create_lying_oracle(
-            corruption: Corruption,
-        ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
-            let mut processor = LyingFieldOpsQuery::new(corruption);
-            InProcessMemoryOracle::new(
-                move |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
-                    processor.process_memory_query(query_id, input_word, memory)
-                },
-            )
-        }
-
-        fn create_sqrt_existence_lying_oracle(
-        ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
-            let mut processor =
-                LyingFieldOpsQuery::new(Corruption::ReturnZero).with_sqrt_existence_lie();
-            InProcessMemoryOracle::new(
-                move |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
-                    processor.process_memory_query(query_id, input_word, memory)
-                },
-            )
-        }
-
-        // A known valid field element for testing (small value, definitely in field)
-        fn test_field_element() -> FieldElement {
-            let mut bytes = [0u8; 32];
-            bytes[31] = 7; // Small non-zero value
-            FieldElement::from_bytes(&bytes).unwrap()
-        }
-
-        fn test_scalar() -> Scalar {
-            use crate::k256::elliptic_curve::scalar::FromUintUnchecked;
-            let mut bytes = [0u8; 32];
-            bytes[31] = 7;
-            Scalar::from_k256_scalar(crate::k256::Scalar::from_uint_unchecked(
-                crate::k256::U256::from_be_slice(&bytes),
-            ))
-        }
-
-        // ============ fe_invert tests ============
-
-        #[test]
-        #[should_panic]
-        fn test_fe_invert_rejects_zero_answer() {
-            let mut oracle = create_lying_oracle(Corruption::ReturnZero);
-            let mut fe = test_field_element();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut fe);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_fe_invert_rejects_flipped_bit() {
-            let mut oracle = create_lying_oracle(Corruption::FlipLsb);
-            let mut fe = test_field_element();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut fe);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_fe_invert_rejects_off_by_one() {
-            let mut oracle = create_lying_oracle(Corruption::AddOne);
-            let mut fe = test_field_element();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut fe);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_fe_invert_rejects_arbitrary_value() {
-            let arbitrary = [0x42u8; 32];
-            let mut oracle = create_lying_oracle(Corruption::ReturnArbitrary(arbitrary));
-            let mut fe = test_field_element();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut fe);
-        }
-
-        // ============ fe_sqrt tests ============
-
-        #[test]
-        #[should_panic]
-        fn test_fe_sqrt_rejects_wrong_sqrt_value() {
-            let mut oracle = create_lying_oracle(Corruption::FlipLsb);
-            let mut fe = test_field_element();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_sqrt_and_assign(&mut fe);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_fe_sqrt_rejects_zero_answer() {
-            let mut oracle = create_lying_oracle(Corruption::ReturnZero);
-            let mut fe = test_field_element();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_sqrt_and_assign(&mut fe);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_fe_sqrt_rejects_lie_about_existence() {
-            // This test uses an oracle that returns the correct sqrt value but lies
-            // about whether a sqrt exists (flips the boolean)
-            let mut oracle = create_sqrt_existence_lying_oracle();
-            let mut fe = test_field_element();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_sqrt_and_assign(&mut fe);
-        }
-
-        // ============ scalar_invert tests ============
-
-        #[test]
-        #[should_panic]
-        fn test_scalar_invert_rejects_zero_answer() {
-            let mut oracle = create_lying_oracle(Corruption::ReturnZero);
-            let mut scalar = test_scalar();
-            Secp256k1HooksWithOracle::new(&mut oracle).scalar_invert_and_assign(&mut scalar);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_scalar_invert_rejects_flipped_bit() {
-            let mut oracle = create_lying_oracle(Corruption::FlipLsb);
-            let mut scalar = test_scalar();
-            Secp256k1HooksWithOracle::new(&mut oracle).scalar_invert_and_assign(&mut scalar);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_scalar_invert_rejects_off_by_one() {
-            let mut oracle = create_lying_oracle(Corruption::AddOne);
-            let mut scalar = test_scalar();
-            Secp256k1HooksWithOracle::new(&mut oracle).scalar_invert_and_assign(&mut scalar);
-        }
-
-        #[test]
-        #[should_panic]
-        fn test_scalar_invert_rejects_arbitrary_value() {
-            let arbitrary = [0x42u8; 32];
-            let mut oracle = create_lying_oracle(Corruption::ReturnArbitrary(arbitrary));
-            let mut scalar = test_scalar();
-            Secp256k1HooksWithOracle::new(&mut oracle).scalar_invert_and_assign(&mut scalar);
-        }
-
-        // ============ Proptest: random corruptions should be rejected ============
-
-        #[test]
-        fn test_fe_invert_rejects_random_corruptions() {
-            proptest!(|(bytes: [u8; 32], corruption_bytes: [u8; 32])| {
-                let Some(fe) = FieldElement::from_bytes(&bytes) else {
-                    return Ok(());
-                };
-                if fe.normalizes_to_zero() {
-                    return Ok(());
-                }
-
-                // Get the correct inverse first
-                let mut correct_fe = fe;
-                let mut correct_oracle = create_oracle_with_field_ops();
-                Secp256k1HooksWithOracle::new(&mut correct_oracle).fe_invert_and_assign(&mut correct_fe);
-                // the answer on the wire: its canonical integer
-                let correct_inverse = be_bytes(&correct_fe.to_canonical_words());
-
-                // Skip if random corruption happens to equal the correct answer
-                if corruption_bytes == correct_inverse {
-                    return Ok(());
-                }
-
-                // Now try with the corrupted oracle
-                let mut lying_oracle = create_lying_oracle(Corruption::ReturnArbitrary(corruption_bytes));
-                let mut test_fe = fe;
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Secp256k1HooksWithOracle::new(&mut lying_oracle).fe_invert_and_assign(&mut test_fe);
-                }));
-
-                // The validation should have caught the lie (panicked)
-                prop_assert!(result.is_err(), "Oracle lie was not detected for input {:?}", bytes);
-            });
-        }
-
-        #[test]
-        fn test_scalar_invert_rejects_random_corruptions() {
-            proptest!(|(bytes: [u8; 32], corruption_bytes: [u8; 32])| {
-                use crate::k256::elliptic_curve::scalar::FromUintUnchecked;
-                use crate::k256::elliptic_curve::Curve;
-                use crate::k256::U256;
-
-                let val = U256::from_be_slice(&bytes);
-                if val >= crate::k256::Secp256k1::ORDER || val == U256::ZERO {
-                    return Ok(());
-                }
-
-                let scalar = Scalar::from_k256_scalar(
-                    crate::k256::Scalar::from_uint_unchecked(val)
-                );
-
-                // Get the correct inverse first
-                let mut correct_scalar = scalar;
-                let mut correct_oracle = create_oracle_with_field_ops();
-                Secp256k1HooksWithOracle::new(&mut correct_oracle).scalar_invert_and_assign(&mut correct_scalar);
-                // the answer on the wire: its canonical integer
-                let correct_inverse = be_bytes(&correct_scalar.to_canonical_words());
-
-                // Skip if random corruption happens to equal the correct answer
-                if corruption_bytes == correct_inverse {
-                    return Ok(());
-                }
-
-                // Also skip if corruption_bytes >= ORDER (would fail the validation instead)
-                let corruption_val = U256::from_be_slice(&corruption_bytes);
-                if corruption_val >= crate::k256::Secp256k1::ORDER {
-                    return Ok(());
-                }
-
-                // Now try with the corrupted oracle
-                let mut lying_oracle = create_lying_oracle(Corruption::ReturnArbitrary(corruption_bytes));
-                let mut test_scalar = scalar;
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Secp256k1HooksWithOracle::new(&mut lying_oracle).scalar_invert_and_assign(&mut test_scalar);
-                }));
-
-                // The validation should have caught the lie (panicked)
-                prop_assert!(result.is_err(), "Oracle lie was not detected for input {:?}", bytes);
-            });
-        }
-
-        #[test]
-        fn test_fe_sqrt_rejects_random_corruptions() {
-            proptest!(|(bytes: [u8; 32], corruption_bytes: [u8; 32], flip_bool: bool)| {
-                let Some(fe) = FieldElement::from_bytes(&bytes) else {
-                    return Ok(());
-                };
-                if fe.normalizes_to_zero() {
-                    return Ok(());
-                }
-
-                // Get the correct result first
-                let mut correct_fe = fe;
-                let mut correct_oracle = create_oracle_with_field_ops();
-                let correct_exists = Secp256k1HooksWithOracle::new(&mut correct_oracle)
-                    .fe_sqrt_and_assign(&mut correct_fe);
-                let correct_sqrt = be_bytes(&correct_fe.to_canonical_words());
-
-                // Test 1: Corrupt the sqrt candidate value
-                // Skip if random corruption happens to equal the correct answer
-                if corruption_bytes != correct_sqrt {
-                    let mut lying_oracle = create_lying_oracle(Corruption::ReturnArbitrary(corruption_bytes));
-                    let mut test_fe = fe;
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        Secp256k1HooksWithOracle::new(&mut lying_oracle).fe_sqrt_and_assign(&mut test_fe);
-                    }));
-
-                    // The validation should have caught the lie (panicked)
-                    prop_assert!(result.is_err(),
-                        "Oracle lie about sqrt candidate was not detected for input {:?}", bytes);
-                }
-
-                // Test 2: Lie about sqrt existence (flip the boolean)
-                // Only test if flip_bool is true to reduce test cases
-                if flip_bool {
-                    let mut lying_oracle = create_sqrt_existence_lying_oracle();
-                    let mut test_fe = fe;
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        Secp256k1HooksWithOracle::new(&mut lying_oracle).fe_sqrt_and_assign(&mut test_fe);
-                    }));
-
-                    // The validation should have caught the lie about existence (panicked)
-                    prop_assert!(result.is_err(),
-                        "Oracle lie about sqrt existence was not detected for input {:?} (is_qr={})",
-                        bytes, correct_exists);
-                }
-            });
-        }
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn false_non_residue_flag_is_rejected() {
+        let mut oracle = lying_oracle_last_word(&[FieldHintOp::Secp256k1BaseFieldSqrt]);
+        Secp256k1HooksWithOracle::new(&mut oracle).fe_sqrt_and_assign(&mut seven());
     }
 
-    mod zero_input_regression_tests {
-        use super::*;
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn wrong_fe_quotient_is_rejected() {
+        let mut oracle = lying_oracle(&[FieldHintOp::Secp256k1BaseFieldDivision]);
+        let mut fraction = [seven(), FieldElement::ONE];
+        Secp256k1HooksWithOracle::new(&mut oracle)
+            .fe_divide(&mut fraction, &mut MaybeUninit::uninit());
+    }
 
-        /// A processor that should never be reached in these tests.
-        /// Zero-input hook behavior is expected to short-circuit before oracle queries.
-        struct PanickingFieldOpsQuery;
-
-        impl PanickingFieldOpsQuery {
-            fn process_memory_query(
-                &mut self,
-                query_id: u32,
-                _input_word: usize,
-                _memory: &dyn QuerierMemory,
-            ) -> Vec<u32> {
-                panic!("field ops oracle should not be queried for zero input, query_id=0x{query_id:08x}");
-            }
-        }
-
-        fn create_panicking_field_ops_oracle(
-        ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
-            InProcessMemoryOracle::new(
-                |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
-                    PanickingFieldOpsQuery.process_memory_query(query_id, input_word, memory)
-                },
-            )
-        }
-
-        fn zero_field_element() -> FieldElement {
-            FieldElement::from_bytes(&[0u8; 32]).expect("zero is a valid field element")
-        }
-
-        #[test]
-        fn test_fe_invert_zero_does_not_query_oracle() {
-            let mut fe_default = zero_field_element();
-            DefaultSecp256k1Hooks.fe_invert_and_assign(&mut fe_default);
-            assert!(fe_default.normalizes_to_zero());
-
-            let mut fe_oracle = zero_field_element();
-            let mut oracle = create_panicking_field_ops_oracle();
-            Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut fe_oracle);
-            assert!(fe_oracle.normalizes_to_zero());
-        }
-
-        #[test]
-        fn test_scalar_invert_zero_does_not_query_oracle() {
-            let mut scalar_default = Scalar::ZERO;
-            DefaultSecp256k1Hooks.scalar_invert_and_assign(&mut scalar_default);
-            assert!(scalar_default.is_zero());
-
-            let mut scalar_oracle = Scalar::ZERO;
-            let mut oracle = create_panicking_field_ops_oracle();
-            Secp256k1HooksWithOracle::new(&mut oracle).scalar_invert_and_assign(&mut scalar_oracle);
-            assert!(scalar_oracle.is_zero());
-        }
-
-        #[test]
-        fn test_fe_sqrt_zero_does_not_query_oracle_and_matches_default() {
-            let mut fe_default = zero_field_element();
-            let exists_default = DefaultSecp256k1Hooks.fe_sqrt_and_assign(&mut fe_default);
-            assert!(exists_default);
-            assert!(fe_default.normalizes_to_zero());
-
-            let mut fe_oracle = zero_field_element();
-            let mut oracle = create_panicking_field_ops_oracle();
-            let exists_oracle =
-                Secp256k1HooksWithOracle::new(&mut oracle).fe_sqrt_and_assign(&mut fe_oracle);
-            assert!(exists_oracle);
-            assert!(fe_oracle.normalizes_to_zero());
-        }
+    #[test]
+    #[should_panic(expected = "the hint answer is well-formed")]
+    fn non_canonical_answers_are_rejected() {
+        let mut oracle = TapeOracle::new(<FieldElement as Secp256k1Element>::MODULUS);
+        Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut seven());
     }
 }

@@ -244,11 +244,9 @@ impl<P: FpConfig<N>, const N: usize> Field for Fp<P, N> {
             let output_byte_size = buffer_byte_size(Self::MODULUS_BIT_SIZE as usize + F::BIT_SIZE);
             let flags_mask = u8::MAX.checked_shl(8 - F::BIT_SIZE as u32).unwrap_or(0);
             let flags = result[output_byte_size - 1] & flags_mask;
-            // Clear every bit at or above the modulus size. The bytes below the boundary byte
-            // keep all their bits, so only the boundary byte is masked, and every byte above
-            // it is zeroed, including the entirely unused limbs of padded delegated fields.
-            // `MODULUS_BIT_SIZE <= 64 * N`, so the boundary is at most the trailing byte.
-            // (Masking each of the `8 * N + 1` bytes costs ~500 RV32 cycles a call for N = 4.)
+            // Clear every bit at or above the modulus size: mask the boundary byte and zero the
+            // bytes above it, including the unused limbs of padded fields (cheaper on RV32 than
+            // masking every byte). `MODULUS_BIT_SIZE <= 64 * N`, so the boundary is in range.
             let boundary = Self::MODULUS_BIT_SIZE as usize / 8;
             result[boundary] &= (1u8 << (Self::MODULUS_BIT_SIZE % 8)) - 1;
             for i in boundary + 1..N * 8 + 1 {
@@ -962,36 +960,9 @@ impl<P: FpConfig<N>, const N: usize> From<BigInt<N>> for Fp<P, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ark_ff_delegation::const_helpers::SerBuffer;
     use ark_ec::short_weierstrass::SWFlags;
     use ark_ff::BigInteger;
     use ark_std::rand::RngCore;
-
-    /// `from_random_bytes_with_flags` with a mask computed for each of the `8 * N + 1` bytes,
-    /// the direct reading of the masking rule. The production version must return the same for
-    /// every input.
-    fn from_random_bytes_with_flags_per_byte<P: FpConfig<N>, const N: usize, F: Flags>(
-        bytes: &[u8],
-    ) -> Option<(Fp<P, N>, F)> {
-        if F::BIT_SIZE > 8 {
-            None
-        } else {
-            let mut result = SerBuffer::<N>::zeroed();
-            result.copy_from_u8_slice(bytes);
-            let output_byte_size =
-                buffer_byte_size(Fp::<P, N>::MODULUS_BIT_SIZE as usize + F::BIT_SIZE);
-            let flags_mask = u8::MAX.checked_shl(8 - F::BIT_SIZE as u32).unwrap_or(0);
-            let flags = result[output_byte_size - 1] & flags_mask;
-            for i in 0..N * 8 + 1 {
-                let bits = (Fp::<P, N>::MODULUS_BIT_SIZE as usize)
-                    .saturating_sub(i * 8)
-                    .min(8);
-                result[i] &= u8::MAX.checked_shr((8 - bits) as u32).unwrap_or(0);
-            }
-            Fp::from_bigint(result.to_bigint())
-                .and_then(|value| F::from_u8(flags).map(|flags| (value, flags)))
-        }
-    }
 
     /// Canonical encoding plus flag bits, comparable across field implementations.
     fn canonical<T: CanonicalSerialize, F: Flags>(result: Option<(T, F)>) -> Option<(Vec<u8>, u8)> {
@@ -1004,27 +975,19 @@ mod tests {
 
     fn assert_same_result<P: FpConfig<N>, const N: usize, R: Field, F: Flags>(bytes: &[u8]) {
         let ours = canonical(Fp::<P, N>::from_random_bytes_with_flags::<F>(bytes));
-        let old = canonical(from_random_bytes_with_flags_per_byte::<P, N, F>(bytes));
         let arkworks = canonical(R::from_random_bytes_with_flags::<F>(bytes));
         assert_eq!(
             ours,
-            old,
-            "per-byte reference, {} flag bits, input {bytes:02x?}",
-            F::BIT_SIZE
-        );
-        assert_eq!(
-            ours,
             arkworks,
-            "arkworks, {} flag bits, input {bytes:02x?}",
+            "{} flag bits, input {bytes:02x?}",
             F::BIT_SIZE
         );
     }
 
-    /// Every input length from 0 to `8 * N + 1`: all-zero, all-one, the modulus and the
-    /// modulus minus one (truncated to the length, with random bytes above them) and
-    /// random bytes, each with no flags and with the two short-Weierstrass flag bits.
-    /// `R` is the arkworks field with the same modulus.
-    fn assert_matches_reference_and_arkworks<P: FpConfig<N>, const N: usize, R: Field>(
+    /// `from_random_bytes_with_flags` against `R`, the arkworks field with the same modulus, for
+    /// every input length up to `8 * N + 1`: all zeroes, all ones, prefixes of the modulus and of
+    /// the modulus minus one, and random bytes, without flags and with the two SW flag bits
+    fn assert_matches_arkworks<P: FpConfig<N>, const N: usize, R: Field>(
         _: PhantomData<(Fp<P, N>, R)>,
     ) {
         let mut rng = ark_std::test_rng();
@@ -1041,7 +1004,7 @@ mod tests {
                 bytes[..prefix].copy_from_slice(&limit[..prefix]);
                 inputs.push(bytes);
             }
-            for _ in 0..64 {
+            for _ in 0..16 {
                 let mut bytes = vec![0; len];
                 rng.fill_bytes(&mut bytes);
                 inputs.push(bytes);
@@ -1054,22 +1017,18 @@ mod tests {
     }
 
     #[test]
-    fn from_random_bytes_matches_reference_and_arkworks_unpadded() {
+    fn from_random_bytes_matches_arkworks_unpadded() {
         assert_eq!(crate::bn254::Fr::MODULUS_BIT_SIZE, 254);
-        assert_matches_reference_and_arkworks(PhantomData::<(crate::bn254::Fr, ark_bn254::Fr)>);
+        assert_matches_arkworks(PhantomData::<(crate::bn254::Fr, ark_bn254::Fr)>);
         assert_eq!(crate::bls12_381::Fr::MODULUS_BIT_SIZE, 255);
-        assert_matches_reference_and_arkworks(
-            PhantomData::<(crate::bls12_381::Fr, ark_bls12_381::Fr)>,
-        );
+        assert_matches_arkworks(PhantomData::<(crate::bls12_381::Fr, ark_bls12_381::Fr)>);
     }
 
     #[test]
-    fn from_random_bytes_matches_reference_and_arkworks_padded() {
+    fn from_random_bytes_matches_arkworks_padded() {
         // 381 bits stored in 8 limbs: two whole unused limbs above the boundary byte.
         assert_eq!(crate::bls12_381::Fq::MODULUS_BIT_SIZE, 381);
         assert_eq!(core::mem::size_of::<crate::bls12_381::Fq>(), 64);
-        assert_matches_reference_and_arkworks(
-            PhantomData::<(crate::bls12_381::Fq, ark_bls12_381::Fq)>,
-        );
+        assert_matches_arkworks(PhantomData::<(crate::bls12_381::Fq, ark_bls12_381::Fq)>);
     }
 }

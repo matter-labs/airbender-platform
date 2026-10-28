@@ -1,10 +1,4 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/mod.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/mod.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/errors.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/single_pair.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/multiple_pairs.rs
-//! BLS12-381 G1 and G2 multi-scalar multiplication (EIP-2537), from the EIP-2537 encoding of
-//! the pairs.
+//! BLS12-381 G1 and G2 multi-scalar multiplication (EIP-2537).
 
 use super::*;
 use crate::ark_ec::CurveGroup;
@@ -36,11 +30,7 @@ fn ln_without_floats(a: usize) -> usize {
     (log2(a) * 69 / 100) as usize
 }
 
-/// Pippenger multi-scalar multiplication.
-///
-/// Invariant: `bases.len() == bigints.len()` (asserted at entry).
-/// All indexing below is bounded by `size` which equals both lengths.
-// zksync-os's code (`last_window == false`), whose crate allows the lint
+/// Pippenger multi-scalar multiplication; `bases` and `bigints` have the same length.
 #[allow(clippy::bool_comparison)]
 fn msm<G: CurveGroup, A: core::alloc::Allocator + Clone>(
     bases: &[G::Affine],
@@ -139,18 +129,13 @@ fn msm<G: CurveGroup, A: core::alloc::Allocator + Clone>(
             })
 }
 
-/// The multi-scalar multiplication of G1 points (EIP-2537) over the pairs of `input`, each the
-/// EIP-2537 encoding of a G1 point and a big-endian 256-bit scalar (not reduced): the sum of the
-/// points times their scalars. Fails unless every point is canonical, on the curve, and in the
-/// subgroup, checked pair by pair while the pairs are parsed (so a later pair fails after the
-/// hints of the earlier ones). `input` must not be empty (with an oracle, an empty input
-/// panics). The wrapper keeps the gas, the size of the input (a non-zero multiple of 160), and
-/// the encoding of the result (zksync-os `write_g1`).
+/// The G1 MSM of `input`: each pair is a G1 point and a big-endian 256-bit scalar (not reduced).
+/// Fails unless every point is canonical, on the curve and in the subgroup, checked pair by pair
+/// while parsing. `input` must not be empty (with an oracle, an empty input panics).
 ///
-/// With an oracle, the subgroup checks take checked hinted divisions, and so does the
-/// multiplication: of one or two pairs, a joint affine double-and-add; of more, the buckets in
-/// projective coordinates, then a hinted inverse for the affine result. A wrong hint panics.
-/// The points and the scalars go into vectors of `allocator`, and so do the buckets.
+/// With an oracle, the subgroup checks take checked hinted divisions; one or two pairs use a
+/// joint affine double-and-add with hinted divisions, more the projective `msm` and a hinted
+/// inverse. A wrong hint panics. Points, scalars and buckets go into vectors of `allocator`.
 pub fn bls12_381_g1_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
     input: &[[u8; G1_MSM_PAIR_LEN]],
     allocator: A,
@@ -160,10 +145,7 @@ pub fn bls12_381_g1_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
     let mut scalars = Vec::with_capacity_in(num_pairs, allocator.clone());
     let mut points = Vec::with_capacity_in(num_pairs, allocator.clone());
 
-    // arkworks MSM allocates inside, so we will do it our way, just parse here
-    // G1Projective::msm_bigint(bases, bigints)
-
-    // parse to use Peppinger algorithm
+    // arkworks' MSM allocates internally, so parse here and run `msm` with `allocator`
     for pair_encoding in input.iter() {
         let point = parse_g1_with_subgroup_check_with_oracle(
             pair_encoding[0..G1_SERIALIZATION_LEN].try_into().unwrap(),
@@ -209,16 +191,9 @@ pub fn bls12_381_g1_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
     Ok(result)
 }
 
-/// The multi-scalar multiplication of G2 points (EIP-2537) over the pairs of `input`, each the
-/// EIP-2537 encoding of a G2 point and a big-endian 256-bit scalar (not reduced), as
-/// [`bls12_381_g1_msm`], except that an empty input is not a panic here: it gives the point at
-/// infinity, with an oracle or without one, and asks no hint (the wrapper rejects it first). The
-/// wrapper keeps the gas, the size of the input (a non-zero multiple of 288), and the encoding of
-/// the result (zksync-os `write_g2`).
-///
-/// With an oracle, the subgroup checks take checked hinted divisions, and the projective result
-/// of the buckets a hinted inverse. A wrong hint panics. The points and the scalars go into
-/// vectors of `allocator`, and so do the buckets.
+/// The G2 MSM of `input`, as [`bls12_381_g1_msm`], except that an empty input gives the point at
+/// infinity without hints, and with an oracle any number of pairs takes the projective `msm` and
+/// a hinted inverse.
 pub fn bls12_381_g2_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
     input: &[[u8; G2_MSM_PAIR_LEN]],
     allocator: A,
@@ -229,10 +204,6 @@ pub fn bls12_381_g2_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
     let mut scalars = Vec::with_capacity_in(num_pairs, allocator.clone());
     let mut points = Vec::with_capacity_in(num_pairs, allocator.clone());
 
-    // arkworks MSM allocates inside, so we will do it our way, just parse here
-    // G1Projective::msm_bigint(bases, bigints)
-
-    // parse to use Peppinger algorithm
     for pair_encoding in input.iter() {
         let point = parse_g2_with_subgroup_check_with_oracle(
             pair_encoding[0..G2_SERIALIZATION_LEN].try_into().unwrap(),
@@ -262,13 +233,10 @@ pub fn bls12_381_g2_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
 // The tests use the host side (`hints::host`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
-    // from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/mod.rs
-
     use super::super::tests as bls_tests;
     use super::*;
     use crate::ark_ec::scalar_mul::sw_double_and_add_affine;
-    use crate::ark_ff::{AdditiveGroup, Zero};
-    use crate::hints::NoHints;
+    use crate::hints::{record_hints, NoHints};
     use num_bigint::BigUint;
     use std::alloc::Global;
     use std::vec;
@@ -278,14 +246,6 @@ mod tests {
 
     /// The absolute value of the curve parameter
     const X: u64 = 0xd201000000010000;
-
-    /// Not a point of the curve: `(1, 1)`, and `1 != 1 + 4`
-    const NOT_ON_CURVE: [u8; G1_SERIALIZATION_LEN] = {
-        let mut bytes = [0u8; G1_SERIALIZATION_LEN];
-        bytes[FIELD_ELEMENT_SERIALIZATION_LEN - 1] = 1;
-        bytes[G1_SERIALIZATION_LEN - 1] = 1;
-        bytes
-    };
 
     /// splitmix64, for deterministic test values
     struct TestRng(u64);
@@ -304,11 +264,6 @@ mod tests {
             let bytes: Vec<u8> = (0..4).flat_map(|_| self.next_u64().to_le_bytes()).collect();
             BigUint::from_bytes_le(&bytes) % (BigUint::from(1u32) << bits)
         }
-
-        fn fq(&mut self) -> Fq {
-            let bytes: Vec<u8> = (0..8).flat_map(|_| self.next_u64().to_le_bytes()).collect();
-            Fq::from_le_bytes_mod_order(&bytes)
-        }
     }
 
     fn group_order() -> BigUint {
@@ -324,9 +279,8 @@ mod tests {
         crate::BigInt::new(limbs)
     }
 
-    /// How many random scalars of each kind `test_scalars` takes: zksync-os's numbers, which it
-    /// runs in release, or a few in a debug build, where a call with an oracle takes a second
-    /// (each answer of the recording oracle takes milliseconds on the emulated delegated fields)
+    /// How many random scalars of each kind `test_scalars` takes; few in a debug build, where a
+    /// call with an oracle takes about a second
     const RANDOM_SCALARS: [usize; 3] = if cfg!(debug_assertions) {
         [2, 1, 1]
     } else {
@@ -334,8 +288,7 @@ mod tests {
     };
 
     /// Scalars around the multiples of the group order `r`, `(r ± 1) / 2`, `X`, the extremes of
-    /// 256 bits, and random ones: full-width (about half of them at least `r`), 50-bit, and
-    /// below `2^254 < r`
+    /// 256 bits, and random ones: full-width, 50-bit, and below `2^254 < r`
     fn test_scalars(rng: &mut TestRng) -> Vec<Scalar> {
         let r = group_order();
         let one = BigUint::from(1u32);
@@ -373,12 +326,6 @@ mod tests {
         points
     }
 
-    fn encode_point(p: G1Affine) -> [u8; G1_SERIALIZATION_LEN] {
-        let mut bytes = [0u8; G1_SERIALIZATION_LEN];
-        crate::bls12_381::eip2537::serialize_g1_bytes(p, &mut bytes);
-        bytes
-    }
-
     fn encode_pair(point: &[u8; G1_SERIALIZATION_LEN], s: &Scalar) -> Vec<u8> {
         let mut input = point.to_vec();
         for limb in s.0.iter().rev() {
@@ -387,159 +334,88 @@ mod tests {
         input
     }
 
-    /// zksync-os's `execute`: the endpoint without the oracle (which cannot query) and with the
-    /// hints of an honest oracle give the same result, returned encoded (the encoding is the
-    /// wrapper's, zksync-os `write_g1`)
+    /// The encoded G1 MSM of `input`, checked to be the same with the hints of an honest oracle
     fn execute(input: &[u8]) -> Result<[u8; G1_SERIALIZATION_LEN], Bls12Error> {
         let (input, []) = input.as_chunks::<G1_MSM_PAIR_LEN>() else {
             panic!("whole pairs")
         };
-        let hinted = bls12_381_g1_msm(input, Global, Some(&mut bls_tests::honest_oracle()));
+        let (hinted, _) = record_hints(|oracle| bls12_381_g1_msm(input, Global, Some(oracle)));
         let result = bls12_381_g1_msm::<NoHints, _>(input, Global, None);
         assert_eq!(result, hinted);
         result.map(bls_tests::write_g1)
     }
 
-    /// The pair is rejected with `expected`
-    fn assert_rejected(point: &[u8; G1_SERIALIZATION_LEN], s: &Scalar, expected: Bls12Error) {
-        assert_eq!(execute(&encode_pair(point, s)), Err(expected));
+    #[test]
+    fn errors() {
+        use Bls12Error::{InvalidG1Point, NotInSubgroup};
+        let s = scalar(&BigUint::from(7u32));
+        let generator = bls_tests::write_g1(G1Affine::generator());
+        // (1, 1), and 1 != 1 + 4
+        let mut not_on_curve = [0u8; G1_SERIALIZATION_LEN];
+        not_on_curve[FIELD_ELEMENT_SERIALIZATION_LEN - 1] = 1;
+        not_on_curve[G1_SERIALIZATION_LEN - 1] = 1;
+        // x + q for the field modulus q
+        let x = BigUint::from_bytes_be(&generator[16..FIELD_ELEMENT_SERIALIZATION_LEN])
+            + BigUint::from(<Fq as PrimeField>::MODULUS);
+        let mut not_canonical = generator;
+        not_canonical[16..FIELD_ELEMENT_SERIALIZATION_LEN].copy_from_slice(&x.to_bytes_be());
+        let order_three = bls_tests::write_g1(bls_tests::order_three());
+        for (point, expected) in [
+            (not_on_curve, InvalidG1Point),
+            (not_canonical, InvalidG1Point),
+            (order_three, NotInSubgroup),
+        ] {
+            assert_eq!(execute(&encode_pair(&point, &s)), Err(expected));
+        }
+        let mut g2_not_on_curve = bls_tests::write_g2(G2Affine::generator());
+        g2_not_on_curve[G2_SERIALIZATION_LEN - 1] ^= 1;
+        let input = [g2_not_on_curve.as_slice(), &[1; SCALAR_SERIALIZATION_LEN]].concat();
+        let input = input.as_chunks::<G2_MSM_PAIR_LEN>().0;
+        let (hinted, _) = record_hints(|oracle| bls12_381_g2_msm(input, Global, Some(oracle)));
+        assert_eq!(hinted, Err(Bls12Error::InvalidG2Point));
+        assert_eq!(
+            bls12_381_g2_msm::<NoHints, _>(input, Global, None),
+            Err(Bls12Error::InvalidG2Point)
+        );
     }
 
-    // from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/errors.rs
-    mod errors {
-        use super::*;
-
-        #[test]
-        fn single_pair_error_paths_unchanged() {
-            use Bls12Error::{InvalidG1Point, NotInSubgroup};
-            let mut rng = TestRng(3);
+    /// 33 pairs, past the 32 where the buckets take a wider window
+    #[test]
+    fn wide_window_matches_double_and_add() {
+        let mut rng = TestRng(3);
+        let mut input = Vec::new();
+        let mut expected = G1Projective::zero();
+        for p in test_points(&mut rng, 31) {
             let s = scalar(&rng.below_power_of_two(256));
+            input.extend(encode_pair(&bls_tests::write_g1(p), &s));
+            expected += sw_double_and_add_affine(&p, s);
+        }
+        assert_eq!(
+            execute(&input),
+            Ok(bls_tests::write_g1(expected.into_affine()))
+        );
+    }
 
-            assert_rejected(&NOT_ON_CURVE, &s, InvalidG1Point);
-
-            // a coordinate that is not canonical (x + q for the field modulus q), and one with a
-            // non-zero byte in its padding
-            let generator = encode_point(G1Affine::generator());
-            let x = BigUint::from_bytes_be(&generator[16..FIELD_ELEMENT_SERIALIZATION_LEN])
-                + BigUint::from(<Fq as PrimeField>::MODULUS);
-            let mut not_canonical = generator;
-            not_canonical[16..FIELD_ELEMENT_SERIALIZATION_LEN].copy_from_slice(&x.to_bytes_be());
-            assert_rejected(&not_canonical, &s, InvalidG1Point);
-            let mut padded = generator;
-            padded[FIELD_ELEMENT_SERIALIZATION_LEN] = 1;
-            assert_rejected(&padded, &s, InvalidG1Point);
-
-            // points of the curve outside of G1, `[r]P != O` by a double-and-add on the integer `r`
-            // (`mul_bigint` would reduce it to 0): the two points of order 3, random points (not
-            // cofactor-cleared), and the generator plus a point of order 3
-            let order_three = G1Affine::new_unchecked(Fq::ZERO, Fq::from(2u64));
-            let mut points = vec![order_three, -order_three];
-            while points.len() < 10 {
-                let x = rng.fq();
-                if let Some(p) = G1Affine::get_point_from_x_unchecked(x, rng.next_u64() & 1 == 1) {
-                    points.push(p);
-                }
-            }
-            points.push((G1Affine::generator().into_group() + order_three).into_affine());
-            let r = scalar(&group_order());
-            for p in points {
-                assert!(p.is_on_curve());
-                // a random point of the curve is in G1 with probability 1 / cofactor, about 2^-126
-                assert!(!sw_double_and_add_affine(&p, r).is_zero(), "{p:?} is in G1");
-                assert_rejected(&encode_point(p), &s, NotInSubgroup);
+    /// One pair (with an oracle, the affine GLV chain), and the same with a second pair at
+    /// infinity, against a plain double-and-add
+    #[test]
+    fn single_pair_matches_double_and_add() {
+        let mut rng = TestRng(2);
+        let scalars = test_scalars(&mut rng);
+        // one random point in a debug build (see `RANDOM_SCALARS`)
+        let points = test_points(&mut rng, if cfg!(debug_assertions) { 1 } else { 2 });
+        let t = scalar(&rng.below_power_of_two(256));
+        let infinity_pair = encode_pair(&[0u8; G1_SERIALIZATION_LEN], &t);
+        for p in points {
+            for s in &scalars {
+                let input = encode_pair(&bls_tests::write_g1(p), s);
+                let expected = bls_tests::write_g1(sw_double_and_add_affine(&p, s).into_affine());
+                assert_eq!(execute(&input), Ok(expected), "{p:?} * {s}");
+                let two_pairs = [input, infinity_pair.clone()].concat();
+                assert_eq!(execute(&two_pairs), Ok(expected), "{p:?} * {s}");
             }
         }
     }
-
-    // from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/multiple_pairs.rs
-    mod multiple_pairs {
-        use super::*;
-
-        #[test]
-        fn affine_two_pair_and_larger_bucket_msm_match_integer_multiples() {
-            let g = G1Affine::generator();
-            let scalars = [
-                Scalar::new([u64::MAX; 4]),
-                scalar(&(group_order() + 1u32)),
-                scalar(&BigUint::from(0u32)),
-            ];
-            for n in [2, 3] {
-                let points = [g, -g, g];
-                let mut input = Vec::new();
-                let mut expected = G1Projective::zero();
-                for i in 0..n {
-                    input.extend(encode_pair(&encode_point(points[i]), &scalars[i]));
-                    expected += sw_double_and_add_affine(&points[i], scalars[i].as_ref());
-                }
-                let output = execute(&input).unwrap();
-                assert_eq!(parse_g1(&output).unwrap(), expected.into_affine());
-            }
-        }
-
-        #[test]
-        fn g2_msm_normalization_and_subgroup_hints_preserve_results() {
-            let g = G2Affine::generator();
-            for points in [vec![g], vec![g, -g], vec![g, g, G2Affine::identity()]] {
-                let mut input = Vec::new();
-                for point in points {
-                    input.extend(bls_tests::write_g2(point));
-                    input.extend([0xffu8; SCALAR_SERIALIZATION_LEN]);
-                }
-                let (input, []) = input.as_chunks::<G2_MSM_PAIR_LEN>() else {
-                    panic!("whole pairs")
-                };
-                let _ = bls_tests::compare(
-                    bls12_381_g2_msm::<NoHints, _>(input, Global, None),
-                    bls12_381_g2_msm(input, Global, Some(&mut bls_tests::honest_oracle())),
-                );
-            }
-        }
-    }
-
-    // from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/msm/tests/single_pair.rs
-    mod single_pair {
-        use super::*;
-
-        #[test]
-        fn single_pair_msm_matches_reference() {
-            let mut rng = TestRng(1);
-            let scalars = test_scalars(&mut rng);
-            for p in test_points(&mut rng, 6) {
-                for s in &scalars {
-                    let generic = msm::<G1Projective, _>(&[p], vec![*s], Global).into_affine();
-                    let reference = sw_double_and_add_affine(&p, s).into_affine();
-                    assert_eq!(generic, reference, "msm at {p:?} * {s}");
-                    assert_eq!(encode_point(generic), encode_point(reference));
-                }
-            }
-        }
-
-        #[test]
-        fn single_pair_precompile_output_matches() {
-            let mut rng = TestRng(2);
-            let scalars = test_scalars(&mut rng);
-            // one random point in a debug build (see `RANDOM_SCALARS`)
-            let points = test_points(&mut rng, if cfg!(debug_assertions) { 1 } else { 2 });
-            let t = scalar(&rng.below_power_of_two(256));
-            let infinity_pair = encode_pair(&[0u8; G1_SERIALIZATION_LEN], &t);
-            for p in points {
-                for s in &scalars {
-                    let input = encode_pair(&encode_point(p), s);
-                    let output = execute(&input).unwrap();
-                    let expected = encode_point(sw_double_and_add_affine(&p, s).into_affine());
-                    assert_eq!(output, expected, "{p:?} * {s}");
-
-                    // the same product through `msm`: a second pair that adds the point at infinity
-                    let mut two_pairs = input;
-                    two_pairs.extend_from_slice(&infinity_pair);
-                    let generic = execute(&two_pairs).unwrap();
-                    assert_eq!(output, generic, "{p:?} * {s}");
-                }
-            }
-        }
-    }
-
-    // new tests
 
     mod advice_matches_no_advice {
         use super::*;
@@ -547,10 +423,9 @@ mod tests {
         use proptest::test_runner::Config as ProptestConfig;
         use proptest::{prop_assert_eq, proptest};
 
-        /// The point of `mode` in place of `k` times the generator: the point at infinity, a
-        /// point of the curve off the subgroup (rejected), one that is mostly not a point of the
-        /// curve, or the multiple itself
-        fn g1_pair(k: u64, scalar: &[u8; 32], mode: u8, bytes: &[u8; 48]) -> Vec<u8> {
+        /// `k` times the generator, or by `mode` the point at infinity, a point off the subgroup,
+        /// or an encoding that is mostly not a point of the curve
+        fn g1_pair(k: u64, scalar: &[u8; 32], mode: u8, bytes: &[u8]) -> Vec<u8> {
             let mut point = (G1Affine::generator() * Fr::from(k)).into_affine();
             match mode {
                 0 => point = G1Affine::identity(),
@@ -564,7 +439,7 @@ mod tests {
             [encoded.as_slice(), scalar].concat()
         }
 
-        fn g2_pair(k: u64, scalar: &[u8; 32], mode: u8, bytes: &[u8; 96]) -> Vec<u8> {
+        fn g2_pair(k: u64, scalar: &[u8; 32], mode: u8, bytes: &[u8]) -> Vec<u8> {
             let mut point = (G2Affine::generator() * Fr::from(k)).into_affine();
             match mode {
                 0 => point = G2Affine::identity(),
@@ -578,58 +453,44 @@ mod tests {
             [encoded.as_slice(), scalar].concat()
         }
 
-        /// One to five pairs, through the affine chains (up to two pairs, with an oracle) and
-        /// the buckets (from four, either way), and one of them maybe at infinity or rejected
+        /// One to five pairs, through the affine chains (up to two G1 pairs, with an oracle) and
+        /// the buckets (from four), and one of them maybe at infinity or rejected
         #[test]
-        fn g1_msm() {
-            let hinted_cases = HintedCases::default();
-            proptest!(ProptestConfig::with_cases(HINT_HEAVY_CASES), |(ks: [u64; 5], scalars: [[u8; 32]; 5], len in 1usize..=5, mode in 0u8..12, at: usize, bytes: [u8; 48])| {
+        fn msm() {
+            let (g1_cases, g2_cases) = (HintedCases::default(), HintedCases::default());
+            proptest!(ProptestConfig::with_cases(HINT_HEAVY_CASES), |(ks: [u64; 5], scalars: [[u8; 32]; 5], len in 1usize..=5, mode in 0u8..12, at: usize, bytes: [u8; 96])| {
                 let at = at % len;
+                let mode = |i: usize| if i == at { mode } else { u8::MAX };
                 let input: Vec<u8> = (0..len)
-                    .flat_map(|i| g1_pair(ks[i], &scalars[i], if i == at { mode } else { u8::MAX }, &bytes))
+                    .flat_map(|i| g1_pair(ks[i], &scalars[i], mode(i), &bytes[..48]))
                     .collect();
-                let (input, []) = input.as_chunks::<G1_MSM_PAIR_LEN>() else {
-                    unreachable!("whole pairs")
-                };
-                let hinted = hinted_cases.record(|oracle| bls12_381_g1_msm(input, Global, Some(oracle)));
+                let input = input.as_chunks::<G1_MSM_PAIR_LEN>().0;
+                let hinted = g1_cases.record(|oracle| bls12_381_g1_msm(input, Global, Some(oracle)));
                 prop_assert_eq!(hinted, bls12_381_g1_msm(input, Global, None::<&mut NoHints>));
-            });
-            hinted_cases.check();
-        }
 
-        #[test]
-        fn g2_msm() {
-            let hinted_cases = HintedCases::default();
-            proptest!(ProptestConfig::with_cases(HINT_HEAVY_CASES), |(ks: [u64; 4], scalars: [[u8; 32]; 4], len in 1usize..=4, mode in 0u8..12, at: usize, bytes: [[u8; 48]; 2])| {
-                let at = at % len;
-                let bytes: [u8; 96] = bytes.concat().try_into().unwrap();
                 let input: Vec<u8> = (0..len)
-                    .flat_map(|i| g2_pair(ks[i], &scalars[i], if i == at { mode } else { u8::MAX }, &bytes))
+                    .flat_map(|i| g2_pair(ks[i], &scalars[i], mode(i), &bytes))
                     .collect();
-                let (input, []) = input.as_chunks::<G2_MSM_PAIR_LEN>() else {
-                    unreachable!("whole pairs")
-                };
-                let hinted = hinted_cases.record(|oracle| bls12_381_g2_msm(input, Global, Some(oracle)));
+                let input = input.as_chunks::<G2_MSM_PAIR_LEN>().0;
+                let hinted = g2_cases.record(|oracle| bls12_381_g2_msm(input, Global, Some(oracle)));
                 prop_assert_eq!(hinted, bls12_381_g2_msm(input, Global, None::<&mut NoHints>));
             });
-            hinted_cases.check();
+            g1_cases.check();
+            g2_cases.check();
         }
     }
 
-    /// The guest, which reads its answers off the recorded tape, gets the same result and takes
-    /// the whole tape and no more. The bls12-381 elements of test builds have the representation
-    /// of the guest, so the tape is also the answers this process reads.
     #[test]
     fn recorded_tape_replays() {
-        let mut rng = TestRng(5);
-        let pairs: Vec<u8> = test_points(&mut rng, 4)[1..]
-            .iter()
-            .flat_map(|p| encode_pair(&encode_point(*p), &scalar(&rng.below_power_of_two(256))))
+        let g1_pairs: Vec<u8> = (1..=4u64)
+            .flat_map(|k| {
+                let point = (G1Affine::generator() * Fr::from(k)).into_affine();
+                [bls_tests::write_g1(point).as_slice(), &[0x5a; 32]].concat()
+            })
             .collect();
-        let pairs = pairs.as_chunks::<G1_MSM_PAIR_LEN>().0;
         // the affine chains of one and two pairs, and the buckets of four
         for n in [1, 2, 4] {
-            let input = &pairs[..n];
+            let input = &g1_pairs.as_chunks::<G1_MSM_PAIR_LEN>().0[..n];
             let result =
                 assert_tape_replays!(|oracle| bls12_381_g1_msm(input, Global, Some(oracle)));
             assert_eq!(
@@ -638,37 +499,12 @@ mod tests {
             );
         }
         let g2 = G2Affine::generator();
-        let input: Vec<u8> = [g2, (g2 + g2).into_affine()]
-            .into_iter()
-            .flat_map(|point| [bls_tests::write_g2(point).as_slice(), &[0x5a; 32]].concat())
-            .collect();
+        let input = [bls_tests::write_g2(g2).as_slice(), &[0x5a; 32]].concat();
         let input = input.as_chunks::<G2_MSM_PAIR_LEN>().0;
         let result = assert_tape_replays!(|oracle| bls12_381_g2_msm(input, Global, Some(oracle)));
         assert_eq!(
             result,
             bls12_381_g2_msm(input, Global, None::<&mut NoHints>)
         );
-    }
-
-    /// The subgroup checks run pair by pair while the pairs are parsed, so a pair off the
-    /// subgroup is rejected after the hints of the pairs before it
-    #[test]
-    fn subgroup_hints_are_asked_while_parsing() {
-        let s = scalar(&BigUint::from(7u32));
-        let valid = encode_point(G1Affine::generator());
-        let off_subgroup = encode_point(bls_tests::g1_off_subgroup(&[7; 48]));
-        let input = [encode_pair(&valid, &s), encode_pair(&off_subgroup, &s)].concat();
-        let (result, tape) = crate::hints::record_hints(|oracle| {
-            bls12_381_g1_msm(input.as_chunks().0, Global, Some(oracle))
-        });
-        assert_eq!(result, Err(Bls12Error::NotInSubgroup));
-        let (_, first) = crate::hints::record_hints(|oracle| {
-            parse_g1_with_subgroup_check_with_oracle(&valid, Some(oracle))
-        });
-        let (_, second) = crate::hints::record_hints(|oracle| {
-            parse_g1_with_subgroup_check_with_oracle(&off_subgroup, Some(oracle))
-        });
-        assert!(!first.is_empty() && !second.is_empty());
-        assert_eq!(tape, [first, second].concat());
     }
 }

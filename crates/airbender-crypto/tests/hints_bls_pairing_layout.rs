@@ -1,7 +1,6 @@
-// Ported from zksync-os e855bca2:callable_oracles/tests/bls_pairing_layout.rs
-// The oracle side (`hints::answer_query`) is there with `alloc`, on 64-bit hosts. Without
-// `cfg(test)` (and without `proving`), the native bls12-381 points are the arkworks ones, whose
-// layout is not the guest's.
+//! The guest layout of a bls12-381 pairing request: the guest's answer from its memory matches the
+//! one a native recording gives. Outside `cfg(test)` the native points are the arkworks ones,
+//! whose layout is not the guest's.
 #![cfg(all(feature = "alloc", target_pointer_width = "64"))]
 
 use airbender_crypto::{
@@ -13,7 +12,10 @@ use airbender_crypto::{
         NativeQuerierMemory, QuerierMemory, FIELD_OPS_ADVISE_QUERY_ID,
     },
 };
+
+/// Guest memory: words from address 0
 struct Guest(Vec<u32>);
+
 impl QuerierMemory for Guest {
     fn word_size(&self) -> usize {
         4
@@ -22,6 +24,8 @@ impl QuerierMemory for Guest {
         Ok(self.0[address / 4])
     }
 }
+
+/// The guest's Montgomery limbs of `value` (`R = 2^512`)
 fn limbs(value: Fq) -> Vec<u32> {
     let value = (value * Fq::from(2u64).pow([512])).into_bigint();
     let mut words: Vec<_> = value
@@ -32,6 +36,7 @@ fn limbs(value: Fq) -> Vec<u32> {
     words.resize(16, 0);
     words
 }
+
 fn guest_pair(pair: &Bls12381Pair) -> Vec<u32> {
     let mut words = vec![0; BLS12_381_PAIR_SIZE / 4];
     words[BLS12_381_G1_AFFINE.infinity / 4] = pair.g1.infinity as u32;
@@ -48,10 +53,12 @@ fn guest_pair(pair: &Bls12381Pair) -> Vec<u32> {
     }
     words
 }
+
 #[test]
 fn arbitrary_pairing_guest_layout_matches_native_recording() {
     let p = G1Affine::generator();
     let q: G2Affine = (G2Affine::generator() * Fr::from(5u64)).into();
+    // a non-identity product, an identity product of two pairs, and a point at infinity
     for pairs in [
         vec![Bls12381Pair { g1: p, g2: q }],
         vec![
@@ -70,9 +77,9 @@ fn arbitrary_pairing_guest_layout_matches_native_recording() {
         };
         let mut native = Vec::new();
         let mut recorded = Vec::new();
-        // SAFETY: hint and its operand remain alive during this synchronous query.
+        // SAFETY: the request and its operand are alive during the query
         let memory = unsafe { NativeQuerierMemory::new() };
-        // SAFETY: as above, and the operand is `Bls12381Pair`s, the operand type of the op
+        // SAFETY: as above, and `Bls12381Pair`s are the operand type of the op
         let answered = unsafe {
             answer_query(
                 FIELD_OPS_ADVISE_QUERY_ID,
@@ -85,6 +92,7 @@ fn arbitrary_pairing_guest_layout_matches_native_recording() {
         .expect("must answer the field hint query");
         assert!(answered);
         let operand: Vec<_> = pairs.iter().flat_map(guest_pair).collect();
+        // the request (a `FieldOpsHint`) at 4, the operand at 64
         let mut memory = Guest(vec![0; 16 + operand.len()]);
         memory.0[1] = hint.op;
         memory.0[2] = 64;

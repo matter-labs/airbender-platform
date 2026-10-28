@@ -1,12 +1,7 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/curve_hints.rs
-//! Where the oracle finds the parts of an operand in the memory of the RISC-V guest (a querier in
-//! this process sends its values, which the oracle reads as such). A base field element is its
-//! `HintEncoding::LIMBS` Montgomery limbs (`R = 2^(64 LIMBS)`), any representative (the
-//! representation is redundant); an extension field element its base field components, back to
-//! back in the `HintEncoding` order; an affine point its coordinates and the flag of the point at
-//! infinity at the offsets below; a pair of the bn254 pairing input its two points. `airbender-crypto`
-//! asserts the order of the components and of the coordinates at compile time, and the numbers
-//! below are asserted on the guest.
+//! Where the oracle finds an operand's parts in guest memory. A base field element is its
+//! `HintEncoding::LIMBS` Montgomery limbs (`R = 2^(64 LIMBS)`, any representative); an extension
+//! element its components in `HintEncoding` order; an affine point its coordinates and infinity
+//! flag at the offsets below. The offsets are asserted at compile time on the guest.
 
 /// Byte offsets of the coordinates and of the flag of the point at infinity of an affine
 /// point, and its size in bytes (with padding)
@@ -59,8 +54,7 @@ const _: () = {
     use crate::{bls12_381, bn254};
     use core::mem::{offset_of, size_of};
 
-    // base field elements: their Montgomery limbs (the rest of the towers is asserted in
-    // `airbender-crypto`)
+    // base field elements are their Montgomery limbs
     assert!(offset_of!(bn254::Fq, 0) == 0);
     assert!(size_of::<bn254::Fq>() == 8 * <bn254::Fq as HintEncoding>::LIMBS);
     assert!(offset_of!(bls12_381::Fq, 0) == 0);

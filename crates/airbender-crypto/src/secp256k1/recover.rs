@@ -577,9 +577,8 @@ fn table_verify(n: i32, w: usize) -> bool {
     (2..=31).contains(&w) && ((n & 1) == 1) && (n >= -((1 << (w - 1)) - 1)) && (n < (1 << (w - 1)))
 }
 
-/// Verify prehashed ECDSA using the same delegated arithmetic and `hooks` as recovery
-/// (`Secp256k1HooksWithOracle` takes the field operations from hints and checks them,
-/// `DefaultSecp256k1Hooks` computes them). Public keys are canonical uncompressed x || y bytes.
+/// Verify prehashed ECDSA with the arithmetic and `hooks` of recovery (hinted and checked with
+/// `Secp256k1HooksWithOracle`). The public key is canonical uncompressed `x || y`.
 #[cfg(feature = "secp256k1-static-context")]
 pub fn verify_prehash_with_hooks<H: super::hooks::Secp256k1Hooks>(
     digest: &[u8; 32],

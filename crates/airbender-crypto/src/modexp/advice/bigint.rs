@@ -1,5 +1,5 @@
-// Ported from zksync-os 185a0568:basic_system/src/system_functions/modexp/advice/bigint.rs
-// Representation of big integers using primitives that are friendly for our delegations
+//! The multi-digit path: big integers of delegation-friendly 256-bit digits, and the advisors.
+
 extern crate alloc;
 
 #[cfg(all(
@@ -21,12 +21,7 @@ use core::fmt::Debug;
 use core::mem::MaybeUninit;
 use ruint::aliases::U256;
 
-// There is a small choice to make - either we do exponentiation walking as via LE or BE exponent.
-// If we do LE, then we square the base, and multiply accumulator by it
-// If we do BE, then we square the accumulator, and then multiply it by base
-
-// We have backing capacity (that we do not want to shrink),
-// and actual counter in how many words we want to use
+/// A little-endian big integer: the first `digits` digits of `backing`, whose capacity is kept
 pub(crate) struct BigintRepr<A: Allocator + Clone> {
     pub(crate) backing: Vec<DelegatedU256, A>,
     pub(crate) digits: usize,
@@ -43,7 +38,6 @@ impl<A: Allocator + Clone> Debug for BigintRepr<A> {
     }
 }
 
-// as in zksync-os
 #[allow(clippy::bool_comparison)]
 impl<A: Allocator + Clone> BigintRepr<A> {
     pub(crate) fn with_capacity_in(capacity: usize, allocator: A) -> Self {
@@ -192,8 +186,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         let n = modulus.digits;
         let mut current = self;
 
-        // The buffers of a multiplication step, sized for the exponent loop (products of two
-        // reduced values) and for the initial reduction of an oversized base.
+        // sized for products of two reduced values and for the initial reduction of a long base
         let mut arithmetic = BigintModMul {
             modulus: &modulus,
             product: Self::with_capacity_in(2 * n, allocator.clone()),
@@ -208,23 +201,22 @@ impl<A: Allocator + Clone> BigintRepr<A> {
             allocator: allocator.clone(),
         };
 
-        // Initial reduction, whenever the base is not shorter than the modulus (the cost model
-        // mirrors this gate on digit counts): afterwards the value has at most `n` digits, and
-        // every later remainder too. Strict reduction of the intermediate values is not
-        // needed: an unreduced remainder is congruent and the final result is checked.
+        // Reduce a base of `n` or more digits (the cost model assumes this gate). Afterwards every
+        // value has at most `n` digits. A remainder need not be below `m`: it is still
+        // congruent, and the result is checked to be fully reduced at the end.
         if current.digits >= n {
             arithmetic.reduce_initially(&mut current);
         }
         assert!(current.digits <= n);
 
-        // 1^exp mod m = 1 for any exp (m > 1 guaranteed by caller)
+        // 1^exp mod m = 1, as m > 1
         if current.digits == 1 && current.backing[0].is_one() {
             return current;
         }
 
         let exp = strip_leading_zeroes(exp);
         if exp.is_empty() {
-            // anything in 0s power is 1
+            // x^0 = 1
             let mut result = Vec::with_capacity_in(1, allocator);
             result.push(DelegatedU256::ONE);
             return Self {
@@ -241,7 +233,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         let result = exponentiate(&mut arithmetic, &current, exp);
         drop(arithmetic);
 
-        // at the very end we assert full reduction
+        // the result must be below m
         result.assert_fully_reduced(modulus);
         result
     }
@@ -417,8 +409,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
             return;
         }
 
-        // we need to perform long subtraction self - modulus always produces borrow,
-        // but we do not want to kill self, so we will do inverse
+        // self - modulus must borrow; SubAndNegate writes it into `modulus`, keeping `self`
         let mut borrow = 0;
         for (modulus_digit, self_digit) in modulus
             .digits_mut()
@@ -446,7 +437,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
                 found_non_zero = true;
             }
 
-            // Skip zeroed suffix if any
+            // skip the zero top digits
             if found_non_zero {
                 let be_bytes = digit.to_be_bytes();
                 result.extend(be_bytes);
@@ -581,6 +572,7 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> ModMul for BigintModMul<'_, A, Ad
     }
 }
 
+/// The source of the hints of the advice path
 pub(crate) trait ModexpAdvisor {
     /// The quotient and remainder of `a / m`
     fn get_reduction_op_advice<A: Allocator + Clone>(
@@ -741,9 +733,8 @@ impl<'a, O: HintOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
             modulus_len: m.digits,
         };
         let oracle = &mut *self.inner;
-        // SAFETY: the input word is the address of `arg`, a live `ModExpAdviceParamsGeneric<usize>` (the
-        // request of the modexp advice query), whose pointers are to the live digits of `a` and `m`
-        // during the call
+        // SAFETY: the input word is the address of `arg`, a live request whose pointers are to the
+        // live digits of `a` and `m`
         unsafe {
             oracle.send_query(
                 MODEXP_ADVICE_QUERY_ID,
@@ -751,7 +742,7 @@ impl<'a, O: HintOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
             )
         }
         .expect("must send the modexp advice query");
-        // We assume that oracle's response is well-formed lengths-wise, and we will check value-wise separately
+        // the lengths are bounded here; the values are checked by `reduce_product_into`
         let q_len = oracle.read_word().expect("quotient length") as usize;
         let r_len = oracle.read_word().expect("remainder length") as usize;
 
@@ -764,8 +755,6 @@ impl<'a, O: HintOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
         };
 
         let max_remainder_digits = m.digits;
-
-        // check that hint is "sane" in upper bound
 
         assert!(q_len.div_ceil(BIGINT_DIGIT_WORDS) <= max_quotient_digits);
         assert!(r_len.div_ceil(BIGINT_DIGIT_WORDS) <= max_remainder_digits);
@@ -796,8 +785,7 @@ mod tests {
     use crate::hints::test_support::InProcessMemoryOracle;
     use crate::hints::QuerierMemory;
 
-    /// The quotient and the remainder an advisor receives from an oracle that answers the modexp
-    /// advice query with `response`
+    /// The quotient and remainder read from an oracle that answers with `response`
     fn advice(response: Vec<u32>) -> (BigintRepr<Global>, BigintRepr<Global>) {
         let dividend = BigintRepr::from_big_endian_with_double_capacity(&[0xA5; 96], Global);
         let modulus = BigintRepr::from_big_endian_with_double_capacity(&[0x5A; 64], Global);
@@ -815,8 +803,7 @@ mod tests {
 
     #[test]
     fn oracle_advisor_receives_partial_digits() {
-        // a quotient of 3 words and a remainder of 9 words (a digit and a word): the digits are
-        // zero-padded
+        // a 3-word quotient and a 9-word remainder: partial digits are zero-padded
         let mut response = vec![3, 9];
         response.extend(1..=3);
         response.extend(11..=19);

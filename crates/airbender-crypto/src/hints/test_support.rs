@@ -1,17 +1,11 @@
-// Ported from zksync-os e855bca2:zk_ee/src/oracle/memory_io/host.rs
-// Ported from zksync-os e855bca2:callable_oracles/src/lib.rs
-// Ported from zksync-os e855bca2:oracle_provider/src/lib.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/curve_hints.rs
-//! Test doubles of the oracle, and of the memory of the querier. `TapeOracle` is new; the others
-//! are ported from zksync-os.
+//! Test doubles of the oracle and of the querier's memory.
 
 use super::oracle::{HintError, HintOracle};
 use std::collections::VecDeque;
 use std::vec::Vec;
 
-/// An oracle that answers from a fixed tape of words: it records the queries without reading
-/// their inputs, and every response word, read with `read_word` or `write_words`, is the next word
-/// of the tape. Running out of tape is an error.
+/// An oracle that answers from a fixed tape of words, as the guest's oracle does: it records the
+/// queries without reading their inputs, and running out of tape is an error.
 #[derive(Debug, Default)]
 pub(crate) struct TapeOracle {
     pub(crate) words: VecDeque<u32>,
@@ -55,7 +49,7 @@ pub(crate) use self::in_process::{
     InProcessMemoryOracle, TestMemorySource,
 };
 
-/// The doubles that answer in process, with the host side (`hints::host`, 64-bit hosts only)
+/// The doubles that answer in process, with the host side (64-bit hosts only)
 #[cfg(target_pointer_width = "64")]
 mod in_process {
     use crate::hints::host::{answer_query, not_identity_claim, NativeQuerierMemory};
@@ -65,108 +59,67 @@ mod in_process {
     use std::collections::{BTreeMap, VecDeque};
     use std::vec::Vec;
 
-    /// The response to the current memory-based query, for oracles that serve the protocol in process.
-    #[derive(Debug, Default)]
-    pub(crate) struct ResponseBuffer {
-        words: VecDeque<u32>,
-    }
-
-    impl ResponseBuffer {
-        /// Starts serving the response to a new query.
-        pub(crate) fn set(&mut self, words: Vec<u32>) -> Result<(), HintError> {
-            if !self.words.is_empty() {
-                self.words.clear();
-                return Err(HintError(
-                    "previous oracle response was not consumed in full",
-                ));
-            }
-            self.words = words.into();
-            Ok(())
-        }
-
-        /// [`HintOracle::read_word`]
-        pub(crate) fn read_word(&mut self) -> Result<u32, HintError> {
-            self.words
-                .pop_front()
-                .ok_or(HintError("oracle response is shorter than expected"))
-        }
-
-        /// [`HintOracle::write_words`]
-        ///
-        /// # Safety
-        ///
-        /// `dst` must be aligned for `u32` and valid for writes of `num_words` `u32`s.
-        pub(crate) unsafe fn write_words(
-            &mut self,
-            dst: *mut u32,
-            num_words: usize,
-        ) -> Result<(), HintError> {
-            if self.words.len() < num_words {
-                return Err(HintError("oracle response is shorter than expected"));
-            }
-            for (i, word) in self.words.drain(..num_words).enumerate() {
-                // SAFETY: `i < num_words`, and the caller guarantees `dst` is valid for `num_words` words
-                unsafe { dst.add(i).write(word) };
-            }
-            Ok(())
-        }
-
-        /// [`HintOracle::finish_query`]
-        pub(crate) fn finish(&mut self) -> Result<(), HintError> {
-            if self.words.is_empty() {
-                Ok(())
-            } else {
-                self.words.clear();
-                Err(HintError("oracle response contains excess data"))
-            }
-        }
-    }
-
-    /// An oracle that answers memory-based queries in process, with a handler that gets the query ID, the
-    /// input word and the memory of the querier, and returns the response words. For test doubles and simple
-    /// oracles of this process.
+    /// An oracle that answers queries in process: `handler` gets the query ID, the input word and
+    /// the querier's memory, and returns the response words. Unread or missing words are errors.
     pub(crate) struct InProcessMemoryOracle<H> {
         handler: H,
-        response: ResponseBuffer,
+        response: VecDeque<u32>,
     }
 
     impl<H> InProcessMemoryOracle<H> {
         pub(crate) fn new(handler: H) -> Self {
             Self {
                 handler,
-                response: ResponseBuffer::default(),
+                response: VecDeque::new(),
             }
         }
     }
 
     impl<H: FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> HintOracle for InProcessMemoryOracle<H> {
-        /// The handler runs during the query, with the memory of this process, where the input word
-        /// is the address of a live request of the querier whose operands are live values of the
-        /// types of its op (the contract of `send_query`): a handler may answer it with
-        /// `answer_query` and the native responses.
+        /// The handler runs during the query, with the memory of this process, which holds a live
+        /// request (the contract of `send_query`): it may answer with `answer_query`.
         unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
-            // SAFETY: the querier is code of this process, which exposes the memory the input word refers
-            // to while it sends the query, i.e. during this call
+            // SAFETY: the querier, in this process, exposes the request during this call
             let memory = unsafe { NativeQuerierMemory::new() };
             let response = (self.handler)(query_id, input_word, &memory);
-            self.response.set(response)
+            if !self.response.is_empty() {
+                self.response.clear();
+                return Err(HintError(
+                    "previous oracle response was not consumed in full",
+                ));
+            }
+            self.response = response.into();
+            Ok(())
         }
 
         fn read_word(&mut self) -> Result<u32, HintError> {
-            self.response.read_word()
+            self.response
+                .pop_front()
+                .ok_or(HintError("oracle response is shorter than expected"))
         }
 
         unsafe fn write_words(&mut self, dst: *mut u32, num_words: usize) -> Result<(), HintError> {
-            // SAFETY: guaranteed by the caller
-            unsafe { self.response.write_words(dst, num_words) }
+            if self.response.len() < num_words {
+                return Err(HintError("oracle response is shorter than expected"));
+            }
+            for (i, word) in self.response.drain(..num_words).enumerate() {
+                // SAFETY: `i < num_words`, guaranteed by the caller
+                unsafe { dst.add(i).write(word) };
+            }
+            Ok(())
         }
 
         fn finish_query(&mut self) -> Result<(), HintError> {
-            self.response.finish()
+            if self.response.is_empty() {
+                Ok(())
+            } else {
+                self.response.clear();
+                Err(HintError("oracle response contains excess data"))
+            }
         }
     }
 
-    /// BTreeMap-backed memory source for testing oracle query processors.
+    /// Sparse guest memory: unwritten words are zero.
     #[derive(Default)]
     pub(crate) struct TestMemorySource {
         words: BTreeMap<u32, u32>,
@@ -177,13 +130,9 @@ mod in_process {
             assert!(address.is_multiple_of(4));
             self.words.insert(address, value);
         }
-
-        fn peek_word(&self, address: u32) -> u32 {
-            self.words.get(&address).copied().unwrap_or(0)
-        }
     }
 
-    /// The memory of the RISC-V guest, for the processors of memory-based queries.
+    /// The memory of the RISC-V guest, as the oracle reads it.
     pub(crate) struct GuestMemory<'a>(pub(crate) &'a TestMemorySource);
 
     impl QuerierMemory for GuestMemory<'_> {
@@ -197,7 +146,7 @@ mod in_process {
             if !address.is_multiple_of(4) {
                 return Err(HintError("unaligned guest address"));
             }
-            Ok(self.0.peek_word(address))
+            Ok(self.0.words.get(&address).copied().unwrap_or(0))
         }
     }
 
@@ -207,93 +156,48 @@ mod in_process {
         FieldHintOp::parse_u32(op).unwrap()
     }
 
-    /// A processor that answers the field hint queries of the given ops with a corrupted value
-    /// (the low bit of the first word flipped), and the others honestly
-    struct FlipLowBit {
-        ops: Vec<FieldHintOp>,
-        /// Corrupt the last word of the answer instead of the first payload word
+    /// The honest answer of a native run
+    ///
+    /// # Safety
+    ///
+    /// As for `answer_query` with a querier in this process.
+    unsafe fn native_answer(
+        query_id: u32,
+        input_word: usize,
+        memory: &dyn QuerierMemory,
+    ) -> Vec<u32> {
+        let mut words = Vec::new();
+        // SAFETY: guaranteed by the caller
+        let answered =
+            unsafe { answer_query(query_id, input_word, memory, Some(&mut words), None) };
+        assert_eq!(answered, Ok(true));
+        words
+    }
+
+    /// An oracle that answers the queries of `ops` with the low bit of one word flipped, and the
+    /// others honestly: the last word if `last_word`, otherwise the first element's low word (past
+    /// the claim flag of the pairing ops), which stays canonical so the value check is what fails
+    fn flipping_oracle(
+        ops: &[FieldHintOp],
         last_word: bool,
-    }
-
-    impl FlipLowBit {
-        fn process_memory_query(
-            &mut self,
-            query_id: u32,
-            input_word: usize,
-            memory: &dyn QuerierMemory,
-        ) -> Vec<u32> {
-            let op = read_op(memory, input_word);
-            // the response of the native run (the querier of the tests)
-            let mut words = Vec::new();
-            // SAFETY: the handler of an `InProcessMemoryOracle` runs during the query, with the
-            // memory of this process, where the request and its operand are live, of the types of
-            // the op
-            assert!(
-                unsafe { answer_query(query_id, input_word, memory, Some(&mut words), None) }
-                    .expect("must answer the field hint query")
-            );
-            if self.ops.contains(&op) {
-                // the low word of the first element (past the claim flag of the pairing
-                // ops): still a canonical element, so the value check is what fails
-                let index = match op {
-                    _ if self.last_word => words.len() - 1,
-                    FieldHintOp::Bn254PairingResidueWitness
-                    | FieldHintOp::Bls12381KzgResidueWitness
-                    | FieldHintOp::Bls12381PairingResidueWitness => 1,
-                    _ => 0,
-                };
-                words[index] ^= 1;
-            }
-            words
-        }
-    }
-
-    /// A processor that claims every pairing product not to be the identity, with the
-    /// (correct) inverse the slow path needs
-    struct ClaimNotIdentity;
-
-    impl ClaimNotIdentity {
-        fn process_memory_query(
-            &mut self,
-            query_id: u32,
-            input_word: usize,
-            memory: &dyn QuerierMemory,
-        ) -> Vec<u32> {
-            match read_op(memory, input_word) {
-                FieldHintOp::Bn254PairingResidueWitness
-                | FieldHintOp::Bls12381KzgResidueWitness
-                | FieldHintOp::Bls12381PairingResidueWitness => {
-                    // SAFETY: the handler of an `InProcessMemoryOracle` runs during the query,
-                    // with the memory of this process, where the request and its operand are
-                    // live, of the types of the op
-                    unsafe { not_identity_claim(memory, input_word) }
-                }
-                _ => {
-                    let mut native_run_responses = Vec::new();
-                    // SAFETY: as above
-                    assert!(unsafe {
-                        answer_query(
-                            query_id,
-                            input_word,
-                            memory,
-                            Some(&mut native_run_responses),
-                            None,
-                        )
-                    }
-                    .expect("must answer the field hint query"));
-                    native_run_responses
-                }
-            }
-        }
-    }
-
-    /// An oracle that claims every pairing product not to be the identity
-    pub(crate) fn non_identity_claiming_oracle(
     ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
-        let mut processor = ClaimNotIdentity;
+        let ops = ops.to_vec();
         InProcessMemoryOracle::new(
             move |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
-                processor.process_memory_query(query_id, input_word, memory)
+                let op = read_op(memory, input_word);
+                // SAFETY: the handler runs during the query, while its request is live
+                let mut words = unsafe { native_answer(query_id, input_word, memory) };
+                if ops.contains(&op) {
+                    let index = match op {
+                        _ if last_word => words.len() - 1,
+                        FieldHintOp::Bn254PairingResidueWitness
+                        | FieldHintOp::Bls12381KzgResidueWitness
+                        | FieldHintOp::Bls12381PairingResidueWitness => 1,
+                        _ => 0,
+                    };
+                    words[index] ^= 1;
+                }
+                words
             },
         )
     }
@@ -302,28 +206,34 @@ mod in_process {
     pub(crate) fn lying_oracle(
         ops: &[FieldHintOp],
     ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
-        let mut processor = FlipLowBit {
-            ops: ops.to_vec(),
-            last_word: false,
-        };
-        InProcessMemoryOracle::new(
-            move |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
-                processor.process_memory_query(query_id, input_word, memory)
-            },
-        )
+        flipping_oracle(ops, false)
     }
 
     /// An oracle that corrupts the last word of the answers of `ops`
     pub(crate) fn lying_oracle_last_word(
         ops: &[FieldHintOp],
     ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
-        let mut processor = FlipLowBit {
-            ops: ops.to_vec(),
-            last_word: true,
-        };
+        flipping_oracle(ops, true)
+    }
+
+    /// An oracle that claims every pairing product not to be the identity, with the (correct)
+    /// inverse the exact path needs
+    pub(crate) fn non_identity_claiming_oracle(
+    ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
         InProcessMemoryOracle::new(
-            move |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
-                processor.process_memory_query(query_id, input_word, memory)
+            |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
+                let op = read_op(memory, input_word);
+                // SAFETY: the handler runs during the query, while its request is live
+                unsafe {
+                    match op {
+                        FieldHintOp::Bn254PairingResidueWitness
+                        | FieldHintOp::Bls12381KzgResidueWitness
+                        | FieldHintOp::Bls12381PairingResidueWitness => {
+                            not_identity_claim(memory, input_word)
+                        }
+                        _ => native_answer(query_id, input_word, memory),
+                    }
+                }
             },
         )
     }

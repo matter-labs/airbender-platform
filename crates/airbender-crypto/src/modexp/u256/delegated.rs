@@ -1,22 +1,12 @@
-// Ported from zksync-os 185a0568:supporting_crates/u256/src/risc_v/mod.rs
-// Ported from zksync-os 185a0568:supporting_crates/delegated_u256/src/lib.rs
-// Ported from zksync-os 185a0568:supporting_crates/delegated_u256/src/delegation.rs
-// Ported from zksync-os 185a0568:supporting_crates/delegated_u256/src/copy.rs
-// Ported from zksync-os 185a0568:supporting_crates/delegated_u256/src/arithmetic.rs
-// Ported from zksync-os 185a0568:supporting_crates/delegated_u256/src/utils.rs
-//! The `U256` of the RISC-V target with the bigint delegation (zksync-os `u256::risc_v::U256` over
-//! `delegated_u256::DelegatedU256`), with the delegation sequences of zksync-os: a clone is one
-//! copy, a test for zero or one is one comparison, `<` is a copy into a scratch, a comparison and
-//! a subtraction, a widening multiplication is the low half then the high half. Only the
-//! operations that ModExp uses are ported. The delegation is called through
-//! [`crate::bigint_op_delegation_with_carry_bit_raw`], which the host emulates (and counts, in tests).
+//! The `U256` over the bigint delegation, which the host emulates. The guest's costs depend on
+//! the delegation sequences: a clone is one copy, a zero or one test one comparison, `<` a copy
+//! into a scratch, a comparison and a subtraction, a widening product the low then the high half.
 
 use crate::{bigint_op_delegation_with_carry_bit_raw, BigIntOps};
 use core::cmp::Ordering;
 use core::mem::MaybeUninit;
 
-// Even though we derive, internally we use delegation circuit for equality, ordering and cloning
-// See DelegatedU256 implementations for details
+// the derived impls call the delegated ones of `DelegatedU256`
 #[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Debug)]
 pub struct U256(DelegatedU256);
 
@@ -94,7 +84,7 @@ impl U256 {
 impl From<ruint::aliases::U256> for U256 {
     #[inline(always)]
     fn from(value: ruint::aliases::U256) -> Self {
-        // NOTE: we can not use precompile call due to alignment requirements
+        // not a delegated copy: `value` may not be 32-byte aligned
         Self::from_limbs(*value.as_limbs())
     }
 }
@@ -106,12 +96,8 @@ impl From<U256> for ruint::aliases::U256 {
     }
 }
 
-// delegated_u256/src/lib.rs
-
 #[repr(align(32))]
 struct DelegatedU256([u64; 4]);
-
-// delegated_u256/src/delegation.rs
 
 #[inline(always)]
 /// # Safety
@@ -137,13 +123,11 @@ unsafe fn bigint_op_delegation_with_carry_bit(
     unsafe { bigint_op_delegation_with_carry_bit_raw(a.cast(), b.cast(), carry, op) }
 }
 
-// delegated_u256/src/copy.rs
-
 #[cfg(not(test))]
 static mut SCRATCH_FOR_MUT: MaybeUninit<DelegatedU256> = MaybeUninit::uninit();
 
-// The scratch of each thread, as the tests run in parallel. It is on the heap: thread-local
-// storage is not 32-byte aligned on every host.
+// Tests run in parallel: one scratch per thread, boxed as thread-locals are not 32-byte aligned
+// on every host
 #[cfg(test)]
 std::thread_local! {
     static SCRATCH_FOR_MUT: std::boxed::Box<core::cell::UnsafeCell<MaybeUninit<DelegatedU256>>> =
@@ -208,10 +192,7 @@ unsafe fn copy_to_scratch(operand: *const DelegatedU256) -> *mut DelegatedU256 {
     }
 }
 
-// delegated_u256/src/arithmetic.rs
-
-// Immutable statics land in `.rodata` and are valid delegation operands without a runtime
-// initialization
+// Immutable statics land in `.rodata`, so they are valid delegation operands
 static ZERO: DelegatedU256 = DelegatedU256::ZERO;
 static ONE: DelegatedU256 = DelegatedU256::ONE;
 
@@ -317,14 +298,11 @@ impl DelegatedU256 {
     }
 }
 
-// delegated_u256/src/utils.rs
-
 impl DelegatedU256 {
     const fn as_limbs(&self) -> &[u64; 4] {
         &self.0
     }
 
-    // as in zksync-os
     #[allow(clippy::wrong_self_convention)]
     const fn to_limbs(self) -> [u64; 4] {
         self.0
@@ -343,8 +321,7 @@ impl DelegatedU256 {
         }
     }
 
-    /// The big-endian bytes of the value. Without delegation, RISC-V returns the
-    /// `rev8`-reversed words by value, with no branch or scratch buffer, so the
+    /// The big-endian bytes. On RISC-V, the `rev8`-reversed words returned by value, so the
     /// caller's copy can stay in registers.
     #[inline(always)]
     fn to_be_bytes(&self) -> [u8; 32] {
@@ -365,8 +342,7 @@ impl DelegatedU256 {
         }
     }
 
-    /// Writes the big-endian bytes of the value into `dst`. Other targets use a reversed
-    /// byte-by-byte copy.
+    /// Writes the big-endian bytes into `dst`.
     #[cfg(not(target_arch = "riscv32"))]
     #[inline(always)]
     fn write_be_bytes_into(&self, dst: &mut [u8; 32]) {
@@ -376,8 +352,7 @@ impl DelegatedU256 {
         }
     }
 
-    /// Copies 32 bytes from `src` to `dst` in reverse order, byte by byte: the
-    /// big-endian/little-endian conversion without the delegation.
+    /// Copies 32 bytes from `src` to `dst` in reverse order.
     ///
     /// # Safety
     /// `src` must be readable and `dst` writable for 32 bytes; they must not overlap.
@@ -391,9 +366,7 @@ impl DelegatedU256 {
         }
     }
 
-    /// Writes the big-endian integer at `src` into the slot `dst`. Without delegation, RISC-V
-    /// reads source words using `rev8` (shifting aligned words together if `src` is
-    /// unaligned); other targets use a reversed byte-by-byte copy.
+    /// Writes the big-endian integer at `src` into the slot `dst` (on RISC-V with `rev8`).
     ///
     /// # Safety
     /// `src` must be readable for 32 bytes, `dst` must be 32 bytes aligned and writable;

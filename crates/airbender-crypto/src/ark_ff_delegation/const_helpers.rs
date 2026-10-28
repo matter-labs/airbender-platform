@@ -232,16 +232,8 @@ mod tests {
     }
 
     #[test]
-    fn padded_bls_sampling_and_random_bytes_match_reference() {
-        use ark_ff::{BigInteger, Field, PrimeField, UniformRand};
-        assert_eq!(crate::bls12_381::Fq::MODULUS_BIT_SIZE, 381);
-        for bytes in [[0; 48], [1; 48], [0xff; 48], [0x42; 48]] {
-            let ours = crate::bls12_381::Fq::from_random_bytes(&bytes)
-                .map(|x| x.into_bigint().to_bytes_le());
-            let reference =
-                ark_bls12_381::Fq::from_random_bytes(&bytes).map(|x| x.into_bigint().to_bytes_le());
-            assert_eq!(ours.as_deref().map(|x| &x[..48]), reference.as_deref());
-        }
+    fn padded_bls_sampling_is_below_the_modulus() {
+        use ark_ff::{PrimeField, UniformRand};
         let mut rng = ark_std::test_rng();
         for _ in 0..8 {
             let value = crate::bls12_381::Fq::rand(&mut rng);

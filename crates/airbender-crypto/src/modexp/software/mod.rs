@@ -1,11 +1,8 @@
-// Ported from zksync-os 185a0568:supporting_crates/modexp/src/lib.rs
-// Taken from https://github.com/aurora-is-near/aurora-engine, with changes
-// to explicitly pass around allocator.
-// Also, some parts of code were rewritten to avoid `grow` usage,
-// marked with "rewritten without grow usage on alloc for ZKsync OS" comments
+//! ModExp without hints: the MPNat code of aurora-engine
+//! (<https://github.com/aurora-is-near/aurora-engine>) with an explicit allocator. Vectors are
+//! never grown in place (no `Allocator::grow`): a longer vector is a new allocation and a copy.
 
-// All `as` conversions in this code base have been carefully reviewed
-// and are safe.
+// the `as` conversions are reviewed and safe
 #![allow(clippy::as_conversions)]
 use alloc::vec::Vec;
 use core::alloc::Allocator;
@@ -14,19 +11,14 @@ mod arith;
 mod mpnat;
 
 macro_rules! vec_in {
-    // Repetition form: vec_in!(alloc; elem; n)
-    // Creates a vector with `n` copies of `elem`.
+    // `n` copies of `elem`
     ($alloc:expr; $elem:expr; $n:expr) => {{
         let mut v = Vec::with_capacity_in($n, $alloc);
         v.resize($n, $elem);
         v
     }};
 
-    // List form: vec_in!(alloc; val1, val2, val3, ...)
-    // Creates a vector containing the listed values.
-    // rewritten without grow usage on alloc for ZKsync OS
-    // Only supports 1 element, but it's enough for current impl
-    // ($alloc:expr; $( $x:expr ),* $(,)?) => {{
+    // one element
     ($alloc:expr; $x:expr) => {{
         let mut v = Vec::with_capacity_in(1, $alloc);
         v.push($x);

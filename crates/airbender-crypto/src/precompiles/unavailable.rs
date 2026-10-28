@@ -1,10 +1,6 @@
-//! The hints on RV32 without `bigint_ops`, where they are not there (the bn254 and bls12-381
-//! ones answer straight into the delegated representation, see `hints::guest_layout`):
-//! stand-ins with the names and the signatures of the hints that the pairing checks, the MSMs
-//! and the KZG proof check ask, each of which panics with `hints_unavailable`. Those endpoints
-//! take the hints through the oracle at many points of their code, not in one arm, so on this
-//! target their code stays the same, and runs as on any other without an oracle; with one, it
-//! panics where it would ask its first hint, as the hinted arms of the other endpoints do.
+//! Panicking stand-ins for the hints on RV32 without `bigint_ops`, with the names and signatures
+//! of the real ones. The pairing checks, MSMs and KZG ask hints in many places, so they keep one
+//! code path and panic at their first hint.
 
 use crate::affine_glv::Divider;
 use crate::hints::HintOracle;
@@ -12,9 +8,8 @@ use core::mem::MaybeUninit;
 
 pub(super) use crate::hints::{checked_inverse, PairingClaim};
 
-/// A divider that takes hints, or the hinted slopes of a G2 point. No value is ever made: the
-/// functions that would return one panic first. The type is not empty all the same, so that the
-/// compiler does not take the code after such a call in the endpoints for unreachable.
+/// A stand-in divider or G2 slope source. No value is ever made, but the type is not empty, so
+/// the compiler does not treat the code after such a call as unreachable.
 pub(super) struct Unavailable(());
 
 impl Unavailable {
@@ -27,7 +22,7 @@ impl Unavailable {
     }
 }
 
-/// As `G2SlopeHints`, which ends its query when it is dropped (this never runs: no value is made)
+/// Mirrors `G2SlopeHints`, which implements `Drop`
 impl Drop for Unavailable {
     fn drop(&mut self) {}
 }

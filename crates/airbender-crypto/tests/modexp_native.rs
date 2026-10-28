@@ -1,9 +1,6 @@
-//! ModExp in a build of the crate without `cfg(test)`, where the single-digit modulus path runs on
-//! the naive `U256` of native builds (the unit tests run it on the delegated one, the guest's): the
-//! 62 vectors of zksync-os's precompile tests through both paths, and the tapes of the recorder,
-//! which must be the ones the unit tests record (the same digest) and replay to the same results.
+//! ModExp without `cfg(test)`, where the single-digit path runs on the naive `U256`: the vectors
+//! through both paths, with tapes that must match the unit tests' (delegated `U256`) and replay.
 #![cfg(all(feature = "alloc", target_pointer_width = "64"))]
-// `std::alloc::Global`, the allocator of ModExp
 #![cfg_attr(
     all(feature = "alloc", target_pointer_width = "64"),
     feature(allocator_api)
@@ -19,10 +16,10 @@ mod modexp {
     use std::alloc::Global;
     use std::collections::VecDeque;
 
-    /// The digest of the tapes of `modexp::tests::vectors_both_paths` (the delegated `U256`)
+    /// `modexp::tests::TAPES_DIGEST`
     const TAPES_DIGEST: u64 = 0x3b18_d4f1_fabf_8ba6;
 
-    /// FNV-1a, as in `modexp::tests`: each word little-endian, each tape after its length
+    /// As `modexp::tests::digest_tape`
     fn digest_tape(digest: &mut u64, tape: &[u32]) {
         for word in core::iter::once(tape.len() as u32).chain(tape.iter().copied()) {
             for byte in word.to_le_bytes() {
@@ -32,7 +29,7 @@ mod modexp {
         }
     }
 
-    /// The oracle of the guest: every response word is the next word of the tape
+    /// The guest's oracle: every answer word is the next word of the tape
     struct Tape(VecDeque<u32>);
 
     impl HintOracle for Tape {
@@ -65,8 +62,7 @@ mod modexp {
             .collect()
     }
 
-    /// The operands of a precompile input and the length of the modulus, as the wrapper of
-    /// zksync-os reads them (see `modexp::tests::parse_input`)
+    /// As `modexp::tests::parse_input`
     fn parse_input(input: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>, usize) {
         let mut header = [0u8; 96];
         for (dst, src) in header.iter_mut().zip(input) {

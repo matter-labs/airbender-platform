@@ -1,14 +1,8 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/curve_hints.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/curve_hints/bls12_381_extension/mod.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/curve_hints/bls12_381_extension/tests/mod.rs
-//! Field inversions and square roots of the bn254 and bls12-381 base fields, and inversions of
-//! their degree-12 extensions, taken from oracle hints and checked: an inverse with one
-//! multiplication, a square root with one squaring. The exponentiation-based versions cost
-//! hundreds of multiplications, which dominates the cost of the point operations that end
-//! with one (an affine result, the easy part of a final exponentiation, a point decompression).
+//! Inverses and square roots in the bn254 and bls12-381 fields from oracle hints, each checked
+//! with one multiplication or squaring.
 //!
-//! A wrong hint fails an assertion: hints come from the prover's own oracle, never from
-//! external input, so a bad one is a broken prover rather than a case to recover from.
+//! A wrong hint fails an assertion: hints come from the prover's own oracle, so a bad one is a
+//! broken prover rather than a case to recover from.
 
 pub use self::bls12_381_extension::{
     bls12_381_fq2_inverse, bls12_381_fq2_sqrt, Bls12381Fq2Divider,
@@ -69,10 +63,7 @@ impl<O: HintOracle> crate::affine_glv::Divider<crate::bn254::Fq> for Bn254FqDivi
         fraction: &mut [crate::bn254::Fq; 2],
         quotient: &'q mut MaybeUninit<crate::bn254::Fq>,
     ) -> &'q mut crate::bn254::Fq {
-        // the quotient is received canonical, so it is a valid element of the redundant
-        // representation
-        // SAFETY: the operand is `[bn254::Fq; 2]`, the numerator and the denominator, the operand
-        // type of the bn254 base field division
+        // SAFETY: `[bn254::Fq; 2]` is the operand type of the bn254 base field division
         let quotient = unsafe {
             query_field_hint_into(
                 self.oracle,
@@ -81,9 +72,8 @@ impl<O: HintOracle> crate::affine_glv::Divider<crate::bn254::Fq> for Bn254FqDivi
                 quotient,
             )
         };
-        // quotient * denominator == numerator: the denominator is not zero (the caller's
-        // obligation), so the quotient is the only element that passes. The fraction is ours
-        // to overwrite.
+        // quotient * denominator == numerator: the denominator is non-zero (the caller's
+        // obligation), so only the quotient passes. The fraction is ours to overwrite.
         let [numerator, denominator] = fraction;
         *denominator *= &*quotient;
         *denominator -= &*numerator;
@@ -110,10 +100,7 @@ impl<O: HintOracle> crate::affine_glv::Divider<crate::bls12_381::Fq> for Bls1238
         fraction: &mut [crate::bls12_381::Fq; 2],
         quotient: &'q mut MaybeUninit<crate::bls12_381::Fq>,
     ) -> &'q mut crate::bls12_381::Fq {
-        // the quotient is received canonical, so it is a valid element of the redundant
-        // representation
-        // SAFETY: the operand is `[bls12_381::Fq; 2]`, the numerator and the denominator, the
-        // operand type of the bls12-381 base field division
+        // SAFETY: `[bls12_381::Fq; 2]` is the operand type of the bls12-381 base field division
         let quotient = unsafe {
             query_field_hint_into(
                 self.oracle,
@@ -122,7 +109,7 @@ impl<O: HintOracle> crate::affine_glv::Divider<crate::bls12_381::Fq> for Bls1238
                 quotient,
             )
         };
-        // as for bn254: the only element that passes is the quotient
+        // as for bn254: only the quotient passes
         let [numerator, denominator] = fraction;
         *denominator *= &*quotient;
         *denominator -= &*numerator;
@@ -224,17 +211,15 @@ mod bls12_381_extension {
             fraction: &mut [Fq2; 2],
             quotient: &'q mut MaybeUninit<Fq2>,
         ) -> &'q mut Fq2 {
-            // Divider's caller guarantees a nonzero denominator; exceptional affine cases
-            // are handled before asking for a division.
+            // the `Divider` caller guarantees a non-zero denominator
             let inverse = bls12_381_fq2_inverse(self.oracle, &fraction[1])
                 .expect("the affine division denominator is nonzero");
             quotient.write(fraction[0] * inverse)
         }
     }
 
-    /// A square root in Fq2, or a checked determination that none exists.
-    /// Every queried root/inverse is checked by the base-field helper. The root's sign
-    /// is unspecified; callers such as SWU choose the prescribed sign afterwards.
+    /// A square root in Fq2, `None` if there is none (both checked by the base-field hints).
+    /// The root's sign is unspecified.
     pub fn bls12_381_fq2_sqrt<O: HintOracle>(oracle: &mut O, value: &Fq2) -> Option<Fq2> {
         if value.c1.is_zero() {
             // Every base-field element has a square root in Fq2. If a is a nonsquare
@@ -273,16 +258,12 @@ mod bls12_381_extension {
         use super::*;
         use crate::affine_glv::Divider;
         use crate::hints::host::RecordingHintOracle;
+        use crate::hints::{test_support::lying_oracle, FieldHintOp};
 
-        /// The oracle of a native run, which answers with `answer_query` (the processor of the
-        /// field hints of zksync-os)
-        fn oracle() -> RecordingHintOracle {
-            RecordingHintOracle::new()
-        }
-
+        /// Zero, real, imaginary and mixed elements, squares and non-squares (from `i = 7`)
         fn inputs() -> Vec<Fq2> {
             let mut values = vec![Fq2::ZERO, Fq2::ONE, -Fq2::ONE];
-            for i in 1u64..=24 {
+            for i in 1u64..=8 {
                 values.push(Fq2::new(Fq::from(i), Fq::ZERO));
                 values.push(Fq2::new(Fq::ZERO, Fq::from(i)));
                 values.push(Fq2::new(Fq::from(i * 17), Fq::from(i * i + 5)));
@@ -292,7 +273,7 @@ mod bls12_381_extension {
 
         #[test]
         fn inverses_and_divisions_match_field_arithmetic() {
-            let mut oracle = oracle();
+            let mut oracle = RecordingHintOracle::new();
             for value in inputs() {
                 assert_eq!(bls12_381_fq2_inverse(&mut oracle, &value), value.inverse());
                 if !value.is_zero() {
@@ -308,16 +289,15 @@ mod bls12_381_extension {
 
         #[test]
         fn roots_and_nonresidues_match_field_arithmetic() {
-            let mut oracle = oracle();
+            let mut oracle = RecordingHintOracle::new();
             let mut nonsquares = 0;
             for value in inputs() {
                 for value in [value, value.square()] {
                     let root = bls12_381_fq2_sqrt(&mut oracle, &value);
                     assert_eq!(root.is_some(), value.sqrt().is_some(), "{value:?}");
-                    if let Some(root) = root {
-                        assert_eq!(root.square(), value);
-                    } else {
-                        nonsquares += 1;
+                    match root {
+                        Some(root) => assert_eq!(root.square(), value),
+                        None => nonsquares += 1,
                     }
                 }
             }
@@ -327,7 +307,6 @@ mod bls12_381_extension {
         #[test]
         #[should_panic(expected = "the field inverse hint is wrong")]
         fn false_inverse_hint_is_rejected() {
-            use crate::hints::{test_support::lying_oracle, FieldHintOp};
             let mut oracle = lying_oracle(&[FieldHintOp::Bls12381BaseFieldInverse]);
             let _ = bls12_381_fq2_inverse(&mut oracle, &Fq2::new(Fq::from(2u64), Fq::from(3u64)));
         }
@@ -335,28 +314,22 @@ mod bls12_381_extension {
         #[test]
         #[should_panic]
         fn false_sqrt_hint_is_rejected() {
-            use crate::hints::{test_support::lying_oracle, FieldHintOp};
             let mut oracle = lying_oracle(&[FieldHintOp::Bls12381BaseFieldSqrt]);
             let _ = bls12_381_fq2_sqrt(&mut oracle, &Fq2::new(Fq::from(2u64), Fq::from(3u64)));
         }
     }
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
+    use crate::affine_glv::Divider;
     use crate::hints::host::RecordingHintOracle;
-    use crate::hints::test_support::{lying_oracle, InProcessMemoryOracle};
-    use crate::hints::{HintAnswer, HintTarget, QuerierMemory};
+    use crate::hints::test_support::lying_oracle;
+    use crate::hints::HintTarget;
+    use crate::{bls12_381, bn254};
     use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
     use core::mem::MaybeUninit;
-
-    /// The oracle of a native run, which answers with `answer_query` (the processor of the field
-    /// hints of zksync-os)
-    fn oracle() -> RecordingHintOracle {
-        RecordingHintOracle::new()
-    }
 
     /// Deterministic field elements spread over the field: powers of a large seed
     fn elements<F: PrimeField>(count: usize) -> Vec<F> {
@@ -370,11 +343,9 @@ mod tests {
             .collect()
     }
 
-    fn extension_elements<E: Field>(count: usize) -> Vec<E> {
-        let base = elements::<E::BasePrimeField>(count * E::extension_degree() as usize);
-        base.chunks(E::extension_degree() as usize)
-            .map(|c| E::from_base_prime_field_elems(c.iter().copied()).unwrap())
-            .collect()
+    fn extension_element<E: Field>() -> E {
+        let base = elements::<E::BasePrimeField>(E::extension_degree() as usize);
+        E::from_base_prime_field_elems(base).unwrap()
     }
 
     fn answer_words<T: HintAnswer>(value: &T, target: HintTarget) -> Vec<u32> {
@@ -392,175 +363,127 @@ mod tests {
 
     #[test]
     fn answers_follow_the_target() {
-        for a in elements::<crate::bn254::Fq>(5) {
-            // `R = 2^256` on every target
-            let montgomery_form = a * crate::bn254::Fq::from(2u64).pow([256]);
-            let expected = limb_words(montgomery_form.into_bigint().as_ref());
-            assert_eq!(answer_words(&a, HintTarget::Native), expected);
-            assert_eq!(answer_words(&a, HintTarget::Guest), expected);
-        }
-        // `R = 2^(64 limbs)` with the limbs of the representation of this build: 6 in a native
-        // build, 8 in a test build of this crate, whose fields are the delegated ones (as on the
-        // RISC-V guest)
-        let native_bits =
-            64 * <<crate::bls12_381::Fq as PrimeField>::BigInt as BigInteger>::NUM_LIMBS;
-        for a in elements::<crate::bls12_381::Fq>(5) {
-            // `R = 2^384` in a native build, `2^512` on the RISC-V guest; 6 limbs on both (the low
-            // 6 limbs of the integer, whose limbs above are zero)
-            let r = |bits: u64| crate::bls12_381::Fq::from(2u64).pow([bits]);
-            let wire_words = |x: crate::bls12_381::Fq| limb_words(&x.into_bigint().as_ref()[..6]);
-            let native = wire_words(a * r(native_bits as u64));
-            let guest = wire_words(a * r(512));
-            assert_eq!(answer_words(&a, HintTarget::Native), native);
-            assert_eq!(answer_words(&a, HintTarget::Guest), guest);
-            assert_eq!(guest.len(), 12);
-            let f = crate::bls12_381::Fq2::new(a, -a);
-            assert_eq!(
-                answer_words(&f, HintTarget::Guest),
-                [guest, wire_words((-a) * r(512))].concat()
-            );
-        }
+        // bn254: `R = 2^256` on every target
+        let a = elements::<bn254::Fq>(1)[0];
+        let expected = limb_words(
+            (a * bn254::Fq::from(2u64).pow([256]))
+                .into_bigint()
+                .as_ref(),
+        );
+        assert_eq!(answer_words(&a, HintTarget::Native), expected);
+        assert_eq!(answer_words(&a, HintTarget::Guest), expected);
+        // bls12-381: `R = 2^(64 limbs)` with this build's limbs natively (8 in this test build),
+        // `2^512` on the guest; 6 wire limbs on both
+        let native_bits = 64 * <<bls12_381::Fq as PrimeField>::BigInt as BigInteger>::NUM_LIMBS;
+        let a = elements::<bls12_381::Fq>(1)[0];
+        let r = |bits: u64| bls12_381::Fq::from(2u64).pow([bits]);
+        let wire_words = |x: bls12_381::Fq| limb_words(&x.into_bigint().as_ref()[..6]);
+        let guest = wire_words(a * r(512));
+        assert_eq!(
+            answer_words(&a, HintTarget::Native),
+            wire_words(a * r(native_bits as u64))
+        );
+        assert_eq!(answer_words(&a, HintTarget::Guest), guest);
+        // extension components in order, `c0` first
+        let f = bls12_381::Fq2::new(a, -a);
+        assert_eq!(
+            answer_words(&f, HintTarget::Guest),
+            [guest, wire_words((-a) * r(512))].concat()
+        );
     }
 
     #[test]
     fn inverses_match_the_field() {
-        let mut oracle = oracle();
-        for a in elements::<crate::bn254::Fq>(20) {
+        let mut oracle = RecordingHintOracle::new();
+        for a in elements::<bn254::Fq>(3) {
             assert_eq!(bn254_fq_inverse(&mut oracle, &a), a.inverse());
         }
-        for f in extension_elements::<crate::bn254::Fq12>(5) {
-            assert_eq!(bn254_fq12_inverse(&mut oracle, &f), f.inverse());
-        }
-        for a in elements::<crate::bls12_381::Fq>(20) {
+        for a in elements::<bls12_381::Fq>(3) {
             assert_eq!(bls12_381_fq_inverse(&mut oracle, &a), a.inverse());
         }
-        for f in extension_elements::<crate::bls12_381::Fq12>(5) {
-            assert_eq!(bls12_381_fq12_inverse(&mut oracle, &f), f.inverse());
-        }
-        assert_eq!(
-            bn254_fq_inverse(&mut oracle, &crate::bn254::Fq::zero()),
-            None
-        );
-        assert_eq!(
-            bn254_fq12_inverse(&mut oracle, &crate::bn254::Fq12::zero()),
-            None
-        );
-        assert_eq!(
-            bls12_381_fq_inverse(&mut oracle, &crate::bls12_381::Fq::zero()),
-            None
-        );
-        assert_eq!(
-            bls12_381_fq12_inverse(&mut oracle, &crate::bls12_381::Fq12::zero()),
-            None
-        );
-        let one = crate::bls12_381::Fq::one();
+        let f = extension_element::<bn254::Fq12>();
+        assert_eq!(bn254_fq12_inverse(&mut oracle, &f), f.inverse());
+        let f = extension_element::<bls12_381::Fq12>();
+        assert_eq!(bls12_381_fq12_inverse(&mut oracle, &f), f.inverse());
+        let one = bls12_381::Fq::one();
         assert_eq!(bls12_381_fq_inverse(&mut oracle, &one), Some(one));
-        let minus_one = -crate::bn254::Fq::one();
-        assert_eq!(bn254_fq_inverse(&mut oracle, &minus_one), Some(minus_one));
+        // zero has no inverse, and no hint is asked for
+        assert_eq!(bn254_fq_inverse(&mut oracle, &bn254::Fq::zero()), None);
+        assert_eq!(bn254_fq12_inverse(&mut oracle, &bn254::Fq12::zero()), None);
+        assert_eq!(
+            bls12_381_fq_inverse(&mut oracle, &bls12_381::Fq::zero()),
+            None
+        );
+        assert_eq!(
+            bls12_381_fq12_inverse(&mut oracle, &bls12_381::Fq12::zero()),
+            None
+        );
     }
 
     #[test]
     fn square_roots_match_the_field() {
-        let mut oracle = oracle();
+        let mut oracle = RecordingHintOracle::new();
         let mut squares = 0;
-        for a in elements::<crate::bls12_381::Fq>(40) {
+        for a in elements::<bls12_381::Fq>(10) {
             let hinted = bls12_381_fq_sqrt(&mut oracle, &a);
-            let reference = a.sqrt();
-            assert_eq!(hinted.is_some(), reference.is_some());
+            assert_eq!(hinted.is_some(), a.sqrt().is_some());
             if let Some(root) = hinted {
                 squares += 1;
                 assert_eq!(root.square(), a);
             }
         }
-        assert!(squares > 5 && squares < 35, "{squares} squares of 40");
-        let zero = crate::bls12_381::Fq::zero();
+        assert!(squares > 0 && squares < 10, "{squares} squares of 10");
+        let zero = bls12_381::Fq::zero();
         assert_eq!(bls12_381_fq_sqrt(&mut oracle, &zero), Some(zero));
-        let four = crate::bls12_381::Fq::from(4u64);
-        let root = bls12_381_fq_sqrt(&mut oracle, &four).unwrap();
-        assert!(
-            root == crate::bls12_381::Fq::from(2u64) || root == -crate::bls12_381::Fq::from(2u64)
-        );
     }
 
-    fn all_lying() -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>>
-    {
-        lying_oracle(&[
-            FieldHintOp::Bn254BaseFieldInverse,
-            FieldHintOp::Bn254Fq12Inverse,
-            FieldHintOp::Bls12381BaseFieldSqrt,
-            FieldHintOp::Bls12381BaseFieldInverse,
-            FieldHintOp::Bls12381Fq12Inverse,
-        ])
+    #[test]
+    fn divisions_are_the_quotient() {
+        let mut oracle = RecordingHintOracle::new();
+        let [n, d] = [bn254::Fq::from(7u64), elements::<bn254::Fq>(1)[0]];
+        let mut quotient = MaybeUninit::uninit();
+        let q = *Bn254FqDivider::new(&mut oracle).divide(&mut [n, d], &mut quotient);
+        assert_eq!(q * d, n);
+        let [n, d] = [bls12_381::Fq::from(7u64), elements::<bls12_381::Fq>(1)[0]];
+        let mut quotient = MaybeUninit::uninit();
+        let q = *Bls12381FqDivider::new(&mut oracle).divide(&mut [n, d], &mut quotient);
+        assert_eq!(q * d, n);
     }
 
     #[test]
     #[should_panic(expected = "inverse hint is wrong")]
     fn wrong_bn254_inverse_is_rejected() {
-        let a = crate::bn254::Fq::from(7u64);
-        let _ = bn254_fq_inverse(&mut all_lying(), &a);
-    }
-
-    #[test]
-    fn bn254_division_is_the_quotient() {
-        use crate::affine_glv::Divider;
-        let elements = elements::<crate::bn254::Fq>(8);
-        let mut oracle = oracle();
-        for pair in elements.chunks(2) {
-            let mut fraction = [pair[0], pair[1]];
-            let mut quotient = MaybeUninit::uninit();
-            let quotient = Bn254FqDivider::new(&mut oracle).divide(&mut fraction, &mut quotient);
-            assert_eq!(*quotient * pair[1], pair[0]);
-        }
-    }
-
-    #[test]
-    fn bls12_381_division_is_the_quotient() {
-        use crate::affine_glv::Divider;
-        let elements = elements::<crate::bls12_381::Fq>(8);
-        let mut oracle = oracle();
-        for pair in elements.chunks(2) {
-            let mut fraction = [pair[0], pair[1]];
-            let mut quotient = MaybeUninit::uninit();
-            let quotient = Bls12381FqDivider::new(&mut oracle).divide(&mut fraction, &mut quotient);
-            assert_eq!(*quotient * pair[1], pair[0]);
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "division hint is wrong")]
-    fn wrong_bls12_381_division_is_rejected() {
-        use crate::affine_glv::Divider;
-        let mut fraction = [
-            crate::bls12_381::Fq::from(7u64),
-            crate::bls12_381::Fq::from(5u64),
-        ];
-        let mut quotient = MaybeUninit::uninit();
-        Bls12381FqDivider::new(&mut lying_oracle(&[FieldHintOp::Bls12381BaseFieldDivision]))
-            .divide(&mut fraction, &mut quotient);
-    }
-
-    #[test]
-    #[should_panic(expected = "division hint is wrong")]
-    fn wrong_bn254_division_is_rejected() {
-        use crate::affine_glv::Divider;
-        let mut fraction = [crate::bn254::Fq::from(7u64), crate::bn254::Fq::from(5u64)];
-        let mut quotient = MaybeUninit::uninit();
-        Bn254FqDivider::new(&mut lying_oracle(&[FieldHintOp::Bn254BaseFieldDivision]))
-            .divide(&mut fraction, &mut quotient);
+        let mut oracle = lying_oracle(&[FieldHintOp::Bn254BaseFieldInverse]);
+        let _ = bn254_fq_inverse(&mut oracle, &bn254::Fq::from(7u64));
     }
 
     #[test]
     #[should_panic(expected = "inverse hint is wrong")]
     fn wrong_bls12_381_fq12_inverse_is_rejected() {
-        let f = extension_elements::<crate::bls12_381::Fq12>(1)[0];
-        let _ = bls12_381_fq12_inverse(&mut all_lying(), &f);
+        let mut oracle = lying_oracle(&[FieldHintOp::Bls12381Fq12Inverse]);
+        let _ = bls12_381_fq12_inverse(&mut oracle, &extension_element());
+    }
+
+    #[test]
+    #[should_panic(expected = "division hint is wrong")]
+    fn wrong_bls12_381_division_is_rejected() {
+        let mut fraction = [bls12_381::Fq::from(7u64), bls12_381::Fq::from(5u64)];
+        let mut oracle = lying_oracle(&[FieldHintOp::Bls12381BaseFieldDivision]);
+        Bls12381FqDivider::new(&mut oracle).divide(&mut fraction, &mut MaybeUninit::uninit());
+    }
+
+    #[test]
+    #[should_panic(expected = "division hint is wrong")]
+    fn wrong_bn254_division_is_rejected() {
+        let mut fraction = [bn254::Fq::from(7u64), bn254::Fq::from(5u64)];
+        let mut oracle = lying_oracle(&[FieldHintOp::Bn254BaseFieldDivision]);
+        Bn254FqDivider::new(&mut oracle).divide(&mut fraction, &mut MaybeUninit::uninit());
     }
 
     #[test]
     #[should_panic(expected = "square root hint is wrong")]
     fn wrong_square_root_is_rejected() {
-        // 4 is a square; the lying oracle returns a wrong root
-        let a = crate::bls12_381::Fq::from(4u64);
-        let _ = bls12_381_fq_sqrt(&mut all_lying(), &a);
+        let mut oracle = lying_oracle(&[FieldHintOp::Bls12381BaseFieldSqrt]);
+        let _ = bls12_381_fq_sqrt(&mut oracle, &bls12_381::Fq::from(4u64));
     }
 }

@@ -1,6 +1,5 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/curve_hints.rs
-//! The bn254 and bls12-381 field elements in the hints: the order of their components (see
-//! [`HintEncoding`]), and their encoding in the answers (the `HintAnswer` impls).
+//! The bn254 and bls12-381 field elements in the hints: their component order ([`HintEncoding`])
+//! and their encoding in answers (the `HintAnswer` impls).
 
 use super::answer::HintAnswer;
 #[cfg(any(feature = "alloc", test))]
@@ -13,17 +12,12 @@ use ark_ff::{BigInteger, PrimeField};
 use ark_ff::{CubicExtConfig, CubicExtField, Field, QuadExtConfig, QuadExtField};
 use core::mem::MaybeUninit;
 
-/// The base prime field components of a field element in a fixed order (for a tower `c0` before
-/// `c1` before `c2`, recursively), independent of the arkworks `to_base_prime_field_elements`
-/// order, which the delegated and the native tower implementations do not agree on. It is the
-/// order of the components of an element in the memory of the RISC-V guest, which the oracle reads
-/// operands from (see `guest_layout`), and of the components of an answer on every target (see
-/// the `HintAnswer` impls below).
+/// The base prime field components of an element in a fixed order (`c0`, `c1`, `c2`,
+/// recursively), for guest operands and for answers on every target. Not the arkworks
+/// `to_base_prime_field_elements` order, which the delegated and native towers disagree on.
 pub trait HintEncoding: Field {
-    /// 64-bit limbs of a base prime field element on the RISC-V guest with the bigint delegation
-    /// (`bigint_ops`, which `proving` turns on): 4 for bn254, 8 for bls12-381 (381 bits in 512). On
-    /// RV32 without `bigint_ops` the fields are the arkworks ones (6 limbs for bls12-381), which no
-    /// hint reads or writes (see `guest_layout`): there this constant does not describe them.
+    /// 64-bit limbs of a base field element on the guest with `bigint_ops`: 4 for bn254, 8 for
+    /// bls12-381 (381 bits in 512)
     const LIMBS: usize;
     /// Base prime field components of an element
     const COMPONENTS: usize;
@@ -102,11 +96,7 @@ fp12_encoding!(
     8
 );
 
-// The answers of the base prime fields are written straight into the representation of the guest,
-// which is the delegated one: on RV32 only with `bigint_ops` (see `guest_layout`).
-
-/// Whether the little-endian `value` is below the little-endian `modulus` (zero above the width of
-/// `modulus`)
+/// Whether the little-endian `value` is below the little-endian `modulus`
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 fn is_below(value: &[u64], modulus: &[u64]) -> bool {
     let (low, high) = value.split_at(value.len().min(modulus.len()));
@@ -121,16 +111,13 @@ fn is_below(value: &[u64], modulus: &[u64]) -> bool {
     false
 }
 
-/// The answer of a hint is a base prime field element `x` in the Montgomery form of the target of the
-/// querier, its representation there: `x R mod p` for `R = 2^(64 limbs)` with the limbs of the
-/// representation, canonical (below the modulus), as its `wire_limbs` little-endian 64-bit limbs (the
-/// width of the modulus). It is written straight into the low limbs of the destination element, whose
-/// limbs above (on the RISC-V guest, bls12-381 elements take 8 limbs for their 6) are zeroed, and checked
-/// to be canonical.
+/// Receives a base field element: `x R mod p` on the querier's target (`R = 2^(64 limbs)`), as
+/// `wire_limbs` canonical little-endian limbs. It is written into the low limbs of the destination,
+/// the limbs above are zeroed, and it is checked to be canonical.
 ///
 /// # Safety
 ///
-/// `limbs` must point to the limbs of the representation of an `F`, all of its bytes, valid for writes.
+/// `limbs` must point to the limbs of an `F`, all of its bytes, valid for writes.
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 #[inline(always)]
 unsafe fn read_prime_field<F: PrimeField, O: HintOracle>(
@@ -153,8 +140,8 @@ unsafe fn read_prime_field<F: PrimeField, O: HintOracle>(
     Ok(())
 }
 
-/// Oracle side of `read_prime_field`, with `limbs` the limbs of the representation of `element` in this
-/// build, and `guest_limbs` those of the representation on the RISC-V guest
+/// Oracle side of `read_prime_field`: `limbs` are `element`'s limbs in this build, `guest_limbs`
+/// the limb count on the guest
 #[cfg(all(
     any(feature = "alloc", test),
     any(not(target_arch = "riscv32"), feature = "bigint_ops")
@@ -174,7 +161,7 @@ fn write_prime_field<F: PrimeField>(
             response.push((*limb >> 32) as u32);
         }
     };
-    // the Montgomery form of the target: `R = 2^(64 limbs)` with the limbs of its representation
+    // the target's Montgomery form: `R = 2^(64 limbs)`
     let target_limbs = match target {
         HintTarget::Native => limbs.len(),
         HintTarget::Guest => guest_limbs,
@@ -188,15 +175,13 @@ fn write_prime_field<F: PrimeField>(
     }
 }
 
-/// `$wire_limbs`: the width of the modulus; `$guest_limbs`: the limbs of the representation on the
-/// RISC-V guest, whose `R` is `2^(64 $guest_limbs)`
+/// `$wire_limbs`: the width of the modulus; `$guest_limbs`: the limbs on the guest
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 macro_rules! prime_field_answer {
     ($field:ty, $wire_limbs:expr, $guest_limbs:expr) => {
         const _: () = {
-            // the answer fits in every representation, and the modulus in the limbs of the answer
-            // (`MODULUS_BIT_SIZE` would not do: the delegated representation counts its bits from
-            // its top limb, zero or not)
+            // the modulus fits in the answer's limbs (`MODULUS_BIT_SIZE` counts the delegated
+            // representation's zero top limbs)
             let modulus = <$field as PrimeField>::MODULUS.0;
             assert!($wire_limbs <= modulus.len());
             let mut i = $wire_limbs;
@@ -213,8 +198,7 @@ macro_rules! prime_field_answer {
                 dst: &'a mut MaybeUninit<Self>,
             ) -> Result<&'a mut Self, HintError> {
                 let this = dst.as_mut_ptr();
-                // SAFETY: the limbs of the representation (the other field is zero-sized) are a place
-                // inside `dst`, which initialize it
+                // SAFETY: the limbs (the other field is zero-sized) are all of `dst`
                 unsafe {
                     let limbs = (&raw mut (*this).0 .0).cast::<u64>();
                     read_prime_field::<Self, O>(oracle, limbs, $wire_limbs)?;
@@ -239,8 +223,7 @@ macro_rules! prime_field_answer {
 
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 prime_field_answer!(crate::bn254::Fq, 4, 4);
-// 8 limbs of 64 bits for 381 bits on the RISC-V guest, where the delegation works on 256-bit limbs;
-// 6 in a native build
+// 8 limbs on the guest (the delegation works on 256-bit limbs), 6 natively
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 prime_field_answer!(crate::bls12_381::Fq, 6, 8);
 
@@ -255,8 +238,7 @@ where
         dst: &'a mut MaybeUninit<Self>,
     ) -> Result<&'a mut Self, HintError> {
         let this = dst.as_mut_ptr();
-        // SAFETY: the components are disjoint places inside `dst`, which they initialize, and
-        // `MaybeUninit<E>` has the layout of `E`
+        // SAFETY: the components are disjoint places inside `dst`, which they initialize
         unsafe {
             P::BaseField::read(oracle, &mut *(&raw mut (*this).c0).cast())?;
             P::BaseField::read(oracle, &mut *(&raw mut (*this).c1).cast())?;

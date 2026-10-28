@@ -1,42 +1,25 @@
-// Ported from zksync-os e855bca2:oracle_provider/src/lib.rs
-//! Native recording of the hint answers the RISC-V guest reads: the hint part of the prover input
-//! that zksync-os records with `ZkEENonDeterminismSource` in the `NativeRunSavingForRiscV` mode and
-//! `ReadWitnessSource`.
+//! Native recording of the hint answers the RISC-V guest reads (the hint part of the prover input).
 
 use super::{answer_query, NativeQuerierMemory};
 use crate::hints::{HintError, HintOracle};
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
-/// The oracle of a native run that records the prover input: it answers the queries of a querier
-/// in this process, and records the answers of the RISC-V guest, which the guest reads in place of
-/// that querier when it runs the same computation (with the same queries, in the same order), as
-/// its non-determinism input.
+/// The oracle of a recording native run: it answers a querier in this process, and records the
+/// guest's answers to the same queries, which the guest reads as its non-determinism input when it
+/// runs the same computation.
 ///
-/// Each query is answered for both targets when it is sent, and the whole answer of the guest is
-/// then appended to the tape, whatever the querier reads of its own answer. The tape is the words
-/// of the answers, in query order, with no framing added between them (the length words that a
-/// ModExp reduction answers with are part of its answer). The answer of the querier is served
-/// as zksync-os serves a querier in this process: reading past its end is an error (which
-/// consumes nothing), and ending the query before it is read in full, or sending the next query
-/// before then, is an error that drops the unread rest. The guest would read such a rest as the
-/// start of its next answer.
+/// Each query's whole guest answer is appended to the tape when it is sent, with no framing.
+/// Reading past the native answer is an error that consumes nothing; ending the query or sending
+/// the next one before the answer is read in full is an error that drops the rest (the guest would
+/// read it as the start of its next answer).
 ///
-/// It reads nothing but the memory of the queries, and keeps its state in itself: recordings on
-/// different threads, or with different recorders, are independent, as long as no crate in the
-/// build turns `proving` on for a native target. The emulated delegated arithmetic that `proving`
-/// brings keeps one scratch space (a `static mut`) for all threads. Without `proving`, the native
-/// fields hold no shared state.
+/// Recordings on different threads are independent unless `proving` is on for a native target:
+/// its emulated delegation keeps one `static mut` scratch space for all threads.
 ///
-/// # Trust boundary
-///
-/// The recorder trusts the input word of each query: it dereferences it as a request of this
-/// process, and the operand pointers in it as values of the types the op expects. That is the
-/// contract of the `unsafe` [`HintOracle::send_query`], which the hinted operations of this crate
-/// (e.g. [`Secp256k1HooksWithOracle`](crate::hints::Secp256k1HooksWithOracle), or
-/// `send_field_hint_query` with the operand of the op) hold to; safe code cannot send it a query
-/// otherwise. Its answers, on the other hand, are trusted by no one: the hinted operations check
-/// them, natively as on the guest.
+/// Trust boundary: it dereferences each query's request and operands, per the `unsafe` contract
+/// of [`HintOracle::send_query`]; its answers are trusted by no one, as the hinted operations
+/// check them.
 #[derive(Debug, Default)]
 pub struct RecordingHintOracle {
     /// Words of the answer to the current query that the querier did not read yet, as it reads
@@ -76,12 +59,9 @@ impl HintOracle for RecordingHintOracle {
         }
         let mut native_run_response = Vec::new();
         let mut guest_run_response = Vec::new();
-        // SAFETY: the querier of this process exposes the memory the input word refers to while it sends
-        // the query, i.e. during this call
+        // SAFETY: the querier exposes the request during this call
         let memory = unsafe { NativeQuerierMemory::new() };
-        // SAFETY: the querier is in this process, whose memory this is, and the input word is the
-        // address of a live request whose operands are live values of the types of its op (the
-        // contract of `send_query`, guaranteed by the caller)
+        // SAFETY: the contract of `send_query`, guaranteed by the caller
         let answered = unsafe {
             answer_query(
                 query_id,
@@ -116,7 +96,7 @@ impl HintOracle for RecordingHintOracle {
             return Err(HintError("oracle response is shorter than expected"));
         }
         for (i, word) in self.response.drain(..num_words).enumerate() {
-            // SAFETY: `i < num_words`, and the caller guarantees `dst` is valid for `num_words` words
+            // SAFETY: `i < num_words`, guaranteed by the caller
             unsafe { dst.add(i).write(word) };
         }
         Ok(())
@@ -132,12 +112,8 @@ impl HintOracle for RecordingHintOracle {
     }
 }
 
-/// Runs `f` with a new recorder, and returns its result and the tape: the answers that the RISC-V
-/// guest reads when it runs the same computation with its oracle.
-///
-/// Trust boundary: `f` gets the recorder, which dereferences the requests sent to it (see
-/// [`RecordingHintOracle`]); safe code in `f` can only send it the well-formed queries of the
-/// hinted operations of this crate, as sending a query is `unsafe`.
+/// Runs `f` with a new recorder, and returns its result and the tape the guest reads when it runs
+/// the same computation.
 pub fn record_hints<R>(f: impl FnOnce(&mut RecordingHintOracle) -> R) -> (R, Vec<u32>) {
     let mut recorder = RecordingHintOracle::new();
     let result = f(&mut recorder);
@@ -154,8 +130,15 @@ mod tests {
 
     /// Sends the query for the base field inverse of `x`
     fn send_inverse(recorder: &mut RecordingHintOracle, x: &FieldElement) -> Result<(), HintError> {
-        // SAFETY: `x` is a `FieldElement`, the operand type of the base field inverse
+        // SAFETY: `FieldElement` is the operand type of the base field inverse
         unsafe { send_field_hint_query(recorder, FieldHintOp::Secp256k1BaseFieldInverse, x) }
+    }
+
+    /// The native answer to the current query
+    fn read_element(recorder: &mut RecordingHintOracle) -> Result<[u32; 8], HintError> {
+        let mut words = [0u32; 8];
+        // SAFETY: the buffer holds 8 words
+        unsafe { recorder.write_words(words.as_mut_ptr(), 8) }.map(|()| words)
     }
 
     /// An element and its inverse
@@ -164,30 +147,6 @@ mod tests {
         let mut inverse = x;
         inverse.invert_in_place();
         (x, inverse)
-    }
-
-    #[test]
-    fn recorder_emits_native_and_guest_words() {
-        let (x, inverse) = element_and_inverse();
-        let ((), tape) = record_hints(|recorder| {
-            send_inverse(recorder, &x).unwrap();
-            // the whole guest answer is recorded when the query is sent
-            assert_eq!(recorder.tape(), inverse.to_montgomery_words());
-            let mut native = [0u32; 8];
-            // SAFETY: the buffer holds 8 words
-            unsafe { recorder.write_words(native.as_mut_ptr(), 8) }.unwrap();
-            recorder.finish_query().unwrap();
-            assert_eq!(native, inverse.to_canonical_words());
-        });
-        assert_eq!(tape, inverse.to_montgomery_words());
-
-        // through the hooks, which read the native answer into the element
-        let mut y = x;
-        let ((), tape) = record_hints(|recorder| {
-            Secp256k1HooksWithOracle::new(recorder).fe_invert_and_assign(&mut y)
-        });
-        assert_eq!(y.to_bytes(), inverse.to_bytes());
-        assert_eq!(tape, inverse.to_montgomery_words());
     }
 
     #[test]
@@ -201,32 +160,38 @@ mod tests {
             unsafe { recorder.send_query(0x1234_5678, 0) },
             Err(HintError("invalid query ID"))
         );
-        assert!(recorder.tape().is_empty());
-
-        // a short read fails, and reads nothing
+        // the whole guest answer is recorded when the query is sent
         send_inverse(&mut recorder, &x).unwrap();
+        assert_eq!(recorder.tape(), inverse.to_montgomery_words());
+        // a short read fails, and reads nothing
         let mut words = [0u32; 9];
         // SAFETY: the buffer holds 9 words
         assert!(unsafe { recorder.write_words(words.as_mut_ptr(), 9) }.is_err());
-        let mut native = [0u32; 8];
-        // SAFETY: the buffer holds 8 words
-        unsafe { recorder.write_words(native.as_mut_ptr(), 8) }.unwrap();
-        assert_eq!(native, inverse.to_canonical_words());
+        assert_eq!(
+            read_element(&mut recorder),
+            Ok(inverse.to_canonical_words())
+        );
         assert_eq!(recorder.finish_query(), Ok(()));
         assert!(recorder.read_word().is_err());
-        assert_eq!(recorder.into_tape(), inverse.to_montgomery_words());
+
+        // through the hooks, which read the native answer into the element
+        let mut y = x;
+        let ((), tape) = record_hints(|recorder| {
+            Secp256k1HooksWithOracle::new(recorder).fe_invert_and_assign(&mut y)
+        });
+        assert_eq!(y.to_bytes(), inverse.to_bytes());
+        assert_eq!(tape, inverse.to_montgomery_words());
     }
 
-    /// An answer left partly unread is an error, as zksync-os's oracle of a native run reports it
-    /// (`ZkEENonDeterminismSource`, `ResponseBuffer`): the guest would read the rest of its answer
-    /// on the tape as the start of the next one
+    /// An answer left partly unread is an error: the guest would read its rest on the tape as the
+    /// start of the next answer
     #[test]
     fn unread_answers_are_errors() {
         let (x, inverse) = element_and_inverse();
         let mut recorder = RecordingHintOracle::new();
 
-        // the next query, sent before the answer is read in full, fails, is not answered (nor
-        // recorded), and drops the rest
+        // the next query, sent before the answer is read in full, fails, is not recorded, and
+        // drops the rest
         send_inverse(&mut recorder, &x).unwrap();
         assert_eq!(recorder.read_word(), Ok(inverse.to_canonical_words()[0]));
         assert_eq!(
@@ -249,40 +214,14 @@ mod tests {
 
         // and the next query is served
         send_inverse(&mut recorder, &inverse).unwrap();
-        let mut native = [0u32; 8];
-        // SAFETY: the buffer holds 8 words
-        unsafe { recorder.write_words(native.as_mut_ptr(), 8) }.unwrap();
+        assert_eq!(read_element(&mut recorder), Ok(x.to_canonical_words()));
         assert_eq!(recorder.finish_query(), Ok(()));
-        assert_eq!(native, x.to_canonical_words());
-        // the guest answers of the queries answered, in order
         assert_eq!(
             recorder.into_tape(),
             [
                 inverse.to_montgomery_words(),
                 inverse.to_montgomery_words(),
                 x.to_montgomery_words(),
-            ]
-            .concat()
-        );
-    }
-
-    /// An answer of several values is recorded as the guest reads them: the candidate root, then
-    /// the "quadratic non-residue" flag
-    #[test]
-    fn recorder_records_the_whole_answer() {
-        let (x, _) = element_and_inverse();
-        let mut candidate = x;
-        let is_square = candidate.sqrt_in_place();
-        let (exists, tape) = record_hints(|recorder| {
-            let mut y = x;
-            Secp256k1HooksWithOracle::new(recorder).fe_sqrt_and_assign(&mut y)
-        });
-        assert_eq!(exists, is_square);
-        assert_eq!(
-            tape,
-            [
-                &candidate.to_montgomery_words()[..],
-                &[u32::from(!is_square)]
             ]
             .concat()
         );

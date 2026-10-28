@@ -20,11 +20,10 @@
 ## Features
 
 - `allocator-talc` (default), `allocator-bump`, `allocator-custom`: select the runtime allocator model.
-- `boot`: enables guest boot helpers and startup; default `ram-1gb` includes it.
-- `external-startup`: suppresses the strong libc memory overrides. C embeddings
-  use `default-features = false` with `allocator-talc` and `external-startup`,
-  leaving `boot` and all `ram-*` features disabled. The embedding supplies startup
-  and initializes the allocator once; panic/OOM handlers remain available.
+- `boot`: guest boot helpers and startup; every `ram-*` feature enables it.
+- `external-startup`: drops the libc memory overrides, for C images that own startup. Use it with
+  `default-features = false` and `allocator-talc`, without `boot` or `ram-*`; the image
+  initializes the allocator once.
 - `std`: enables the small amount of standard-library glue used by `std` guest builds.
 
 ## Usage

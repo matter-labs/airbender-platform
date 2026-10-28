@@ -1,4 +1,3 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/field_ops.rs
 //! The answers of field hints: how the querier receives them, and how the oracle writes them.
 
 use super::oracle::{HintError, HintOracle};
@@ -6,30 +5,22 @@ use super::oracle::{HintError, HintOracle};
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-/// The target of a querier, whose representation of the answers the oracle writes. The
-/// representations of field elements differ between the RISC-V guest and native builds, so the
-/// answers do, and a native run that records the prover input is answered in both: it reads the
-/// answers of its own target, and records those of the guest, which the guest reads in its place.
+/// The target of a querier. Field element representations differ between the RISC-V guest and
+/// native builds, so the answers do; a recording native run reads its own and records the guest's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HintTarget {
-    /// A querier in this process, i.e. of this build (a native run)
+    /// A querier in this process (a native run)
     Native,
     /// The RISC-V guest (the proving target)
     Guest,
 }
 
 /// A value that field hints answer with. The oracle writes it straight into its destination, as
-/// the `u32` words of its representation on the target of the querier, which
-/// [`read`](Self::read) then checks to be well-formed. Whether the value is the right answer is up
-/// to the caller to check.
+/// the `u32` words of its representation on the querier's target, and [`read`](Self::read) checks
+/// it is well-formed. Whether it is the right answer is for the caller to check.
 ///
-/// # Implementations outside this crate
-///
-/// This trait is meant for the types of this crate. `write` is only there with the
-/// `alloc` feature (or in this crate's tests), so the set of items of the trait changes with a
-/// feature, which is not additive: if any crate in the build turns `alloc` on, an implementation
-/// that does not define `write` stops compiling, and one that does stops compiling without it.
-/// The trait is not sealed.
+/// Meant for this crate's types: `write` exists only with `alloc` (or in tests), so an outside
+/// implementation compiles with or without `alloc`, not both.
 pub trait HintAnswer: Sized {
     /// Receives the value from the response to the current hint query into `dst`, and validates it.
     fn read<'a, O: HintOracle>(
@@ -93,8 +84,7 @@ macro_rules! impl_hint_answer_for_tuple {
                 dst: &'a mut MaybeUninit<Self>,
             ) -> Result<&'a mut Self, HintError> {
                 let this = dst.as_mut_ptr();
-                // SAFETY: the elements are disjoint places inside `dst`, and `MaybeUninit<E>` has the
-                // layout of `E`
+                // SAFETY: the elements are disjoint places inside `dst`
                 unsafe {
                     $(
                         $element::read(

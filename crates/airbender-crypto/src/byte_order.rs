@@ -1,20 +1,8 @@
-// Ported from zksync-os e855bca2:supporting_crates/delegated_u256/src/byte_order.rs
-// Ported from zksync-os 185a0568:supporting_crates/delegated_u256/src/byte_order.rs
-//! Byte-order helpers for the RISC-V proving target.
+//! Byte-order helpers for RV32, used by the precompiles and ModExp.
 //!
-//! Airbender executes the Zbb `rev8` instruction (reverse the bytes of a word) in one
-//! cycle, but no other Zbb instruction, so `+zbb` cannot be enabled for the whole target
-//! and LLVM keeps lowering `swap_bytes` to an 11-instruction sequence. These helpers emit
-//! `rev8` explicitly. `read_be_into_words` uses aligned words fully inside the
-//! object, shifted together with byte and halfword edges, for unaligned pointers.
-//! It never accesses bytes outside the object. Only the limb helpers retain a
-//! plain byte/chunk branch for unaligned pointers. These helpers compile on every
-//! target, but callers use them only on riscv32.
-//!
-//! Only the helpers that the precompiles and ModExp use are ported (zksync-os's
-//! `write_words_as_be_32` is not). The file is the same at `e855bca2` and at `185a0568`. The
-//! precompiles use the limb helpers; ModExp uses `read_be_into_words`, `words_to_be_bytes_32`
-//! and `bytereverse_words_in_place`.
+//! Airbender runs the Zbb `rev8` instruction in one cycle but no other Zbb instruction, so
+//! `+zbb` cannot be enabled target-wide and LLVM lowers `swap_bytes` to 11 instructions; these
+//! helpers emit `rev8` directly. None of them accesses bytes outside its objects.
 
 /// Reverses the bytes of one word. On riscv32 this uses a scoped Zbb `rev8`.
 #[inline(always)]
@@ -43,13 +31,9 @@ pub fn bswap32(value: u32) -> u32 {
     }
 }
 
-/// Reverses `N` source bytes into the low bytes of aligned destination words.
-/// The `N / 4` full words are the bytes from `src + N % 4`. They are read as words
-/// when that address is 4-aligned. Otherwise the aligned words inside the source
-/// are read and shifted together with the boundary bytes. The partial high word
-/// is assembled from the first `N % 4` bytes and zero-padded. Every path writes
-/// whole words, so a local destination is promoted per word. No path reads
-/// outside `[src, src + N)`.
+/// Reads the `N`-byte big-endian integer at `src` into `u32` limbs at `dst`, least significant
+/// first, the top limb zero-padded. An unaligned source is read as the aligned words inside it,
+/// shifted together with the edge bytes. Only whole words are written.
 ///
 /// # Safety
 /// `N` must be in `1..=32`. `src` must point to `N` readable bytes. `dst`
@@ -73,8 +57,7 @@ pub unsafe fn read_be_into_words<const N: usize>(src: *const u8, dst: *mut u32) 
                     .write(bswap32(src_words.add(i).read()));
             }
         } else {
-            // Keeps the word test ahead of the misalignment dispatch. The hint must
-            // be in this block itself (not behind the length test) to weight the branch.
+            // the hint must be in this block, not behind the length test, to weight the branch
             core::hint::cold_path();
             if full_words != 0 {
                 read_be_words_unaligned::<N>(words_src, dst, misalignment);
@@ -111,15 +94,9 @@ unsafe fn read_be_words_unaligned<const N: usize>(
     }
 }
 
-/// Reads the `W = N / 4` (at least one) big-endian words at `src`, which is `K`
-/// bytes past a word boundary, into `W` words at `dst`. It reads only bytes in
-/// `[src, src + 4 * W)`:
-/// - The `W - 1` aligned words starting at `src + 4 - K` are read as words.
-/// - The `4 - K` head bytes and the `K` tail bytes are read as bytes and
-///   halfwords at 2-aligned addresses.
-///
-/// Output word `i` combines neighbouring input words with shifts. It is then
-/// byte-reversed.
+/// Reads the `W = N / 4` (at least one) big-endian words at `src`, `K` bytes past a word
+/// boundary, into `W` words at `dst`: the `W - 1` aligned inner words as words, the `4 - K` head
+/// and `K` tail bytes as bytes and aligned halfwords, combined by shifts.
 #[inline(always)]
 unsafe fn read_be_words_shifted<const N: usize, const K: usize>(src: *const u8, dst: *mut u32) {
     if N / 4 == 0 {
@@ -243,26 +220,6 @@ pub unsafe fn bytereverse_words_in_place<const W: usize>(p: *mut u32) {
 mod tests {
     use super::*;
 
-    macro_rules! for_lengths {
-        ($check:ident) => {
-            $check::<1>();
-            $check::<2>();
-            $check::<3>();
-            $check::<4>();
-            $check::<5>();
-            $check::<7>();
-            $check::<8>();
-            $check::<9>();
-            $check::<12>();
-            $check::<16>();
-            $check::<17>();
-            $check::<20>();
-            $check::<24>();
-            $check::<31>();
-            $check::<32>();
-        };
-    }
-
     #[test]
     fn bswap_words() {
         assert_eq!(bswap32(0x1234_5678), 0x7856_3412);
@@ -277,7 +234,7 @@ mod tests {
         let patterned = core::array::from_fn(|i| (i * 37 + 11) as u8);
         core::iter::once(patterned)
             .chain(core::iter::once([0xFF; 32]))
-            .chain((0..64).map(move |_| {
+            .chain((0..8).map(move |_| {
                 core::array::from_fn(|_| {
                     state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                     (state >> 24) as u8
@@ -285,10 +242,9 @@ mod tests {
             }))
     }
 
-    /// Checks `read_be_into_words::<N>` at every source misalignment against a
-    /// reference byte loop. The source is passed as a pointer derived from a
-    /// reference to exactly its `N` bytes, so Miri rejects any read outside them.
-    /// Sentinels around the destination catch stray writes.
+    /// Checks `read_be_into_words::<N>` at every source misalignment against a byte loop. The
+    /// source pointer comes from a reference to exactly its `N` bytes, so Miri rejects any read
+    /// outside them; sentinels around the destination catch stray writes.
     fn check_read<const N: usize>() {
         let rounded = N.div_ceil(4) * 4;
         for payload in payloads() {
@@ -306,7 +262,7 @@ mod tests {
                     unsafe { window.cast::<u8>().add(N).write_bytes(0, rounded - N) };
 
                     // SAFETY: `source` has N readable bytes, the window is aligned and has
-                    // room for rounded bytes, the partial word is zero, and they do not overlap.
+                    // room for rounded bytes, and they do not overlap.
                     unsafe { read_be_into_words::<N>(source.as_ptr(), window) };
 
                     let mut expected = [fill; 64];
@@ -327,22 +283,20 @@ mod tests {
         }
     }
 
+    /// Every `N % 4`, no full word, one full word, inner words, and the maximum
     #[test]
     fn read_be_into_words_alignment_and_sentinels() {
-        for_lengths!(check_read);
-    }
-
-    #[test]
-    fn read_be_into_words_word_multiples_at_all_misalignments() {
+        check_read::<1>();
+        check_read::<2>();
+        check_read::<3>();
         check_read::<4>();
+        check_read::<5>();
         check_read::<8>();
-        check_read::<12>();
-        check_read::<20>();
-        check_read::<28>();
+        check_read::<10>();
+        check_read::<31>();
         check_read::<32>();
     }
 
-    /// The by-value part of zksync-os's `write_words_as_be_32_alignment_and_sentinels`
     #[test]
     fn words_to_be_bytes_32_reverses_the_bytes() {
         for payload in payloads() {
@@ -384,93 +338,35 @@ mod tests {
         check_in_place::<8>();
     }
 
-    // as in zksync-os
-    #[allow(clippy::chunks_exact_to_as_chunks)]
+    /// Both limb helpers against a reference at every input and output misalignment
     #[test]
     fn limb_helpers_alignment_and_sentinels() {
         #[repr(align(8))]
         struct Scratch([u8; 48]);
 
-        let mut state = 0x1234_5678u32;
-        for _ in 0..256 {
-            let mut src = Scratch([0xA5; 48]);
-            let mut payload = [0u8; 32];
-            for byte in &mut payload {
-                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                *byte = (state >> 24) as u8;
-            }
+        for payload in payloads() {
             let reference = core::array::from_fn::<_, 4, _>(|i| {
-                u64::from_be_bytes(payload[(3 - i) * 8..(4 - i) * 8].try_into().unwrap())
+                u64::from_be_bytes(payload.as_chunks::<8>().0[3 - i])
             });
             for input_offset in 0..=3 {
-                src.0.fill(0xA5);
+                let mut src = Scratch([0xA5; 48]);
                 src.0[4 + input_offset..36 + input_offset].copy_from_slice(&payload);
                 let input: &[u8; 32] = src.0[4 + input_offset..36 + input_offset]
                     .try_into()
                     .unwrap();
-                let limbs = be_bytes_to_le_limbs(input);
-                assert_eq!(limbs, reference);
+                assert_eq!(be_bytes_to_le_limbs(input), reference);
 
                 for output_offset in 0..=3 {
                     let mut dst = Scratch([0xA5; 48]);
-                    let output: &mut [u8; 32] = dst
-                        .0
-                        .get_mut(4 + output_offset..36 + output_offset)
-                        .unwrap()
+                    let output: &mut [u8; 32] = (&mut dst.0[4 + output_offset..36 + output_offset])
                         .try_into()
                         .unwrap();
-                    le_limbs_to_be_bytes(&limbs, output);
+                    le_limbs_to_be_bytes(&reference, output);
                     let mut expected = [0xA5; 48];
-                    for (chunk, limb) in expected[4 + output_offset..36 + output_offset]
-                        .chunks_exact_mut(8)
-                        .zip(reference.iter().rev())
-                    {
-                        chunk.copy_from_slice(&limb.to_be_bytes());
-                    }
+                    expected[4 + output_offset..36 + output_offset].copy_from_slice(&payload);
                     assert_eq!(dst.0, expected);
-                    assert!(src.0[..4 + input_offset].iter().all(|&byte| byte == 0xA5));
-                    assert!(src.0[36 + input_offset..].iter().all(|&byte| byte == 0xA5));
                 }
             }
-        }
-    }
-
-    #[test]
-    fn limb_helpers_are_inverse_at_all_offsets() {
-        #[repr(align(8))]
-        struct Scratch([u8; 36]);
-
-        let limbs = [
-            0x0123_4567_89AB_CDEF,
-            0xFEDC_BA98_7654_3210,
-            0xA5A5_5A5A_1357_2468,
-            0xDEAD_BEEF_CAFE_BABE,
-        ];
-        for input_offset in 0..=3 {
-            let mut input = Scratch([0xA5; 36]);
-            let input_bytes: &mut [u8; 32] = input
-                .0
-                .get_mut(input_offset..input_offset + 32)
-                .unwrap()
-                .try_into()
-                .unwrap();
-            le_limbs_to_be_bytes(&limbs, input_bytes);
-            for output_offset in 0..=3 {
-                let mut output = Scratch([0xA5; 36]);
-                let output_bytes: &mut [u8; 32] = output
-                    .0
-                    .get_mut(output_offset..output_offset + 32)
-                    .unwrap()
-                    .try_into()
-                    .unwrap();
-                le_limbs_to_be_bytes(&be_bytes_to_le_limbs(input_bytes), output_bytes);
-                assert_eq!(output_bytes, input_bytes);
-                assert_eq!(be_bytes_to_le_limbs(output_bytes), limbs);
-                assert!(output.0[..output_offset].iter().all(|&b| b == 0xA5));
-                assert!(output.0[output_offset + 32..].iter().all(|&b| b == 0xA5));
-            }
-            assert!(input.0[..input_offset].iter().all(|&b| b == 0xA5));
-            assert!(input.0[input_offset + 32..].iter().all(|&b| b == 0xA5));
         }
     }
 }

@@ -95,13 +95,13 @@ impl Scalar {
         }
     }
 
-    /// Native safegcd inversion, or the existing addition chain on RV32; zero for zero
+    /// The inverse in variable time (safegcd on 64-bit, else the addition chain); zero for zero
     #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
     pub fn invert_vartime(&self) -> Self {
         #[cfg(target_pointer_width = "32")]
         {
-            // The 64-bit safegcd helper is native-only; the existing addition
-            // chain uses Airbender-supported unsigned/delegated arithmetic.
+            // `field_inverse` needs 64-bit words; the addition chain uses only arithmetic that
+            // Airbender proves
             let mut result = *self;
             result.invert_in_place();
             result

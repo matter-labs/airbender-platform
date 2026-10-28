@@ -1,6 +1,4 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bls12_381/pairing.rs
-// Ported from zksync-os e855bca2:basic_system/tests/bls_pairing_hints.rs
-//! The BLS12-381 pairing check (EIP-2537), from the EIP-2537 encoding of the pairs.
+//! The BLS12-381 pairing check (EIP-2537).
 
 use super::*;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
@@ -15,17 +13,13 @@ use super::super::unavailable as curve_hints;
 /// The size of the EIP-2537 encoding of a pair of the pairing check: a G1 point and a G2 point
 pub const BLS12_381_PAIR_LEN: usize = G1_SERIALIZATION_LEN + G2_SERIALIZATION_LEN;
 
-/// The BLS12-381 pairing check (EIP-2537) of the pairs of `input`, each the EIP-2537 encoding of
-/// a G1 point and a G2 point: whether the product of the pairings is the identity. Fails unless
-/// every point is canonical, on its curve, and in the subgroup, checked point by point while
-/// the pairs are parsed (so a later point fails after the hints of the earlier ones). The
-/// wrapper keeps the gas, the size of the input (a non-zero multiple of 384), and the encoding
-/// of the result.
+/// Whether the product of the pairings of the pairs of `input` (a G1 and a G2 point each) is the
+/// identity. Fails unless every point is canonical, on its curve and in the subgroup, checked
+/// point by point while parsing.
 ///
 /// With an oracle, the subgroup checks take checked hinted divisions, and the final
-/// exponentiation is replaced by a residue witness check, or, for a product the prover claims
-/// not to be the identity, takes a checked hinted inverse. A wrong hint panics. The pairs go
-/// into a vector of `allocator`.
+/// exponentiation is replaced by a residue witness check or a checked hinted inverse. A wrong
+/// hint panics. The pairs go into a vector of `allocator`.
 pub fn bls12_381_pairing_check<A: core::alloc::Allocator + Clone, O: HintOracle>(
     input: &[[u8; BLS12_381_PAIR_LEN]],
     allocator: A,
@@ -65,7 +59,7 @@ fn pairing_product_is_identity<O: HintOracle>(
         .0
         .is_one();
     };
-    // Prepare only the current bounded chunk, rather than retaining all of its large line tables.
+    // the owned Miller loop prepares the G2 lines a chunk at a time
     let g1 = || pairs.iter().map(|pair| pair.g1);
     let g2 = || pairs.iter().map(|pair| pair.g2);
     match curve_hints::bls12_381_pairing_residue_witness(oracle, pairs) {
@@ -93,7 +87,13 @@ fn pairing_product_is_identity<O: HintOracle>(
 mod tests {
     use super::super::tests as bls_tests;
     use super::*;
-    use crate::hints::NoHints;
+    use crate::hints::test_support::{
+        lying_oracle, non_identity_claiming_oracle, InProcessMemoryOracle,
+    };
+    use crate::hints::{
+        answer_query, read_field_hint_request, record_hints, FieldHintOp, HintAnswer, HintTarget,
+        NoHints, QuerierMemory,
+    };
     use std::alloc::Global;
     use std::vec;
     use std::vec::Vec;
@@ -108,159 +108,67 @@ mod tests {
             .collect()
     }
 
-    // from zksync-os e855bca2:basic_system/tests/bls_pairing_hints.rs
-    mod hints {
-        use super::*;
-        use crate::ark_ff::{BigInteger, One};
-        use crate::hints::test_support::InProcessMemoryOracle;
-        use crate::hints::{
-            answer_query, not_identity_claim, read_field_hint_request, FieldHintOp, HintAnswer,
-            HintTarget, QuerierMemory,
-        };
+    fn check<O: HintOracle>(pairs: &[(G1Affine, G2Affine)], oracle: Option<&mut O>) -> bool {
+        let input = encode(pairs);
+        bls12_381_pairing_check(input.as_chunks().0, Global, oracle).unwrap()
+    }
 
-        /// zksync-os's `PairingOracle`: honest, but for the answer of the pairing residue witness,
-        /// which can be corrupted, a claim of a non-identity (which takes the exact final
-        /// exponentiation), or a false claim of the identity
-        fn pairing_oracle(
-            corrupt: bool,
-            force_exact: bool,
-            false_identity: bool,
-        ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
-            InProcessMemoryOracle::new(move |id: u32, word: usize, memory: &dyn QuerierMemory| {
-                let (op, _, _) = read_field_hint_request(memory, word).unwrap();
-                let mut native = Vec::new();
-                if op == FieldHintOp::Bls12381PairingResidueWitness as u32 {
-                    let mut answer = if false_identity {
-                        let mut words = Vec::new();
-                        (true, (Fq12::one(), Fq6::one())).write(HintTarget::Native, &mut words);
-                        words
-                    } else if force_exact {
-                        // SAFETY: the handler of an `InProcessMemoryOracle` runs during the
-                        // query, with the memory of this process, where the request and its
-                        // operand are live, of the types of the op
-                        unsafe { not_identity_claim(memory, word) }
-                    } else {
-                        let mut result = Vec::new();
-                        // SAFETY: as above
-                        assert!(
-                            unsafe { answer_query(id, word, memory, Some(&mut result), None) }
-                                .unwrap()
-                        );
-                        result
-                    };
-                    if corrupt {
-                        answer[1] ^= 1;
-                    }
-                    native.extend(answer);
-                } else {
-                    // SAFETY: as above
-                    assert!(
-                        unsafe { answer_query(id, word, memory, Some(&mut native), None) }.unwrap()
-                    );
-                }
-                native
-            })
-        }
-
-        fn fq(input: Fq, bytes: &mut Vec<u8>) {
-            bytes.extend([0u8; 16]);
-            // the 48 bytes of the element (the integers of the delegated fields of the test
-            // build are 64 bytes, those of zksync-os's build 48)
-            let be = input.into_bigint().to_bytes_be();
-            bytes.extend(&be[be.len() - 48..]);
-        }
-
-        fn input(pairs: &[(G1Affine, G2Affine)]) -> Vec<u8> {
-            let mut bytes = Vec::new();
-            for (p, q) in pairs {
-                if p.infinity {
-                    bytes.extend([0u8; 128]);
-                } else {
-                    fq(p.x, &mut bytes);
-                    fq(p.y, &mut bytes);
-                }
-                if q.infinity {
-                    bytes.extend([0u8; 256]);
-                } else {
-                    for value in [q.x.c0, q.x.c1, q.y.c0, q.y.c1] {
-                        fq(value, &mut bytes);
-                    }
-                }
+    /// An oracle that is honest but for a false identity claim, with the witness `(1, 1)`
+    fn false_identity_oracle(
+    ) -> InProcessMemoryOracle<impl FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> {
+        InProcessMemoryOracle::new(|id: u32, word: usize, memory: &dyn QuerierMemory| {
+            let (op, _, _) = read_field_hint_request(memory, word).unwrap();
+            let mut answer = Vec::new();
+            if op == FieldHintOp::Bls12381PairingResidueWitness as u32 {
+                (true, (Fq12::one(), Fq6::one())).write(HintTarget::Native, &mut answer);
+            } else {
+                // SAFETY: the handler runs during the query, in this process, while the request
+                // and its operand are live
+                assert!(
+                    unsafe { answer_query(id, word, memory, Some(&mut answer), None) }.unwrap()
+                );
             }
-            bytes
-        }
+            answer
+        })
+    }
 
-        /// The result of the pairing check of `pairs` with the oracle's advice or without
-        fn execute<const ADVICE: bool>(
-            pairs: &[(G1Affine, G2Affine)],
-            corrupt: bool,
-            exact: bool,
-            false_identity: bool,
-        ) -> bool {
-            let mut oracle = pairing_oracle(corrupt, exact, false_identity);
-            let input = input(pairs);
-            let (input, []) = input.as_chunks::<BLS12_381_PAIR_LEN>() else {
-                panic!("whole pairs")
-            };
-            bls12_381_pairing_check(input, Global, ADVICE.then_some(&mut oracle)).unwrap()
-        }
-
-        #[test]
-        fn arbitrary_pairing_hints_match_exact_pairing_and_handle_infinity() {
-            let (p, q) = (G1Affine::generator(), G2Affine::generator());
-            let p5: G1Affine = (p * Fr::from(5u64)).into();
-            let q5: G2Affine = (q * Fr::from(5u64)).into();
-            for pairs in [
-                vec![(p, q)],
-                vec![(p, q), (-p, q)],
-                vec![(G1Affine::identity(), q)],
-                vec![(p, G2Affine::identity())],
-                vec![(p, q); 5],
-                vec![(p5, q), (-p, q5)],
-                vec![(p, q5)],
-                vec![(p5, q), (-p, q), (-p, q), (-p, q), (-p, q), (-p, q)],
-            ] {
-                let expected = execute::<false>(&pairs, false, false, false);
-                assert_eq!(execute::<true>(&pairs, false, false, false), expected);
-                assert_eq!(execute::<true>(&pairs, false, true, false), expected);
-            }
-        }
-
-        #[test]
-        #[should_panic(expected = "residue witness")]
-        fn corrupt_identity_witness_is_rejected() {
-            let (p, q) = (G1Affine::generator(), G2Affine::generator());
-            execute::<true>(&[(p, q), (-p, q)], true, false, false);
-        }
-
-        #[test]
-        #[should_panic(expected = "inverse hint is wrong")]
-        fn corrupt_nonidentity_inverse_is_rejected() {
-            execute::<true>(
-                &[(G1Affine::generator(), G2Affine::generator())],
-                true,
-                false,
-                false,
-            );
-        }
-
-        #[test]
-        #[should_panic(expected = "residue witness")]
-        fn a_false_identity_claim_cannot_accept_a_nonidentity_pairing() {
-            execute::<true>(
-                &[(G1Affine::generator(), G2Affine::generator())],
-                false,
-                false,
-                true,
+    /// An oracle that claims every product not to be the identity cannot change the result
+    #[test]
+    fn non_identity_claims_take_the_exact_pairing() {
+        let (p, q) = (G1Affine::generator(), G2Affine::generator());
+        for (pairs, expected) in [(vec![(p, q)], false), (vec![(p, q), (-p, q)], true)] {
+            assert_eq!(
+                check(&pairs, Some(&mut non_identity_claiming_oracle())),
+                expected
             );
         }
     }
 
-    // new tests
+    #[test]
+    #[should_panic(expected = "residue witness")]
+    fn corrupt_identity_witness_is_rejected() {
+        let (p, q) = (G1Affine::generator(), G2Affine::generator());
+        let mut lying = lying_oracle(&[FieldHintOp::Bls12381PairingResidueWitness]);
+        check(&[(p, q), (-p, q)], Some(&mut lying));
+    }
 
-    /// With and without the hints of an honest oracle the results are the same: for products
-    /// that are the identity and that are not, with points at infinity, points of the curves
-    /// off the subgroups, and encodings that are mostly not of points of the curves
+    #[test]
+    #[should_panic(expected = "inverse hint is wrong")]
+    fn corrupt_nonidentity_inverse_is_rejected() {
+        let (p, q) = (G1Affine::generator(), G2Affine::generator());
+        let mut lying = lying_oracle(&[FieldHintOp::Bls12381PairingResidueWitness]);
+        check(&[(p, q)], Some(&mut lying));
+    }
+
+    #[test]
+    #[should_panic(expected = "residue witness")]
+    fn a_false_identity_claim_cannot_accept_a_nonidentity_pairing() {
+        let (p, q) = (G1Affine::generator(), G2Affine::generator());
+        check(&[(p, q)], Some(&mut false_identity_oracle()));
+    }
+
+    /// Products that are and are not the identity, points at infinity, points off the subgroups,
+    /// and encodings that are mostly not of points of the curves
     #[test]
     fn advice_matches_no_advice() {
         use crate::precompiles::{HintedCases, HINT_HEAVY_CASES};
@@ -302,9 +210,6 @@ mod tests {
         hinted_cases.check();
     }
 
-    /// The guest, which reads its answers off the recorded tape, gets the same result and takes
-    /// the whole tape and no more. The bls12-381 elements of test builds have the representation
-    /// of the guest, so the tape is also the answers this process reads.
     #[test]
     fn recorded_tape_replays() {
         let (p, q) = (G1Affine::generator(), G2Affine::generator());
@@ -331,25 +236,24 @@ mod tests {
         }
     }
 
-    /// The subgroup checks run point by point while the pairs are parsed, so a point off the
-    /// subgroup is rejected after the hints of the points before it, and there is no residue
-    /// witness
+    /// The subgroup checks run point by point while parsing, so a point off the subgroup is
+    /// rejected after the hints of the points before it, and no residue witness is asked
     #[test]
     fn subgroup_hints_are_asked_while_parsing() {
         let (p, q) = (G1Affine::generator(), G2Affine::generator());
         let off_subgroup = bls_tests::g1_off_subgroup(&[7; 48]);
         let input = encode(&[(p, q), (off_subgroup, q)]);
-        let (result, tape) = crate::hints::record_hints(|oracle| {
+        let (result, tape) = record_hints(|oracle| {
             bls12_381_pairing_check(input.as_chunks().0, Global, Some(oracle))
         });
         assert_eq!(result, Err(Bls12Error::NotInSubgroup));
         let g1_tape = |point: G1Affine| {
-            crate::hints::record_hints(|oracle| {
+            record_hints(|oracle| {
                 parse_g1_with_subgroup_check_with_oracle(&bls_tests::write_g1(point), Some(oracle))
             })
             .1
         };
-        let (_, q_tape) = crate::hints::record_hints(|oracle| {
+        let (_, q_tape) = record_hints(|oracle| {
             parse_g2_with_subgroup_check_with_oracle(&bls_tests::write_g2(q), Some(oracle))
         });
         let parsed = [g1_tape(p), q_tape, g1_tape(off_subgroup)];

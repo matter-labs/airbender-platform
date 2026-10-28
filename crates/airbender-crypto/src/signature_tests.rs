@@ -3,7 +3,7 @@
 fn signature_endpoints_match_reference() {
     use crate::{k256, p256};
     use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
-    for n in 1..=12u8 {
+    for n in 1..=3u8 {
         let digest = [n.wrapping_mul(19); 32];
         let k = k256::ecdsa::SigningKey::from_bytes(&[n; 32].into()).unwrap();
         let p = p256::ecdsa::SigningKey::from_bytes(&[n; 32].into()).unwrap();

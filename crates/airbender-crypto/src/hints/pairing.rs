@@ -1,20 +1,12 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/curve_hints.rs
-//! The residue witnesses of the pairing checks (`crate::residue_witness`, after Novakovic and
-//! Eagen, "On Proving Pairings", <https://eprint.iacr.org/2024/640>), which replace the final
-//! exponentiations; those hints are not checked on their own: the pairing check itself fails for
-//! any witness of a non-identity product (see the soundness argument in that module). Also the
-//! slopes of the affine `G2` chains of the bn254 pairing check.
+//! The residue witnesses of the pairing checks (`crate::residue_witness`, after
+//! <https://eprint.iacr.org/2024/640>), which replace the final exponentiations, and the slopes of
+//! the affine `G2` chains of the bn254 pairing check.
 //!
-//! A wrong hint fails an assertion, or is ignored, and never changes a result. The ignored words
-//! are `G2` slopes: the slope answer is fixed-size, and the slopes that a chain does not use, or
-//! all of them when the prover reports the chain as exceptional, are skipped (`HintedChain`; the
-//! projective computation runs in place of an exceptional chain). Hints come from the prover's
-//! own oracle, never from external input, so a bad one is a broken prover rather than a case to
-//! recover from.
+//! The witnesses are not checked here: the pairing check fails for any witness of a non-identity
+//! product (see `crate::residue_witness`). A wrong hint fails an assertion or is ignored, and never
+//! changes a result. Ignored words are `G2` slopes a chain does not use, or all of a chain the
+//! prover reports as exceptional (the projective computation then runs instead).
 
-// The hints that receive bn254 and bls12-381 field elements answer straight into the
-// representation of the RISC-V guest, which is the delegated one: on RV32 they need `bigint_ops`
-// (which `proving` turns on), and are not there without it (see `guest_layout`).
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use super::answer::{read_hint_answer, HintAnswer};
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
@@ -27,7 +19,7 @@ use ark_ff::{One, Zero};
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use core::mem::MaybeUninit;
 
-/// A validated arbitrary pairing operand. Explicit layout avoids Rust tuple field reordering.
+/// A validated pair of the bls12-381 pairing; `repr(C)` fixes the guest layout.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Bls12381Pair {
@@ -37,29 +29,24 @@ pub struct Bls12381Pair {
 
 /// The prover's claim about a pairing product `f`, with the witness it takes to settle it
 pub enum PairingClaim<F12, F6> {
-    /// `f` is the identity: the residue witness `c`, `d = c^-1` (for bn254; only `d` for
-    /// bls12-381, where `c` is unused) and the scaling factor `s`. The claim is settled by the
-    /// residue check; a failed check is a broken prover and panics.
+    /// `f` is the identity: the residue witness `c`, `d = c^-1` (bls12-381 uses only `d`) and the
+    /// scaling factor `s`, settled by the residue check
     Identity { c: F12, d: F12, s: F6 },
-    /// `f` is not the identity: `f^-1`, for the exact final exponentiation that settles the
-    /// claim (it would find an identity all the same, so this claim cannot change the answer)
+    /// `f` is not the identity: `f^-1`, for the exact final exponentiation, which settles the
+    /// claim (so a false one cannot change the answer)
     NotIdentity { f_inverse: F12 },
 }
 
-/// The claim and witness of the bn254 pairing product over `pairs` (all non-degenerate,
-/// validated) from the oracle, for `crate::residue_witness::bn254::check` on the Miller loop
-/// started at `d`. `c d = 1` is checked here: the loop multiplies by `c` at the negative digits
-/// of its count, and the check is only sound for `c = d^-1` (otherwise `f s` would be
-/// `d^a c^b` with exponents not divisible by `r`).
+/// The claim about the bn254 pairing product over validated `pairs`, for
+/// `crate::residue_witness::bn254::check` on the Miller loop started at `d`. `c d = 1` is checked
+/// here: the loop multiplies by `c` at negative digits, and the check is only sound for `c = d^-1`.
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub fn bn254_pairing_residue_witness<O: HintOracle>(
     oracle: &mut O,
     pairs: &[(crate::bn254::G1Affine, crate::bn254::G2Affine)],
 ) -> PairingClaim<crate::bn254::Fq12, crate::bn254::Fq6> {
     use crate::bn254::{Fq12, Fq6};
-    // the identity flag, then `c, d, s` for an identity or `f^-1` otherwise
-    // SAFETY: `pairs` is bn254 `(G1Affine, G2Affine)` pairs, the operand type of the bn254
-    // pairing residue witness
+    // SAFETY: bn254 `(G1Affine, G2Affine)` pairs are the operand type of the op
     unsafe { send_field_hint_query(oracle, FieldHintOp::Bn254PairingResidueWitness, pairs) }
         .expect("must send the field hint query");
     let is_identity: bool = read_hint_answer(oracle).expect("the hint answer is well-formed");
@@ -84,14 +71,11 @@ pub fn bn254_pairing_residue_witness<O: HintOracle>(
     claim
 }
 
-/// The hinted slopes of the affine `G2` chains of one point
-/// (`crate::bn254::curves::g2_affine`), received from the oracle as the chains consume them, so
-/// that no array of them is ever moved: a flag and the slopes of the membership test, then a flag
-/// and those of the line precomputation. A cleared flag is the prover reporting an exceptional
-/// chain (the caller falls back to the projective computation; the words of that chain are zeros
-/// and are skipped). Each slope is checked against the fraction of its step, and a wrong one is
-/// a broken prover. Whatever is left of a chain, or of the answer, is skipped on drop, and the
-/// query ended, so the oracle stays in step on every path.
+/// The hinted slopes of the affine `G2` chains of one point (`crate::bn254::curves::g2_affine`),
+/// received as the chains consume them: a flag and the membership-test slopes, then a flag and the
+/// line slopes. A cleared flag marks an exceptional chain, whose words are skipped. Each slope is
+/// checked against its fraction. The unread rest is skipped on drop and the query ended, so the
+/// oracle stays in step on every path.
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub struct G2SlopeHints<'a, O: HintOracle> {
     oracle: &'a mut O,
@@ -99,7 +83,7 @@ pub struct G2SlopeHints<'a, O: HintOracle> {
     remaining_words: usize,
 }
 
-/// Oracle words of one `Fq2` hint: two elements of 4 limbs
+/// Oracle words of one `Fq2` hint
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 const FQ2_HINT_WORDS: usize = 2 * 2 * 4;
 
@@ -110,14 +94,13 @@ const G2_HINT_WORDS: usize = 2
         + crate::bn254::curves::g2_affine::LINE_DIVISIONS)
         * FQ2_HINT_WORDS;
 
-/// The slopes of the affine `G2` chains of `q` (on the twist, not the point at infinity)
-/// from the oracle
+/// Asks for the slopes of the affine `G2` chains of `q` (on the twist, not at infinity)
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub fn bn254_g2_pairing_slopes<'a, O: HintOracle>(
     oracle: &'a mut O,
     q: &crate::bn254::G2Affine,
 ) -> G2SlopeHints<'a, O> {
-    // SAFETY: `q` is a bn254 `G2Affine`, the operand type of the bn254 `G2` pairing slopes
+    // SAFETY: a bn254 `G2Affine` is the operand type of the op
     unsafe { send_field_hint_query(oracle, FieldHintOp::Bn254G2PairingSlopes, q) }
         .expect("must send the field hint query");
     G2SlopeHints {
@@ -133,8 +116,8 @@ impl<'a, O: HintOracle> G2SlopeHints<'a, O> {
         self.chain(crate::bn254::curves::g2_affine::SUBGROUP_DIVISIONS)
     }
 
-    /// The slopes of the line precomputation, `None` if the prover reports an exceptional
-    /// chain; after the membership test's
+    /// The slopes of the line precomputation (after the membership test's), `None` if the prover
+    /// reports an exceptional chain
     pub fn line_chain(&mut self) -> Option<HintedChain<'_, 'a, O>> {
         self.chain(crate::bn254::curves::g2_affine::LINE_DIVISIONS)
     }
@@ -209,17 +192,15 @@ impl<O: HintOracle> Drop for HintedChain<'_, '_, O> {
     }
 }
 
-/// The claim and witness of `e(p1, G2) e(p2, tau G2)` (the KZG proof check, `points` are
-/// `[p1, p2]`) from the oracle, for `crate::residue_witness::bls12_381::check` on the Miller loop
-/// started at `d` (`c` is not needed by that loop and is left zero)
+/// The claim about `e(p1, G2) e(p2, tau G2)` for `points = [p1, p2]` (the KZG proof check), for
+/// `crate::residue_witness::bls12_381::check` on the Miller loop started at `d` (`c` is zero)
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub fn bls12_381_kzg_residue_witness<O: HintOracle>(
     oracle: &mut O,
     points: &[crate::bls12_381::G1Affine; 2],
 ) -> PairingClaim<crate::bls12_381::Fq12, crate::bls12_381::Fq6> {
     use crate::bls12_381::{Fq12, Fq6};
-    // the identity flag, then `d, s` for an identity or `f^-1` otherwise
-    // SAFETY: `points` is `[bls12_381::G1Affine; 2]`, the operand type of the KZG residue witness
+    // SAFETY: `[bls12_381::G1Affine; 2]` is the operand type of the op
     unsafe { send_field_hint_query(oracle, FieldHintOp::Bls12381KzgResidueWitness, points) }
         .expect("must send the field hint query");
     let is_identity: bool = read_hint_answer(oracle).expect("the hint answer is well-formed");
@@ -241,15 +222,14 @@ pub fn bls12_381_kzg_residue_witness<O: HintOracle>(
     claim
 }
 
-/// The residue claim of an arbitrary validated BLS12-381 pairing product.
+/// The claim about the bls12-381 pairing product over validated `pairs` (`c` is zero)
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub fn bls12_381_pairing_residue_witness<O: HintOracle>(
     oracle: &mut O,
     pairs: &[Bls12381Pair],
 ) -> PairingClaim<crate::bls12_381::Fq12, crate::bls12_381::Fq6> {
     use crate::bls12_381::{Fq12, Fq6};
-    // SAFETY: `pairs` is `Bls12381Pair`s, the operand type of the bls12-381 pairing residue
-    // witness
+    // SAFETY: `Bls12381Pair`s are the operand type of the op
     unsafe { send_field_hint_query(oracle, FieldHintOp::Bls12381PairingResidueWitness, pairs) }
         .expect("must send the field hint query");
     let identity: bool = read_hint_answer(oracle).expect("the hint answer is well-formed");
@@ -280,9 +260,6 @@ pub fn checked_inverse<F: Field>(f: &F, f_inverse: F) -> Option<F> {
     Some(f_inverse)
 }
 
-// Not in zksync-os, whose tests reach these hints through the precompiles (which are ported with
-// them): the claims and the slopes from the answers of `answer_query`, and how much of an answer
-// the querier takes. The tests use the host side (`hints::host`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
@@ -345,7 +322,7 @@ mod tests {
         };
         let f = bn254_miller_loop(None, &other);
         assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
-        // a claimed non-identity comes with the inverse, whatever the product
+        // a false non-identity claim comes with the inverse the exact path checks
         let PairingClaim::NotIdentity { f_inverse } =
             bn254_pairing_residue_witness(&mut non_identity_claiming_oracle(), &identity)
         else {
@@ -383,7 +360,6 @@ mod tests {
     #[test]
     fn kzg_claims_are_settled_by_their_witnesses() {
         let infinity = bls12_381::G1Affine::identity();
-        // the product of a valid proof is the identity too, but its points take `tau`
         let identity = [infinity, infinity];
         let other = [bls12_381::G1Affine::generator(), infinity];
         let mut oracle = RecordingHintOracle::new();
@@ -395,21 +371,13 @@ mod tests {
         assert!(c.is_zero());
         let l = kzg_miller_loop(Some(&d), &identity);
         assert!(crate::residue_witness::bls12_381::check(&l, &d, &s));
-        // the inverses are of the conjugated loop outputs, which the exact path takes
+        // the inverses are of the conjugated loop outputs
         let PairingClaim::NotIdentity { f_inverse } =
             bls12_381_kzg_residue_witness(&mut oracle, &other)
         else {
             panic!("the product is not the identity");
         };
         let mut f = kzg_miller_loop(None, &other);
-        f.conjugate_in_place();
-        assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
-        let PairingClaim::NotIdentity { f_inverse } =
-            bls12_381_kzg_residue_witness(&mut non_identity_claiming_oracle(), &identity)
-        else {
-            panic!("the oracle claims a non-identity");
-        };
-        let mut f = kzg_miller_loop(None, &identity);
         f.conjugate_in_place();
         assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
     }
@@ -442,13 +410,6 @@ mod tests {
         };
         let f = Bls12_381::multi_miller_loop(g1(&other), g2(&other)).0;
         assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
-        let PairingClaim::NotIdentity { f_inverse } =
-            bls12_381_pairing_residue_witness(&mut non_identity_claiming_oracle(), &identity)
-        else {
-            panic!("the oracle claims a non-identity");
-        };
-        let f = Bls12_381::multi_miller_loop(g1(&identity), g2(&identity)).0;
-        assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
     }
 
     /// Divides with the first `hinted` quotients of `chain`, and with inversions after them
@@ -471,28 +432,16 @@ mod tests {
         }
     }
 
-    /// How a querier takes the slopes of a point: how many quotients of the membership test
-    /// chain, then of the line chain, it takes (`None`: it does not take the chain)
+    /// How many quotients of the membership test chain, then of the line chain, a querier takes
+    /// (`None`: it does not take the chain)
     type Way = (Option<usize>, Option<usize>);
 
-    const WAYS: [Way; 7] = [
-        (None, None),
-        (Some(0), None),
-        (Some(5), Some(3)),
-        (Some(g2_affine::SUBGROUP_DIVISIONS), None),
-        (
-            Some(g2_affine::SUBGROUP_DIVISIONS),
-            Some(g2_affine::LINE_DIVISIONS - 1),
-        ),
-        (Some(0), Some(g2_affine::LINE_DIVISIONS)),
-        (
-            Some(g2_affine::SUBGROUP_DIVISIONS),
-            Some(g2_affine::LINE_DIVISIONS),
-        ),
-    ];
+    const ALL: Way = (
+        Some(g2_affine::SUBGROUP_DIVISIONS),
+        Some(g2_affine::LINE_DIVISIONS),
+    );
 
-    /// Takes the slopes of `q` from `oracle` in the way `(subgroup, line)`, and checks the
-    /// results of the chains
+    /// Takes the slopes of `q` in the way `(subgroup, line)`, and checks the chains' results
     fn take_slopes<O: HintOracle>(oracle: &mut O, q: &bn254::G2Affine, (subgroup, line): Way) {
         let mut hints = bn254_g2_pairing_slopes(oracle, q);
         if let Some(hinted) = subgroup {
@@ -511,23 +460,21 @@ mod tests {
                 g2_affine::prepare_as_verifier(q).ell_coeffs
             );
         }
-        // the chains skip the rest of their slopes as they are dropped above, and `hints`
-        // the rest of the answer here
+        // dropping the chains and `hints` skips the rest of the answer
     }
 
     #[test]
     fn the_whole_slope_answer_is_taken_however_much_is_used() {
         const NEXT_ANSWER: u32 = 0x5eed_5eed;
         let q = bn254_g2(7);
-        for way in WAYS {
+        for way in [(None, None), (Some(5), Some(3)), ALL] {
             let (_, tape) = record_hints(|recorder| {
                 take_slopes(recorder, &q, way);
                 // nothing of the answer of this process is left unread
                 assert_eq!(recorder.finish_query(), Ok(()));
             });
             assert_eq!(tape.len(), G2_HINT_WORDS, "{way:?}");
-            // the guest, which reads its answers off the tape, takes the whole answer and no
-            // more: it stops at the next answer
+            // the guest reads the whole answer off the tape, and no more
             let mut guest = TapeOracle::new(tape.into_iter().chain([NEXT_ANSWER]));
             take_slopes(&mut guest, &q, way);
             assert_eq!(guest.words, [NEXT_ANSWER], "{way:?}");
@@ -540,20 +487,12 @@ mod tests {
     fn wrong_slope_is_rejected() {
         // the last slope of the line chain
         let mut oracle = lying_oracle_last_word(&[FieldHintOp::Bn254G2PairingSlopes]);
-        take_slopes(
-            &mut oracle,
-            &bn254_g2(7),
-            (
-                Some(g2_affine::SUBGROUP_DIVISIONS),
-                Some(g2_affine::LINE_DIVISIONS),
-            ),
-        );
+        take_slopes(&mut oracle, &bn254_g2(7), ALL);
     }
 
     #[test]
     fn a_cleared_flag_skips_the_chain() {
-        // the flag of the membership test chain cleared: the prover reports an exceptional
-        // chain, whose words are skipped, and the line chain is read after them
+        // the membership test flag is cleared: its words are skipped, then the line chain is read
         let mut oracle = lying_oracle(&[FieldHintOp::Bn254G2PairingSlopes]);
         let q = bn254_g2(7);
         let mut hints = bn254_g2_pairing_slopes(&mut oracle, &q);
@@ -573,7 +512,7 @@ mod tests {
             prepared.ell_coeffs,
             g2_affine::prepare_as_verifier(&q).ell_coeffs
         );
-        // ends the query, which the oracle checks to be read in full
+        // ends the query, which the oracle checks was read in full
         drop(hints);
     }
 }

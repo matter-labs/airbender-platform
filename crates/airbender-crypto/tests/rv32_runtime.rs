@@ -1,10 +1,9 @@
-//! Host harness for the real C guest, invoked by `crates/airbender-crypto-c/tests/rv32-runtime.py`.
+//! Host harness for the real C guest, run by `crates/airbender-crypto-c/tests/rv32-runtime.py`.
 //!
-//! The guest reads a scenario word, then, in `csr-oracle` builds, the hint answers that a native
-//! build of the same fixture recorded (the tape). airbender-host's replay ignores the guest's
-//! query writes and answers each CSR read with the next input word, so the tape must hold exactly
-//! the words that the guest reads, in order, and a changed word must make
-//! the guest fail or leave every result as it was.
+//! The guest reads a scenario word, then (in `csr-oracle` builds) the hint tape that a native build
+//! of the same fixture recorded. Each CSR read takes the next input word, so the tape must be
+//! exactly the words the guest reads, and any changed word must make the guest fail or leave every
+//! result as it was.
 use airbender_host::raw::{NonDeterminismCSRSource, QuasiUARTSource, RamPeek};
 use airbender_host::{ExecutionResult, TranspilerRunner, TranspilerRunnerBuilder};
 use std::collections::BTreeSet;
@@ -14,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-/// The query IDs of airbender-crypto's hints (`airbender_crypto::hints`)
+/// The query IDs of `airbender_crypto::hints`: field ops, ModExp, wide quotient
 const QUERY_IDS: [u32; 3] = [0x4005_0011, 0x4005_0010, 0x4005_0031];
 /// The secp256k1 base field modulus, as little-endian words
 const SECP256K1_P: [u32; 8] = [
@@ -32,8 +31,7 @@ const TAMPER_ALL_UP_TO: usize = 512;
 /// The words drawn at random from a longer tape, besides the ends of every answer
 const TAMPER_SAMPLE: usize = 256;
 
-/// A query of the guest: where its answer starts in the tape, its ID, and its field op (0 for
-/// the ModExp queries)
+/// A guest query: the input position of its answer, its ID, and its field op (0 for ModExp)
 #[derive(Clone, Copy, Debug)]
 struct Query {
     start: usize,
@@ -56,13 +54,12 @@ struct Log {
     pending: Option<u32>,
 }
 
-/// The input of a run as the CSR source of the transpiler: `QuasiUARTSource`'s reads (one word
-/// each, a host panic past the end), with the query writes of the guest logged
+/// The input of a run as the CSR source: one word per read (a host panic past the end), with the
+/// guest's query writes logged
 struct Input<'a> {
     words: &'a [u32],
     log: &'a mut Log,
-    /// The UART decoder of `QuasiUARTSource`, which prints what the guest writes there (e.g. a
-    /// panic message), for the runs that are not expected to fail
+    /// Prints what the guest writes to the UART (e.g. a panic message), for runs expected to pass
     uart: Option<QuasiUARTSource>,
 }
 
@@ -110,8 +107,7 @@ fn runner(path: &Path) -> TranspilerRunner {
         .unwrap()
 }
 
-/// The outcome of a run: the output registers and final PC of a run that stopped, or the text
-/// of the host panic of a guest that failed
+/// The output registers and final PC of a run that stopped, or the error of one that failed
 #[derive(Debug, PartialEq)]
 enum Outcome {
     Stopped { output: [u32; 8], final_pc: u32 },
@@ -151,8 +147,7 @@ fn run(runner: &TranspilerRunner, words: &[u32], log: &mut Log, verbose: bool) -
     }
 }
 
-/// A failure of the guest: its panic (an illegal instruction, airbender-rt's exit on error) or
-/// the end of the input
+/// A guest failure: its panic (an illegal instruction) or the end of the input
 fn trapped(outcome: &Outcome) -> bool {
     matches!(outcome, Outcome::Failed(text)
         if text.contains("Illegal instruction") || text.contains("must have an answer"))
@@ -170,9 +165,8 @@ impl Sampler {
     }
 }
 
-/// The tape positions to tamper with: every word of a tape of up to
-/// `TAMPER_ALL_UP_TO` words; otherwise the first and last word of every answer, and
-/// `TAMPER_SAMPLE` more words drawn with a fixed seed
+/// The tape positions to tamper with: every word of a short tape; otherwise the first and last
+/// word of every answer, and `TAMPER_SAMPLE` more drawn with a fixed seed
 fn tamper_positions(tape_len: usize, answers: &[Answer]) -> Vec<usize> {
     if tape_len <= TAMPER_ALL_UP_TO {
         return (0..tape_len).collect();
@@ -190,15 +184,6 @@ fn tamper_positions(tape_len: usize, answers: &[Answer]) -> Vec<usize> {
     positions.into_iter().collect()
 }
 
-/// The query whose answer holds a tape position, and the position in the answer
-fn answer_of(answers: &[Answer], position: usize) -> (Query, usize, usize) {
-    let (query, words) = answers
-        .iter()
-        .find(|(_, words)| words.contains(&position))
-        .expect("every tape word answers a query");
-    (*query, position - words.start, words.len())
-}
-
 /// `-x` modulo the secp256k1 prime, for the little-endian words of an `x` below it
 fn negate_secp256k1(words: &mut [u32]) {
     if words.iter().all(|word| *word == 0) {
@@ -214,20 +199,12 @@ fn negate_secp256k1(words: &mut [u32]) {
     }
 }
 
-/// The kinds of queries: their IDs and field ops
-fn kinds(answers: &[Answer]) -> Vec<(u32, u32)> {
-    let mut kinds: Vec<(u32, u32)> = answers.iter().map(|(q, _)| (q.id, q.op)).collect();
-    kinds.sort_unstable();
-    kinds.dedup();
-    kinds
-}
-
 #[test]
 #[ignore = "requires an RV32 C image; run crypto-c/tests/rv32-runtime.py"]
 fn c_runtime_image() {
     let path = PathBuf::from(std::env::var_os("CRYPTO_C_IMAGE").expect("CRYPTO_C_IMAGE"));
-    // The tape that the natively built fixture recorded, one hex word per line (empty for the
-    // builds without `csr-oracle`), and the digest of its results
+    // The native fixture's tape, one hex word per line (empty without `csr-oracle`), and the
+    // digest of its results
     let tape: Vec<u32> =
         std::fs::read_to_string(std::env::var_os("CRYPTO_C_TAPE").expect("CRYPTO_C_TAPE"))
             .unwrap()
@@ -303,38 +280,26 @@ fn c_runtime_image() {
         "duplicate heap initialization: {outcome:?}"
     );
 
-    let mut tampered = 0;
+    let (mut tampered, mut unchanged) = (0, 0);
     if reads_hints {
         // A truncated tape traps, at its last word or halfway
         for len in [tape.len() - 1, tape.len() / 2] {
             let outcome = run(&runner, &input(0, &tape[..len]), &mut Log::default(), false);
             assert!(trapped(&outcome), "a tape of {len} words: {outcome:?}");
         }
-        // The other root in secp256k1 square-root answers (op 0: the Montgomery words of the
-        // root, then the flag): a valid answer too, which must leave every result unchanged,
-        // in each answer alone and in all at once
-        let roots: Vec<Range<usize>> = answers
-            .iter()
-            .filter(|(q, words)| q.id == QUERY_IDS[0] && q.op == 0 && words.len() == 9)
-            .map(|(_, words)| words.start..words.start + 8)
-            .collect();
-        assert!(!roots.is_empty(), "the fixture takes square roots");
-        let mut all = tape.clone();
-        for root in roots.iter().chain([&(0..0)]) {
-            let mut other = tape.clone();
-            negate_secp256k1(&mut other[root.clone()]);
-            negate_secp256k1(&mut all[root.clone()]);
-            let replaced = if root.is_empty() { &all } else { &other };
-            let outcome = run(&runner, &input(0, replaced), &mut Log::default(), true);
-            assert!(
-                accepted(&outcome),
-                "the other root at {root:?}: {outcome:?}"
-            );
+        // The other root in every secp256k1 square-root answer (op 0: the root's Montgomery
+        // words, then the flag) is valid too, and must leave every result unchanged
+        let mut other_roots = tape.clone();
+        let mut roots = 0;
+        for (query, words) in &answers {
+            if query.id == QUERY_IDS[0] && query.op == 0 && words.len() == 9 {
+                negate_secp256k1(&mut other_roots[words.start..words.start + 8]);
+                roots += 1;
+            }
         }
-        println!(
-            "other roots: {} square-root answers replaced, results unchanged",
-            roots.len()
-        );
+        assert!(roots > 0, "the fixture takes square roots");
+        let outcome = run(&runner, &input(0, &other_roots), &mut Log::default(), true);
+        assert!(accepted(&outcome), "the other roots: {outcome:?}");
         // An all-zero tape traps
         let zeroes = vec![0; tape.len()];
         let outcome = run(&runner, &input(0, &zeroes), &mut Log::default(), false);
@@ -343,7 +308,7 @@ fn c_runtime_image() {
         // Tampered words (XOR 1): the guest fails, or every result is as it was
         let positions = tamper_positions(tape.len(), &answers);
         tampered = positions.len();
-        let unchanged = Mutex::new(Vec::new());
+        let unchanged_count = AtomicUsize::new(0);
         let unexpected = Mutex::new(Vec::new());
         let next = AtomicUsize::new(0);
         let threads = std::thread::available_parallelism()
@@ -364,7 +329,7 @@ fn c_runtime_image() {
                         words[1 + position] ^= 1;
                         let outcome = run(&runner, &words, &mut Log::default(), false);
                         if accepted(&outcome) {
-                            unchanged.lock().unwrap().push(position);
+                            unchanged_count.fetch_add(1, Ordering::Relaxed);
                         } else if !trapped(&outcome) {
                             unexpected.lock().unwrap().push((position, outcome));
                         }
@@ -378,39 +343,11 @@ fn c_runtime_image() {
             unexpected.is_empty(),
             "tampered words that neither trapped nor left the results unchanged: {unexpected:?}"
         );
-        let mut unchanged = unchanged.into_inner().unwrap();
-        unchanged.sort_unstable();
-        println!(
-            "tamper: {} queries of {} kinds, {tampered} positions tampered, {} trapped, {} left \
-             the results unchanged",
-            answers.len(),
-            kinds(&answers).len(),
-            tampered - unchanged.len(),
-            unchanged.len(),
-        );
-        for (id, op) in kinds(&answers) {
-            let of_kind: Vec<_> = answers
-                .iter()
-                .filter(|(q, _)| (q.id, q.op) == (id, op))
-                .collect();
-            let words: usize = of_kind.iter().map(|(_, words)| words.len()).sum();
-            println!(
-                "  query {id:#x} op {op}: {} answers, {words} words",
-                of_kind.len()
-            );
-        }
-        for position in unchanged {
-            let (query, offset, len) = answer_of(&answers, position);
-            println!(
-                "  unchanged: tape word {position}, word {offset} of the {len}-word answer of \
-                 query {:#x} op {}",
-                query.id, query.op
-            );
-        }
+        unchanged = unchanged_count.into_inner();
     }
     println!(
         "FullUnsigned C runtime: features={mode:?}, cycles={honest_cycles}, tape words={}, \
-         queries={}, tampered positions={tampered}",
+         queries={}, tampered positions={tampered} ({unchanged} left the results unchanged)",
         tape.len(),
         answers.len(),
     );

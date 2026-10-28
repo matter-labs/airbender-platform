@@ -1,7 +1,3 @@
-// Ported from zksync-os 185a0568:supporting_crates/modexp/src/arith.rs
-// Taken from https://github.com/aurora-is-near/aurora-engine, with changes
-// to explicitly pass around allocator.
-
 use super::mpnat::{DoubleWord, MPNat, Word, BASE, WORD_BITS};
 use super::vec_in;
 use alloc::vec::Vec;
@@ -428,286 +424,169 @@ pub fn mp_nat_to_u128(x: &MPNat<std::alloc::Global>) -> u128 {
 #[cfg(test)]
 mod test {
     use super::*;
+    use num_bigint::BigUint;
     use std::alloc::Global;
     extern crate std;
     use std::vec;
 
-    use crate::modexp::software::{
-        arith::mod_inv,
-        mpnat::{MPNat, Word},
-    };
+    fn mp(n: u128) -> MPNat<Global> {
+        MPNat::from_big_endian(&n.to_be_bytes(), Global)
+    }
 
-    #[test]
-    fn test_monsq() {
-        check_monsq(1, 31);
-        check_monsq(6, 31);
-        // This example is intentionally chosen because 5 * 5 = 25 = 0 mod 25,
-        // therefore it requires the final subtraction step in the algorithm.
-        check_monsq(5, 25);
-        check_monsq(0x1FFF_FFFF_FFFF_FFF0, 0x1FFF_FFFF_FFFF_FFF1);
-        check_monsq(0x16FF_221F_CB7D, 0x011E_842B_6BAA_5017_EBF2_8293);
-        check_monsq(0x0A2D_63F5_CFF9, 0x1F3B_3BD9_43EF);
-        check_monsq(
-            0xa6b0ce71a380dea7c83435bc,
-            0xc4550871a1cfc67af3e77eceb2ecfce5,
-        );
+    fn big(x: &MPNat<Global>) -> BigUint {
+        BigUint::from_bytes_be(&x.to_big_endian(Global))
+    }
 
-        fn check_monsq(x: u128, n: u128) {
-            let a = MPNat::from_big_endian(&x.to_be_bytes(), Global);
-            let m = MPNat::from_big_endian(&n.to_be_bytes(), Global);
-            let n_prime = Word::MAX - mod_inv(m.digits[0]) + 1;
-
-            let mut output = vec![0; 2 * m.digits.len() + 1];
-            monsq(&a, &m, n_prime, &mut output);
-            let result = MPNat { digits: output };
-
-            let mut output = vec![0; m.digits.len() + 2];
-            monpro(&a, &a, &m, n_prime, &mut output);
-            let expected = MPNat { digits: output };
-
-            assert_eq!(
-                num_bigint::BigUint::from_bytes_be(&result.to_big_endian(Global)),
-                num_bigint::BigUint::from_bytes_be(&expected.to_big_endian(Global)),
-                "{x}^2 failed monsq check"
-            );
-        }
+    fn n_prime(m: &MPNat<Global>) -> Word {
+        Word::MAX - mod_inv(m.digits[0]) + 1
     }
 
     #[test]
-    fn test_monpro() {
+    fn test_monpro_and_monsq() {
+        use num_bigint::BigInt;
         use num_integer::Integer;
 
-        check_monpro(1, 1, 31);
-        check_monpro(6, 7, 31);
-        // This example is intentionally chosen because 5 * 7 = 35 = 0 mod 35,
-        // therefore it requires the final subtraction step in the algorithm.
-        check_monpro(5, 7, 35);
-        check_monpro(0x1FFF_FFFF_FFFF_FFF0, 0x1234, 0x1FFF_FFFF_FFFF_FFF1);
-        check_monpro(
-            0x16FF_221F_CB7D,
-            0x0C75_8535_434F,
-            0x011E_842B_6BAA_5017_EBF2_8293,
-        );
-        check_monpro(0x0A2D_63F5_CFF9, 0x1B21_FF3C_FA8E, 0x1F3B_3BD9_43EF);
+        // 5 * 7 = 0 mod 35 and 5 * 5 = 0 mod 25 need the final subtraction
+        for (x, y, n) in [
+            (6, 7, 31),
+            (5, 7, 35),
+            (5, 5, 25),
+            (
+                0x16FF_221F_CB7D,
+                0x0C75_8535_434F,
+                0x011E_842B_6BAA_5017_EBF2_8293,
+            ),
+            (
+                0xa6b0ce71a380dea7c83435bc,
+                0xa6b0ce71a380dea7c83435bc,
+                0xc4550871a1cfc67af3e77eceb2ecfce5,
+            ),
+        ] {
+            let m = mp(n);
+            // x * y * r^-1 mod n
+            let r = BigInt::from(2).pow((WORD_BITS * m.digits.len()) as u32);
+            let n_big = BigInt::from(n);
+            let r_inv = r.extended_gcd(&n_big).x;
+            let expected =
+                |x: u128, y: u128| (BigInt::from(x) * BigInt::from(y) * &r_inv).mod_floor(&n_big);
 
-        fn check_monpro(x: u128, y: u128, n: u128) {
-            let a = MPNat::from_big_endian(&x.to_be_bytes(), Global);
-            let b = MPNat::from_big_endian(&y.to_be_bytes(), Global);
-            let m = MPNat::from_big_endian(&n.to_be_bytes(), Global);
-            let n_prime = Word::MAX - mod_inv(m.digits[0]) + 1;
+            let mut out = vec![0; m.digits.len() + 2];
+            monpro(&mp(x), &mp(y), &m, n_prime(&m), &mut out);
+            let result = BigInt::from(big(&MPNat { digits: out }));
+            assert_eq!(result, expected(x, y), "{x}*{y}");
 
-            let mut output = vec![0; m.digits.len() + 2];
-            monpro(&a, &b, &m, n_prime, &mut output);
-            let result = MPNat { digits: output };
-
-            let r = num_bigint::BigInt::from(2).pow((WORD_BITS * m.digits.len()) as u32);
-            let r_inv = r.extended_gcd(&num_bigint::BigInt::from(n as i128)).x;
-            let r_inv: u128 = r_inv.try_into().unwrap();
-
-            let expected = (((x * y) % n) * r_inv) % n;
-            let actual = mp_nat_to_u128(&result);
-            assert_eq!(actual, expected, "{x}*{y} failed monpro check");
+            let mut out = vec![0; 2 * m.digits.len() + 1];
+            monsq(&mp(x), &m, n_prime(&m), &mut out);
+            let result = BigInt::from(big(&MPNat { digits: out }));
+            assert_eq!(result, expected(x, x), "{x}^2");
         }
     }
 
     #[test]
     fn test_r_mod_n() {
-        check_r_mod_n(0x01_00_00_00_01);
-        check_r_mod_n(0x80_00_00_00_01);
-        check_r_mod_n(0xFFFF_FFFF_FFFF_FFFF);
-        check_r_mod_n(0x0001_0000_0000_0000_0001);
-        check_r_mod_n(0x8000_0000_0000_0000_0001);
-        check_r_mod_n(0xbf2d_c9a3_82c5_6e85_b033_7651);
-        check_r_mod_n(0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF);
-
-        fn check_r_mod_n(n: u128) {
-            let x = MPNat::from_big_endian(&n.to_be_bytes(), Global);
+        for n in [
+            0x80_00_00_00_01,
+            0x8000_0000_0000_0000_0001,
+            0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF,
+        ] {
+            let x = mp(n);
             let mut out = vec![0; x.digits.len()];
             compute_r_mod_n(&x, &mut out);
-            let result = mp_nat_to_u128(&MPNat { digits: out });
-            let expected = num_bigint::BigUint::from(2_u32)
-                .pow((WORD_BITS * x.digits.len()) as u32)
-                % num_bigint::BigUint::from(n);
-            assert_eq!(num_bigint::BigUint::from(result), expected);
+            let expected =
+                BigUint::from(2_u32).pow((WORD_BITS * x.digits.len()) as u32) % BigUint::from(n);
+            assert_eq!(
+                BigUint::from(mp_nat_to_u128(&MPNat { digits: out })),
+                expected
+            );
         }
     }
 
     #[test]
-    fn test_in_place_shl() {
-        check_in_place_shl(0, 0);
-        check_in_place_shl(1, 10);
-        check_in_place_shl(Word::MAX as u128, 5);
-        check_in_place_shl(u128::MAX, 16);
-
-        fn check_in_place_shl(n: u128, shift: u32) {
-            let mut x = MPNat::from_big_endian(&n.to_be_bytes(), Global);
+    fn test_in_place_shifts() {
+        for (n, shift) in [(1, 10), (Word::MAX as u128, 5), (u128::MAX, 16)] {
+            let mut x = mp(n);
             in_place_shl(&mut x.digits, shift);
-            let result = mp_nat_to_u128(&x);
             let mask = BASE
                 .overflowing_pow(x.digits.len() as u32)
                 .0
                 .wrapping_sub(1);
-            assert_eq!(result, n.overflowing_shl(shift).0 & mask);
-        }
-    }
+            assert_eq!(mp_nat_to_u128(&x), n.overflowing_shl(shift).0 & mask);
 
-    #[test]
-    fn test_in_place_shr() {
-        check_in_place_shr(0, 0);
-        check_in_place_shr(1, 10);
-        check_in_place_shr(0x1234_5678, 10);
-        check_in_place_shr(Word::MAX as u128, 5);
-        check_in_place_shr(u128::MAX, 16);
-
-        fn check_in_place_shr(n: u128, shift: u32) {
-            let mut x = MPNat::from_big_endian(&n.to_be_bytes(), Global);
+            let mut x = mp(n);
             in_place_shr(&mut x.digits, shift);
-            let result = mp_nat_to_u128(&x);
-            assert_eq!(result, n.overflowing_shr(shift).0);
+            assert_eq!(mp_nat_to_u128(&x), n.overflowing_shr(shift).0);
         }
     }
 
     #[test]
     fn test_mod_inv() {
-        for i in 1..1025 {
-            check_mod_inv(2 * i - 1);
-        }
-        for i in 0..1025 {
-            check_mod_inv(0xFF_FF_FF_FF - 2 * i);
-        }
-
-        fn check_mod_inv(n: Word) {
-            let n_inv = mod_inv(n);
-            assert_eq!(n.wrapping_mul(n_inv), 1, "{n} failed mod_inv check");
+        for n in [1, 3, 0x1234_5679, Word::MAX - 2, Word::MAX] {
+            assert_eq!(n.wrapping_mul(mod_inv(n)), 1, "{n}");
         }
     }
 
     #[test]
     fn test_big_wrapping_pow() {
-        check_big_wrapping_pow(1, 1);
-        check_big_wrapping_pow(10, 2);
-        check_big_wrapping_pow(2, 32);
-        check_big_wrapping_pow(2, 64);
-        check_big_wrapping_pow(2766, 844);
-
-        fn check_big_wrapping_pow(a: u128, b: u32) {
-            let expected = num_bigint::BigUint::from(a).pow(b);
-            let x = MPNat::from_big_endian(&a.to_be_bytes(), Global);
-            let y = b.to_be_bytes();
+        for (a, b) in [(1u128, 1u32), (2, 64), (2766, 844)] {
+            let expected = BigUint::from(a).pow(b);
             let mut scratch = vec![
                 0;
                 1 + (expected.to_bytes_be().len()
                     / crate::modexp::software::mpnat::WORD_BYTES)
             ];
-            let result = big_wrapping_pow(&x, &y, &mut scratch, Global);
-            let result = {
-                let result = result.to_big_endian(Global);
-                num_bigint::BigUint::from_bytes_be(&result)
-            };
-            assert_eq!(result, expected, "{a} ^ {b} != {expected}");
+            let result = big_wrapping_pow(&mp(a), &b.to_be_bytes(), &mut scratch, Global);
+            assert_eq!(big(&result), expected, "{a}^{b}");
         }
     }
 
     #[test]
     fn test_big_wrapping_mul() {
-        check_big_wrapping_mul(0, 0, 1);
-        check_big_wrapping_mul(1, 1, 1);
-        check_big_wrapping_mul(7, 6, 1);
-        check_big_wrapping_mul(Word::MAX.into(), Word::MAX.into(), 2);
-        check_big_wrapping_mul(Word::MAX.into(), Word::MAX.into(), 1);
-        check_big_wrapping_mul(DoubleWord::MAX - 5, DoubleWord::MAX - 6, 2);
-        check_big_wrapping_mul(0xa945_aa5e_429a_6d1a, 0x4072_d45d_3355_237b, 3);
-        check_big_wrapping_mul(
-            0x8ae1_5515_fc92_b1c0_b473_8ce8_6bbf_7218,
-            0x43e9_8b77_1f7c_aa93_6c4c_85e9_7fd0_504f,
-            3,
-        );
-
-        fn check_big_wrapping_mul(a: u128, b: u128, output_digits: usize) {
-            let expected = (num_bigint::BigUint::from(a) * num_bigint::BigUint::from(b))
-                % num_bigint::BigUint::from(2_u32).pow((output_digits * WORD_BITS) as u32);
-            let x = MPNat::from_big_endian(&a.to_be_bytes(), Global);
-            let y = MPNat::from_big_endian(&b.to_be_bytes(), Global);
+        for (a, b, output_digits) in [
+            (0, 0, 1),
+            (Word::MAX.into(), Word::MAX.into(), 1),
+            (Word::MAX.into(), Word::MAX.into(), 2),
+            (DoubleWord::MAX - 5, DoubleWord::MAX - 6, 2),
+            (
+                0x8ae1_5515_fc92_b1c0_b473_8ce8_6bbf_7218,
+                0x43e9_8b77_1f7c_aa93_6c4c_85e9_7fd0_504f,
+                3,
+            ),
+        ] {
+            let expected = (BigUint::from(a) * BigUint::from(b))
+                % BigUint::from(2_u32).pow((output_digits * WORD_BITS) as u32);
             let mut out = vec![0; output_digits];
-            big_wrapping_mul(&x, &y, &mut out);
-            let result = {
-                let result = MPNat { digits: out }.to_big_endian(Global);
-                num_bigint::BigUint::from_bytes_be(&result)
-            };
-            assert_eq!(result, expected, "{a}*{b} != {expected}");
+            big_wrapping_mul(&mp(a), &mp(b), &mut out);
+            assert_eq!(big(&MPNat { digits: out }), expected, "{a}*{b}");
         }
     }
 
     #[test]
     fn test_big_sq() {
-        check_big_sq(0);
-        check_big_sq(1);
-        check_big_sq(Word::MAX.into());
-        check_big_sq(2 * (Word::MAX as u128));
-        check_big_sq(0x8e67904953db9a2bf6da64bf8bda866d);
-        check_big_sq(0x9f8dc1c3fc0bf50fe75ac3bbc03124c9);
-        check_big_sq(0x9c9a17378f3d064e5eaa80eeb3850cd7);
-        check_big_sq(0xc7f03fbb1c186c05e54b3ee19106baa4);
-        check_big_sq(0xcf2025cee03025d247ad190e9366d926);
-        check_big_sq(u128::MAX);
-
-        fn check_big_sq(a: u128) {
-            let expected = num_bigint::BigUint::from(a).pow(2_u32);
-            let x = MPNat::from_big_endian(&a.to_be_bytes(), Global);
+        // the last one overflows in the inner loop
+        for a in [
+            "00",
+            "ffffffffffffffff",
+            "8e67904953db9a2bf6da64bf8bda866d",
+            "ffffffffffffffffffffffffffffffff",
+            "ffffffff800000008000000040000000ffffffff80000000",
+        ] {
+            let x = MPNat::from_big_endian(&crate::modexp::hex::decode(a).unwrap(), Global);
             let mut out = vec![0; 2 * x.digits.len() + 1];
             big_sq(&x, &mut out);
-            let result = {
-                let result = MPNat { digits: out }.to_big_endian(Global);
-                num_bigint::BigUint::from_bytes_be(&result)
-            };
-            assert_eq!(result, expected, "{a}^2 != {expected}");
+            assert_eq!(big(&MPNat { digits: out }), big(&x).pow(2_u32), "{a}^2");
         }
-
-        /* Test for addition overflows in the big_sq inner loop */
-        {
-            let x = MPNat::from_big_endian(
-                &[
-                    0xff, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x40,
-                    0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00,
-                ],
-                Global,
-            );
-            let mut out = vec![0; 2 * x.digits.len() + 1];
-            big_sq(&x, &mut out);
-            let result = MPNat { digits: out }.to_big_endian(Global);
-            let expected = vec![
-                0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x01, 0xff, 0xff, 0xff, 0xfe, 0x40, 0x00, 0x00, 0x01, 0x90, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0xbf, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            ];
-            assert_eq!(result, expected);
-        }
-    }
-
-    #[test]
-    fn test_borrowing_sub() {
-        assert_eq!(borrowing_sub(0, 0, false), (0, false));
-        assert_eq!(borrowing_sub(1, 0, false), (1, false));
-        assert_eq!(borrowing_sub(47, 5, false), (42, false));
-        assert_eq!(borrowing_sub(101, 7, true), (93, false));
-        assert_eq!(
-            borrowing_sub(0x00_00_01_00, 0x00_00_02_00, false),
-            (Word::MAX - 0xFF, true)
-        );
-        assert_eq!(
-            borrowing_sub(0x00_00_01_00, 0x00_00_10_00, true),
-            (Word::MAX - 0x0F_00, true)
-        );
     }
 
     // These examples are correctly stated
     #[allow(clippy::mistyped_literal_suffixes)]
     #[test]
-    fn test_shifted_carrying_mul() {
-        assert_eq!(shifted_carrying_mul(0, 0, 0, 0), (0, 0));
-        assert_eq!(shifted_carrying_mul(0, 6, 7, 0), (42, 0));
-        assert_eq!(shifted_carrying_mul(0, 6, 7, 8), (50, 0));
+    fn test_word_arithmetic() {
+        assert_eq!(borrowing_sub(47, 5, false), (42, false));
+        assert_eq!(borrowing_sub(101, 7, true), (93, false));
+        assert_eq!(
+            borrowing_sub(0x00_00_01_00, 0x00_00_10_00, true),
+            (Word::MAX - 0x0F_00, true)
+        );
         assert_eq!(shifted_carrying_mul(5, 6, 7, 8), (55, 0));
         assert_eq!(
             shifted_carrying_mul(

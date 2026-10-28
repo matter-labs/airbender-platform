@@ -87,150 +87,80 @@ mod tests {
             .collect()
     }
 
-    // Test-only sequential BLAKE2b-512 framing, built entirely from the primitive
-    // under test. Expected digests come verbatim from the official BLAKE2 repository.
+    /// Keyed BLAKE2b-512 built on `compress` (every official vector has a key)
     fn hash_with_compress(message: &[u8], key: &[u8]) -> [u8; 64] {
-        assert!(key.len() <= 64);
-        let mut initial = [
-            0x6a09e667f3bcc908u64,
-            0xbb67ae8584caa73b,
-            0x3c6ef372fe94f82b,
-            0xa54ff53a5f1d36f1,
-            0x510e527fade682d1,
-            0x9b05688c2b3e6c1f,
-            0x1f83d9abfb41bd6b,
-            0x5be0cd19137e2179,
-        ];
-        initial[0] ^= 0x0101_0000 | ((key.len() as u64) << 8) | 64;
+        assert!(!key.is_empty() && key.len() <= 64);
+        let mut state = super::IV;
+        state[0] ^= 0x0101_0000 | ((key.len() as u64) << 8) | 64;
         let mut h = [0u8; 64];
-        for (word, bytes) in initial.iter().zip(h.as_chunks_mut::<8>().0.iter_mut()) {
+        for (word, bytes) in state.iter().zip(h.as_chunks_mut::<8>().0) {
             bytes.copy_from_slice(&word.to_le_bytes());
         }
-        let mut counter = 0u128;
-        if !key.is_empty() {
-            let mut block = [0u8; 128];
-            block[..key.len()].copy_from_slice(key);
-            counter = 128;
-            compress(
-                12,
-                &mut h,
-                &block,
-                &counter.to_le_bytes(),
-                message.is_empty(),
-            );
-            if message.is_empty() {
-                return h;
-            }
+        // the key block, then the message blocks; each is compressed once the next is known
+        let mut block = [0u8; 128];
+        block[..key.len()].copy_from_slice(key);
+        let mut counter = 128u128;
+        for chunk in message.chunks(128) {
+            compress(12, &mut h, &block, &counter.to_le_bytes(), false);
+            block = [0; 128];
+            block[..chunk.len()].copy_from_slice(chunk);
+            counter += chunk.len() as u128;
         }
-        if message.is_empty() {
-            compress(12, &mut h, &[0u8; 128], &counter.to_le_bytes(), true);
-        } else {
-            for (i, chunk) in message.chunks(128).enumerate() {
-                let mut block = [0u8; 128];
-                block[..chunk.len()].copy_from_slice(chunk);
-                counter += chunk.len() as u128;
-                compress(
-                    12,
-                    &mut h,
-                    &block,
-                    &counter.to_le_bytes(),
-                    (i + 1) * 128 >= message.len(),
-                );
-            }
-        }
+        compress(12, &mut h, &block, &counter.to_le_bytes(), true);
         h
     }
 
-    #[test]
-    fn blake2f_matches_official_blake2b_vectors() {
-        let mut lines = include_str!("testdata/blake2b-kat.txt")
+    /// The records of a vector file: groups of three `prefix: value` lines
+    fn records<'a>(text: &'a str, prefixes: [&str; 3]) -> Vec<[&'a str; 3]> {
+        let lines: Vec<&str> = text
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty());
-        let mut cases = 0;
-        while let Some(line) = lines.next() {
-            let input = decode_hex(line.strip_prefix("in:").expect("input line").trim());
-            let key = decode_hex(
-                lines
-                    .next()
-                    .expect("key line")
-                    .strip_prefix("key:")
-                    .unwrap()
-                    .trim(),
-            );
-            let expected = decode_hex(
-                lines
-                    .next()
-                    .expect("hash line")
-                    .strip_prefix("hash:")
-                    .unwrap()
-                    .trim(),
-            );
-            assert_eq!(
-                input.len(),
-                cases,
-                "official message lengths must cover 0..256"
-            );
-            assert_eq!(key.len(), 64);
-            assert_eq!(expected.len(), 64);
-            assert_eq!(
-                &hash_with_compress(&input, &key)[..],
-                &expected,
-                "official BLAKE2b vector {cases}, message length {}",
-                input.len()
-            );
-            cases += 1;
-        }
-        assert_eq!(cases, 256, "missing official BLAKE2b vectors");
+            .filter(|l| !l.is_empty())
+            .collect();
+        lines
+            .chunks(3)
+            .map(|record| {
+                core::array::from_fn(|i| record[i].strip_prefix(prefixes[i]).unwrap().trim())
+            })
+            .collect()
     }
 
-    // Inputs use the 213-byte EIP-152 precompile encoding: big-endian rounds, then
-    // `h`, `m`, `t` and the final-block flag. Unlike the BLAKE2b vectors above, they
-    // cover round counts other than 12 and a nonzero high counter word.
+    /// Messages of every length from 0 to 255, with a 64-byte key and 12 rounds
+    #[test]
+    fn blake2f_matches_official_blake2b_vectors() {
+        let text = include_str!("testdata/blake2b-kat.txt");
+        let records = records(text, ["in:", "key:", "hash:"]);
+        assert_eq!(records.len(), 256);
+        for (i, [input, key, hash]) in records.into_iter().enumerate() {
+            let input = decode_hex(input);
+            assert_eq!(input.len(), i);
+            let digest = hash_with_compress(&input, &decode_hex(key));
+            assert_eq!(digest[..], decode_hex(hash), "vector {i}");
+        }
+    }
+
+    /// Other round counts and a nonzero high counter word; inputs in the 213-byte EIP-152
+    /// encoding: big-endian rounds, `h`, `m`, `t` and the final-block flag
     #[test]
     fn blake2f_matches_eip152_vectors() {
-        let mut lines = include_str!("testdata/eip152-vectors.txt")
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty());
-        let mut cases = 0;
-        while let Some(line) = lines.next() {
-            let name = line.strip_prefix("name:").expect("name line").trim();
-            let input = decode_hex(
-                lines
-                    .next()
-                    .expect("input line")
-                    .strip_prefix("in:")
-                    .unwrap()
-                    .trim(),
-            );
-            let expected = decode_hex(
-                lines
-                    .next()
-                    .expect("output line")
-                    .strip_prefix("out:")
-                    .unwrap()
-                    .trim(),
-            );
+        let text = include_str!("testdata/eip152-vectors.txt");
+        let records = records(text, ["name:", "in:", "out:"]);
+        assert_eq!(records.len(), 24);
+        for [name, input, output] in records {
+            let input = decode_hex(input);
             assert_eq!(input.len(), 213, "{name}");
-            assert_eq!(expected.len(), 64, "{name}");
+            assert!(input[212] <= 1, "{name}");
             let rounds = u32::from_be_bytes(input[..4].try_into().unwrap());
             let mut h: [u8; 64] = input[4..68].try_into().unwrap();
-            let final_block = match input[212] {
-                0 => false,
-                1 => true,
-                flag => panic!("{name}: final-block flag {flag}"),
-            };
+            let m = input[68..196].try_into().unwrap();
             compress(
                 rounds,
                 &mut h,
-                input[68..196].try_into().unwrap(),
+                m,
                 input[196..212].try_into().unwrap(),
-                final_block,
+                input[212] == 1,
             );
-            assert_eq!(&h[..], &expected, "EIP-152 vector {name}");
-            cases += 1;
+            assert_eq!(h[..], decode_hex(output), "{name}");
         }
-        assert_eq!(cases, 24, "missing EIP-152 vectors");
     }
 }

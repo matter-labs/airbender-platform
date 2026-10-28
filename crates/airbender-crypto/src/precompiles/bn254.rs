@@ -1,7 +1,5 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bn254_ecadd.rs
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/bn254_ecmul.rs
-//! bn254 G1 addition and multiplication (EIP-196) and the pairing check (EIP-197, in
-//! `pairing_check`), with the EVM encoding of the points.
+//! bn254 G1 addition and multiplication (EIP-196) and the pairing check (EIP-197), on the EVM
+//! encoding of the points.
 
 use crate::ark_ec::CurveGroup;
 use crate::ark_ff::PrimeField;
@@ -16,10 +14,10 @@ mod pairing_check;
 #[cfg(any(feature = "alloc", test))]
 pub use self::pairing_check::bn254_pairing_check;
 
-/// The sum of two points, each the EVM encoding of the coordinates `x` and `y`, big-endian (all
-/// zeroes for the point at infinity). Fails unless both are points of the curve. With an oracle,
-/// the addition works in affine coordinates, with the division of the slope a checked hint.
-// zksync-os's signature: the wrapper maps any failure to its invalid point error
+/// The sum of two points, each big-endian `x || y` (all zeroes for the point at infinity).
+/// Fails unless both are on the curve. With an oracle, adds in affine coordinates with a checked
+/// hinted slope division.
+// The caller maps every failure to its invalid-point error
 #[allow(clippy::result_unit_err)]
 pub fn bn254_g1_add<O: HintOracle>(
     coordinates: &[[u8; 64]; 2],
@@ -39,7 +37,6 @@ pub fn bn254_g1_add<O: HintOracle>(
 
     let [a, b] = &points;
     let result = match oracle {
-        // affine coordinates, with the division of the slope a checked hint
         #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
         Some(oracle) => serialize_affine(&crate::bn254::g1::add_affine_with_divider(
             a,
@@ -48,18 +45,17 @@ pub fn bn254_g1_add<O: HintOracle>(
         )),
         #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
         Some(_) => super::hints_unavailable(),
-        // the in-place group law: arkworks' `Projective + Affine` copies every field element
+        // in place: arkworks' `Projective + Affine` copies every field element
         None => serialize_projective::<O>(crate::bn254::g1::add_affine(a, b), None),
     };
 
     Ok(result)
 }
 
-/// `scalar` (big-endian, any 256-bit integer) times the point with the big-endian coordinates
-/// `x` and `y` (both zero for the point at infinity), in the EVM encoding. Fails unless the
-/// point is a point of the curve. With an oracle, the multiplication works in affine
-/// coordinates, with its field divisions from checked hints.
-// zksync-os's signature: the wrapper maps any failure to its invalid point error
+/// `scalar` (big-endian, any 256-bit integer, not reduced) times the point `(x, y)` (both zero
+/// for the point at infinity), in the EVM encoding. Fails unless the point is on the curve. With
+/// an oracle, multiplies in affine coordinates with checked hinted divisions.
+// The caller maps every failure to its invalid-point error
 #[allow(clippy::result_unit_err)]
 pub fn bn254_g1_mul<O: HintOracle>(
     x: &[u8; 32],
@@ -74,11 +70,9 @@ pub fn bn254_g1_mul<O: HintOracle>(
         return Ok([0u8; 64]);
     }
     let affine_point = parse_affine(x, y)?;
-    // the scalar is not reduced: any 256-bit integer is a valid multiplier
     let scalar = bigint_from_be(scalar);
 
     let result = match oracle {
-        // affine coordinates, with every division a checked hint
         #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
         Some(oracle) => serialize_affine(&crate::bn254::g1::mul_affine_with_divider(
             &affine_point,
@@ -126,9 +120,8 @@ fn write_bigint_be(value: &<crate::bn254::Fq as PrimeField>::BigInt, out: &mut [
     }
 }
 
-/// The curve point with the big-endian coordinates `x` and `y`: `Err` unless both are below
-/// the modulus and the point is on the curve (the curve has no other points of small order,
-/// so this is also the subgroup check)
+/// The point with big-endian coordinates `x` and `y`: `Err` unless both are below the modulus
+/// and the point is on the curve (G1 has cofactor 1, so this is also the subgroup check)
 pub(crate) fn parse_affine(x: &[u8; 32], y: &[u8; 32]) -> Result<crate::bn254::G1Affine, ()> {
     use crate::bn254::*;
     let x = Fq::from_bigint(bigint_from_be(x)).ok_or(())?;
@@ -143,7 +136,6 @@ pub(crate) fn parse_affine(x: &[u8; 32], y: &[u8; 32]) -> Result<crate::bn254::G
 #[allow(dead_code)]
 pub(crate) fn serialize_affine(point: &crate::bn254::G1Affine) -> [u8; 64] {
     let mut out = [0u8; 64];
-    // zeroes are canonical for the point at infinity
     if !point.infinity {
         let [x, y] = out.as_chunks_mut::<32>().0 else {
             unreachable!("64 bytes are two 32-byte chunks")
@@ -154,15 +146,13 @@ pub(crate) fn serialize_affine(point: &crate::bn254::G1Affine) -> [u8; 64] {
     out
 }
 
-/// The EVM encoding of `point`. With an oracle, the inversion of its `Z` coordinate comes from
-/// a checked hint instead of an exponentiation.
+/// The EVM encoding of `point`. With an oracle, `1 / Z` is a checked hint.
 pub(crate) fn serialize_projective<O: HintOracle>(
     point: crate::bn254::G1Projective,
     oracle: Option<&mut O>,
 ) -> [u8; 64] {
     use crate::ark_ff::Zero;
     if point.is_zero() {
-        // canonical for zero point
         [0u8; 64]
     } else {
         let result = match oracle {
@@ -189,128 +179,15 @@ pub(crate) fn serialize_projective<O: HintOracle>(
 mod tests {
     use super::*;
     use crate::ark_ec::{AffineRepr, CurveGroup};
-    use crate::ark_ff::{BigInteger, Field, PrimeField};
+    use crate::ark_ff::{BigInteger, PrimeField};
     use crate::hints::test_support::TapeOracle;
-    use crate::hints::{NoHints, RecordingHintOracle};
+    use crate::hints::{record_hints, NoHints};
+    use crate::precompiles::HintedCases;
     use proptest::test_runner::Config as ProptestConfig;
     use proptest::{prop_assert_eq, proptest};
-    use std::vec;
-    use std::vec::Vec;
-
-    fn oracle() -> RecordingHintOracle {
-        RecordingHintOracle::new()
-    }
 
     fn be(value: crate::bn254::Fq) -> [u8; 32] {
-        let mut bytes = [0u8; 32];
-        for (chunk, limb) in bytes
-            .as_chunks_mut::<8>()
-            .0
-            .iter_mut()
-            .zip(value.into_bigint().as_ref().iter().rev())
-        {
-            *chunk = limb.to_be_bytes();
-        }
-        bytes
-    }
-
-    /// Encoded points: the point at infinity, multiples of the generator and their negations
-    // `p += p + generator` doubles `p` and adds the generator, as in zksync-os
-    #[allow(clippy::misrefactored_assign_op)]
-    fn points() -> Vec<[u8; 64]> {
-        let generator = crate::bn254::G1Affine::generator();
-        let mut points = vec![[0u8; 64]];
-        let mut p = generator.into_group();
-        for _ in 0..4 {
-            for point in [p.into_affine(), (-p).into_affine()] {
-                let mut encoded = [0u8; 64];
-                encoded[..32].copy_from_slice(&be(point.x));
-                encoded[32..].copy_from_slice(&be(point.y));
-                points.push(encoded);
-            }
-            p += p + generator;
-        }
-        points
-    }
-
-    fn scalars() -> Vec<[u8; 32]> {
-        let order: [u8; 32] = <crate::bn254::Fr as PrimeField>::MODULUS
-            .to_bytes_be()
-            .try_into()
-            .unwrap();
-        let mut scalars = vec![[0u8; 32], [0xff; 32], order];
-        for delta in [1u8, 2] {
-            let mut below = order;
-            // zksync-os runs its tests in release, where `below[31] -= delta` wraps: the order
-            // ends in byte 1, so delta 2 makes `order + 254`, kept here (and `order - 2` below)
-            below[31] = below[31].wrapping_sub(delta);
-            scalars.push(below);
-            let mut above = order;
-            above[31] += delta;
-            scalars.push(above);
-            let mut small = [0u8; 32];
-            small[31] = delta;
-            scalars.push(small);
-        }
-        let mut below = <crate::bn254::Fr as PrimeField>::MODULUS;
-        below.sub_with_borrow(&2u64.into());
-        scalars.push(below.to_bytes_be().try_into().unwrap());
-        let mut k = crate::bn254::Fr::from(0x9e37_79b9_7f4a_7c15u64);
-        for _ in 0..12 {
-            k = k.square() + crate::bn254::Fr::from(3u64);
-            scalars.push(k.into_bigint().to_bytes_be().try_into().unwrap());
-        }
-        scalars
-    }
-
-    /// With the advice of the oracle (affine arithmetic with hinted divisions) the results are
-    /// the ones without it
-    #[test]
-    fn multiplication_with_advice_matches() {
-        for point in points() {
-            let (x, y) = (
-                point[..32].try_into().unwrap(),
-                point[32..].try_into().unwrap(),
-            );
-            for scalar in scalars() {
-                let expected = bn254_g1_mul::<NoHints>(x, y, &scalar, None);
-                let hinted = bn254_g1_mul(x, y, &scalar, Some(&mut oracle()));
-                assert!(expected.is_ok());
-                assert_eq!(hinted, expected);
-            }
-        }
-    }
-
-    #[test]
-    fn addition_with_advice_matches() {
-        for a in points() {
-            for b in points() {
-                let expected = bn254_g1_add::<NoHints>(&[a, b], None);
-                let hinted = bn254_g1_add(&[a, b], Some(&mut oracle()));
-                assert!(expected.is_ok());
-                assert_eq!(hinted, expected);
-            }
-        }
-    }
-
-    #[test]
-    fn points_off_the_curve_are_rejected() {
-        let mut point = points()[1];
-        point[63] ^= 1;
-        let (x, y) = (
-            point[..32].try_into().unwrap(),
-            point[32..].try_into().unwrap(),
-        );
-        assert!(bn254_g1_mul(x, y, &[1; 32], Some(&mut oracle())).is_err());
-        assert!(bn254_g1_add(&[point, points()[3]], Some(&mut oracle())).is_err());
-    }
-
-    /// The coordinates `x` and `y` of an encoded point
-    fn xy(point: &[u8; 64]) -> (&[u8; 32], &[u8; 32]) {
-        let ([x, y], []) = point.as_chunks::<32>() else {
-            unreachable!("64 bytes are 2 chunks of 32")
-        };
-        (x, y)
+        value.into_bigint().to_bytes_be().try_into().unwrap()
     }
 
     /// The encoding of `k` times the generator
@@ -332,9 +209,62 @@ mod tests {
         negated
     }
 
+    /// The coordinates `x` and `y` of an encoded point
+    fn xy(point: &[u8; 64]) -> (&[u8; 32], &[u8; 32]) {
+        let ([x, y], []) = point.as_chunks::<32>() else {
+            unreachable!("64 bytes are 2 chunks of 32")
+        };
+        (x, y)
+    }
+
+    /// Scalars around the group order, and 1 and `2^256 - 1`
+    fn edge_scalars() -> [[u8; 32]; 6] {
+        let order = <crate::bn254::Fr as PrimeField>::MODULUS;
+        let (mut below, mut above) = (order, order);
+        below.sub_with_borrow(&1u64.into());
+        above.add_with_carry(&1u64.into());
+        let be = |n: <crate::bn254::Fr as PrimeField>::BigInt| n.to_bytes_be().try_into().unwrap();
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        [[0; 32], be(order), one, be(below), be(above), [0xff; 32]]
+    }
+
+    /// Hinted and plain multiplication agree on edge scalars; a scalar that is zero modulo the
+    /// order gives the point at infinity without a query
+    #[test]
+    fn mul_edge_scalars() {
+        for point in [multiple(1), multiple(3), negated(&multiple(5))] {
+            let (x, y) = xy(&point);
+            for (i, scalar) in edge_scalars().iter().enumerate() {
+                let plain = bn254_g1_mul(x, y, scalar, None::<&mut NoHints>);
+                assert!(plain.is_ok());
+                if i < 2 {
+                    let mut oracle = TapeOracle::new([]);
+                    assert_eq!(bn254_g1_mul(x, y, scalar, Some(&mut oracle)), Ok([0; 64]));
+                    assert!(oracle.queries.is_empty());
+                    assert_eq!(plain, Ok([0; 64]));
+                } else {
+                    let (hinted, _) =
+                        record_hints(|oracle| bn254_g1_mul(x, y, scalar, Some(oracle)));
+                    assert_eq!(hinted, plain);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn points_off_the_curve_are_rejected() {
+        let mut point = multiple(1);
+        point[63] ^= 1;
+        let (x, y) = xy(&point);
+        let mut oracle = TapeOracle::new([]);
+        assert!(bn254_g1_mul(x, y, &[1; 32], Some(&mut oracle)).is_err());
+        assert!(bn254_g1_add(&[point, multiple(3)], Some(&mut oracle)).is_err());
+        assert!(bn254_g1_add(&[multiple(3), point], None::<&mut NoHints>).is_err());
+    }
+
     mod advice_matches_no_advice {
         use super::*;
-        use crate::precompiles::HintedCases;
 
         #[test]
         fn add() {
@@ -348,12 +278,7 @@ mod tests {
                     2 => negated(&a),
                     3 => [0; 64],
                     // mostly not a point of the curve, or coordinates above the modulus
-                    4 => {
-                        let mut b = [0u8; 64];
-                        b[..32].copy_from_slice(&raw[0]);
-                        b[32..].copy_from_slice(&raw[1]);
-                        b
-                    }
+                    4 => raw.concat().try_into().unwrap(),
                     _ => {
                         let mut b = a;
                         b[63] ^= 1;
@@ -376,12 +301,7 @@ mod tests {
                     0 | 1 => multiple(k),
                     2 => [0; 64],
                     // mostly not a point of the curve, or coordinates above the modulus
-                    _ => {
-                        let mut point = [0u8; 64];
-                        point[..32].copy_from_slice(&raw[0]);
-                        point[32..].copy_from_slice(&raw[1]);
-                        point
-                    }
+                    _ => raw.concat().try_into().unwrap(),
                 };
                 let (x, y) = xy(&point);
                 let hinted = hinted_cases.record(|oracle| bn254_g1_mul(x, y, &scalar, Some(oracle)));
@@ -391,41 +311,17 @@ mod tests {
         }
     }
 
-    /// A zero scalar (or one the group order reduces to zero) gives the point at infinity without
-    /// asking for any hint
-    #[test]
-    fn zero_scalar_makes_no_query() {
-        let order: [u8; 32] = <crate::bn254::Fr as PrimeField>::MODULUS
-            .to_bytes_be()
-            .try_into()
-            .unwrap();
-        for point in points() {
-            let (x, y) = xy(&point);
-            for scalar in [[0u8; 32], order] {
-                let mut oracle = TapeOracle::new([]);
-                assert_eq!(
-                    bn254_g1_mul(x, y, &scalar, Some(&mut oracle)),
-                    Ok([0u8; 64])
-                );
-                assert!(oracle.queries.is_empty());
-            }
-        }
-    }
-
-    /// The guest, which reads its answers off the recorded tape, gets the same result and takes
-    /// the whole tape and no more. The bn254 elements of test builds have the representation of
-    /// the guest, so the tape is also the answers this process reads.
     #[test]
     fn recorded_tape_replays() {
-        // the generator and 3 times it (the generator plus its negation takes no division)
-        let [_, a, _, b, ..] = points()[..] else {
-            unreachable!("there are 9 points")
-        };
+        // the generator plus its negation would take no division
+        let (a, b) = (multiple(1), multiple(3));
         let sum = assert_tape_replays!(|oracle| bn254_g1_add(&[a, b], Some(oracle)));
         assert_eq!(sum, bn254_g1_add(&[a, b], None::<&mut NoHints>));
-        let scalar = scalars()[1];
         let (x, y) = xy(&a);
-        let product = assert_tape_replays!(|oracle| bn254_g1_mul(x, y, &scalar, Some(oracle)));
-        assert_eq!(product, bn254_g1_mul(x, y, &scalar, None::<&mut NoHints>));
+        let product = assert_tape_replays!(|oracle| bn254_g1_mul(x, y, &[0xff; 32], Some(oracle)));
+        assert_eq!(
+            product,
+            bn254_g1_mul(x, y, &[0xff; 32], None::<&mut NoHints>)
+        );
     }
 }

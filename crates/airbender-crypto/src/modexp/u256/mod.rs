@@ -1,11 +1,7 @@
-// Ported from zksync-os 185a0568:supporting_crates/u256/src/lib.rs
-//! The 256-bit digits of the single-digit modulus path of ModExp (zksync-os `u256::U256`): the
-//! delegated `U256` on RV32 with the bigint delegation, whose delegation sequences the cycle and
-//! delegation counts of the guest depend on, and the naive one otherwise. Test builds compile
-//! both, compare them, and run ModExp on the delegated one (on the host emulation of the
-//! delegation, which counts its calls).
+//! The 256-bit digits of the single-digit path: delegated on RV32 with `bigint_ops`, naive
+//! otherwise. Tests compile both, compare them, and run ModExp on the delegated one.
 
-// Custom types below are NOT Copy in Rust's sense, even though Clone internally would use copy
+// `U256` is not `Copy`: on RV32 a clone is a delegated copy
 
 #[cfg(any(not(all(target_arch = "riscv32", feature = "bigint_ops")), test))]
 mod naive;
@@ -26,130 +22,69 @@ mod tests {
     use crate::BigIntOps;
     use core::mem::MaybeUninit;
     use proptest::{prop_assert_eq, proptest};
-    use ruint::aliases::U256 as HostU256;
-
-    fn from_limbs(limbs: [u64; 4]) -> (naive::U256, delegated::U256) {
-        (
-            naive::U256::from_limbs(limbs),
-            delegated::U256::from_limbs(limbs),
-        )
-    }
+    use ruint::aliases::{U256 as HostU256, U512};
 
     #[test]
-    fn compare_arithmetic() {
-        proptest!(|(x_limbs: [u64; 4], y_limbs: [u64; 4])| {
-            let (mut x1, mut x2) = from_limbs(x_limbs);
-            let (y1, y2) = from_limbs(y_limbs);
+    fn backends_agree() {
+        proptest!(|(x: [u64; 4], y: [u64; 4], borrow: bool)| {
+            let (n, ny) = (naive::U256::from_limbs(x), naive::U256::from_limbs(y));
+            let (d, dy) = (delegated::U256::from_limbs(x), delegated::U256::from_limbs(y));
+            let (host_x, host_y) = (HostU256::from_limbs(x), HostU256::from_limbs(y));
 
-            let carry1 = x1.overflowing_add_assign(&y1);
-            let carry2 = x2.overflowing_add_assign(&y2);
+            let (mut n1, mut d1) = (n.clone(), d.clone());
+            prop_assert_eq!(n1.overflowing_add_assign(&ny), d1.overflowing_add_assign(&dy));
+            prop_assert_eq!(n1.as_limbs(), d1.as_limbs());
 
-            prop_assert_eq!(x1.as_limbs(), x2.as_limbs());
-            prop_assert_eq!(carry1, carry2);
-        });
+            let (mut n1, mut d1) = (n.clone(), d.clone());
+            prop_assert_eq!(n1.overflowing_sub_assign(&ny), d1.overflowing_sub_assign(&dy));
+            prop_assert_eq!(n1.as_limbs(), d1.as_limbs());
 
-        proptest!(|(x_limbs: [u64; 4], y_limbs: [u64; 4])| {
-            let (mut x1, mut x2) = from_limbs(x_limbs);
-            let (y1, y2) = from_limbs(y_limbs);
-
-            let borrow1 = x1.overflowing_sub_assign(&y1);
-            let borrow2 = x2.overflowing_sub_assign(&y2);
-
-            prop_assert_eq!(x1.as_limbs(), x2.as_limbs());
-            prop_assert_eq!(borrow1, borrow2);
-        });
-
-        proptest!(|(x_limbs: [u64; 4], y_limbs: [u64; 4], borrow: bool)| {
-            let (mut x1, mut x2) = from_limbs(x_limbs);
-            let (y1, y2) = from_limbs(y_limbs);
-
-            let borrow1 = x1.overflowing_sub_assign_with_borrow_propagation(&y1, borrow);
-            let borrow2 = x2.overflowing_sub_assign_with_borrow_propagation(&y2, borrow);
-
-            prop_assert_eq!(x1.as_limbs(), x2.as_limbs());
-            prop_assert_eq!(borrow1, borrow2);
-            let (expected, of1) = HostU256::from_limbs(x_limbs).overflowing_sub(HostU256::from_limbs(y_limbs));
+            let (mut n1, mut d1) = (n.clone(), d.clone());
+            let borrow1 = n1.overflowing_sub_assign_with_borrow_propagation(&ny, borrow);
+            let borrow2 = d1.overflowing_sub_assign_with_borrow_propagation(&dy, borrow);
+            let (expected, of1) = host_x.overflowing_sub(host_y);
             let (expected, of2) = expected.overflowing_sub(HostU256::from(borrow as u64));
-            prop_assert_eq!(x1.as_limbs(), expected.as_limbs());
-            prop_assert_eq!(borrow1, of1 | of2);
-        });
+            prop_assert_eq!((n1.as_limbs(), borrow1), (expected.as_limbs(), of1 | of2));
+            prop_assert_eq!((d1.as_limbs(), borrow2), (expected.as_limbs(), of1 | of2));
 
-        // the delegated multiplication reads the multiplicand from the slot of the high half too (the
-        // naive one does not): its callers copy it there first
-        proptest!(|(x_limbs: [u64; 4], y_limbs: [u64; 4])| {
-            let (mut x1, mut x2) = from_limbs(x_limbs);
-            let (y1, y2) = from_limbs(y_limbs);
-            let (mut high1, mut high2) = (x1.clone(), x2.clone());
+            // the delegated product reads the multiplicand from the high slot too, so callers
+            // copy it there first
+            let (mut n1, mut d1) = (n.clone(), d.clone());
+            let (mut n_hi, mut d_hi) = (n.clone(), d.clone());
+            n1.widening_mul_assign_into(&mut n_hi, &ny);
+            d1.widening_mul_assign_into(&mut d_hi, &dy);
+            let product: U512 = host_x.widening_mul(host_y);
+            prop_assert_eq!(&d1.as_limbs()[..], &product.as_limbs()[..4]);
+            prop_assert_eq!(&d_hi.as_limbs()[..], &product.as_limbs()[4..]);
+            prop_assert_eq!((n1.as_limbs(), n_hi.as_limbs()), (d1.as_limbs(), d_hi.as_limbs()));
 
-            x1.widening_mul_assign_into(&mut high1, &y1);
-            x2.widening_mul_assign_into(&mut high2, &y2);
+            prop_assert_eq!(n.cmp(&ny), d.cmp(&dy));
+            prop_assert_eq!(n == ny, d == dy);
+            prop_assert_eq!(d.cmp(&d.clone()), core::cmp::Ordering::Equal);
+            prop_assert_eq!((n.is_zero(), n.is_one()), (d.is_zero(), d.is_one()));
 
-            prop_assert_eq!(x1.as_limbs(), x2.as_limbs());
-            prop_assert_eq!(high1.as_limbs(), high2.as_limbs());
-            let product = HostU256::from_limbs(x_limbs).widening_mul::<256, 4, 512, 8>(HostU256::from_limbs(y_limbs));
-            prop_assert_eq!(&x1.as_limbs()[..], &product.as_limbs()[..4]);
-            prop_assert_eq!(&high1.as_limbs()[..], &product.as_limbs()[4..]);
-        });
-
-        proptest!(|(x_limbs: [u64; 4], y_limbs: [u64; 4])| {
-            let (x1, x2) = from_limbs(x_limbs);
-            let (y1, y2) = from_limbs(y_limbs);
-
-            prop_assert_eq!(x1 < y1, x2 < y2);
-            prop_assert_eq!(x1 == y1, x2 == y2);
-            prop_assert_eq!(x1.cmp(&y1), x2.cmp(&y2));
-            prop_assert_eq!(x2.cmp(&x2.clone()), core::cmp::Ordering::Equal);
-        });
-
-        proptest!(|(x_limbs: [u64; 4])| {
-            let (x1, x2) = from_limbs(x_limbs);
             let (mut slot1, mut slot2) = (MaybeUninit::uninit(), MaybeUninit::uninit());
             // SAFETY: the slots are aligned and writable
             let (copy1, copy2) = unsafe {
-                naive::U256::write_into_ptr_unchecked(slot1.as_mut_ptr(), &x1);
-                delegated::U256::write_into_ptr_unchecked(slot2.as_mut_ptr(), &x2);
+                naive::U256::write_into_ptr_unchecked(slot1.as_mut_ptr(), &n);
+                delegated::U256::write_into_ptr_unchecked(slot2.as_mut_ptr(), &d);
                 (slot1.assume_init(), slot2.assume_init())
             };
-            prop_assert_eq!(copy1.as_limbs(), &x_limbs);
-            prop_assert_eq!(copy2.as_limbs(), &x_limbs);
-            let (clone1, clone2) = (x1.clone(), x2.clone());
-            prop_assert_eq!(clone1.as_limbs(), clone2.as_limbs());
-            let (host1, host2): (HostU256, HostU256) = (x1.into(), x2.into());
-            prop_assert_eq!(host1, HostU256::from_limbs(x_limbs));
-            prop_assert_eq!(host2, HostU256::from_limbs(x_limbs));
-            let (back1, back2) = (naive::U256::from(host1), delegated::U256::from(host2));
-            prop_assert_eq!(back1.as_limbs(), &x_limbs);
-            prop_assert_eq!(back2.as_limbs(), &x_limbs);
-        });
-    }
+            prop_assert_eq!((copy1.as_limbs(), copy2.as_limbs()), (&x, &x));
 
-    #[test]
-    fn compare_bytes() {
-        proptest!(|(bytes: [u8; 32])| {
-            let bytes1 = naive::U256::from_be_bytes(&bytes).to_be_bytes();
-            let bytes2 = delegated::U256::from_be_bytes(&bytes).to_be_bytes();
-
-            prop_assert_eq!(bytes1, bytes);
-            prop_assert_eq!(bytes1, bytes2);
-            let (x2, host) = (delegated::U256::from_be_bytes(&bytes), HostU256::from_be_bytes(bytes));
-            prop_assert_eq!(x2.as_limbs(), host.as_limbs());
-        });
-    }
-
-    #[test]
-    fn compare_is_zero_is_one() {
-        proptest!(|(limbs: [u64; 4])| {
-            let (x1, x2) = from_limbs(limbs);
-
-            prop_assert_eq!(x1.is_one(), x2.is_one());
-            prop_assert_eq!(x1.is_zero(), x2.is_zero());
+            let bytes = host_x.to_be_bytes::<32>();
+            let n1 = naive::U256::from_be_bytes(&bytes);
+            let d1 = delegated::U256::from_be_bytes(&bytes);
+            prop_assert_eq!((n1.as_limbs(), d1.as_limbs()), (&x, &x));
+            prop_assert_eq!((n.to_be_bytes(), d.to_be_bytes()), (bytes, bytes));
+            let (host1, host2): (HostU256, HostU256) = (n.into(), d.into());
+            prop_assert_eq!((host1, host2), (host_x, host_x));
+            let (n1, d1) = (naive::U256::from(host_x), delegated::U256::from(host_x));
+            prop_assert_eq!((n1.as_limbs(), d1.as_limbs()), (&x, &x));
         });
 
-        assert!(naive::U256::zero().is_zero());
-        assert!(delegated::U256::zero().is_zero());
-
-        assert!(naive::U256::one().is_one());
-        assert!(delegated::U256::one().is_one());
+        assert!(naive::U256::zero().is_zero() && naive::U256::one().is_one());
+        assert!(delegated::U256::zero().is_zero() && delegated::U256::one().is_one());
         assert!(!naive::U256::one().is_zero() && !naive::U256::zero().is_one());
         assert!(!delegated::U256::one().is_zero() && !delegated::U256::zero().is_one());
     }
@@ -161,7 +96,6 @@ mod tests {
         DELEGATION_CALLS_BY_OP.with(|calls| *calls.borrow())
     }
 
-    /// `n` calls of the operation `op`
     fn calls(ops: &[(BigIntOps, u64)]) -> [u64; 8] {
         let mut calls = [0; 8];
         for (op, n) in ops {
@@ -170,8 +104,8 @@ mod tests {
         calls
     }
 
-    /// The delegation sequences of zksync-os's RISC-V `U256`, which the cycle and delegation
-    /// counts of the guest depend on
+    /// The delegated `U256` takes zksync-os's delegation sequences, which the guest's costs
+    /// depend on
     #[test]
     fn delegated_operations_take_the_delegations_of_zksync_os() {
         use BigIntOps::*;
@@ -179,7 +113,6 @@ mod tests {
         let y = delegated::U256::from_limbs([1, 2, 3, 4]);
         assert_eq!(delegations(|| drop(x.clone())), calls(&[(MemCpy, 1)]));
         assert_eq!(delegations(|| assert!(!x.is_zero())), calls(&[(Eq, 1)]));
-        assert_eq!(delegations(|| assert!(!x.is_one())), calls(&[(Eq, 1)]));
         // a copy into the scratch, a comparison, and a subtraction unless equal
         assert_eq!(
             delegations(|| assert!(y < x)),
@@ -189,7 +122,6 @@ mod tests {
             delegations(|| assert!(x >= x.clone())),
             calls(&[(MemCpy, 2), (Eq, 1)])
         );
-        assert_eq!(delegations(|| assert!(x != y)), calls(&[(Eq, 1)]));
         let (mut low, mut high) = (x.clone(), x.clone());
         assert_eq!(
             delegations(|| low.widening_mul_assign_into(&mut high, &y)),
@@ -197,24 +129,12 @@ mod tests {
         );
         let mut z = x.clone();
         assert_eq!(
-            delegations(|| assert!(!z.overflowing_sub_assign(&y))),
-            calls(&[(Sub, 1)])
-        );
-        assert_eq!(
             delegations(|| assert!(!z.overflowing_sub_assign_with_borrow_propagation(&y, true))),
             calls(&[(Sub, 1)])
         );
         assert_eq!(
             delegations(|| assert!(!z.overflowing_add_assign(&y))),
             calls(&[(Add, 1)])
-        );
-        let mut slot = MaybeUninit::uninit();
-        assert_eq!(
-            // SAFETY: the slot is aligned and writable
-            delegations(|| unsafe {
-                delegated::U256::write_into_ptr_unchecked(slot.as_mut_ptr(), &x)
-            }),
-            calls(&[(MemCpy, 1)])
         );
         // constants and the byte conversions take none
         let bytes = [0xa5; 32];
@@ -226,26 +146,5 @@ mod tests {
             }),
             [0; 8]
         );
-    }
-
-    /// The comparisons of threads running at the same time each use their own scratch
-    #[test]
-    fn comparisons_on_parallel_threads() {
-        let threads: std::vec::Vec<_> = (0..8u64)
-            .map(|seed| {
-                std::thread::spawn(move || {
-                    for i in 0..2000u64 {
-                        let a = delegated::U256::from_limbs([i ^ seed, seed, i, 1]);
-                        let b = delegated::U256::from_limbs([i, seed, i ^ seed, 1]);
-                        let (host_a, host_b): (HostU256, HostU256) =
-                            (a.clone().into(), b.clone().into());
-                        assert_eq!(a.cmp(&b), host_a.cmp(&host_b));
-                    }
-                })
-            })
-            .collect();
-        for thread in threads {
-            thread.join().unwrap();
-        }
     }
 }

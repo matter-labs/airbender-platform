@@ -1,5 +1,3 @@
-// Ported from zksync-os e855bca2:basic_system/src/system_functions/field_ops.rs
-// Ported from zksync-os e855bca2:zk_ee/src/oracle/memory_io/host.rs
 //! The request of a field hint query, how the oracle reads it, and the query itself.
 
 use super::answer::HintAnswer;
@@ -7,6 +5,8 @@ use super::oracle::{HintError, HintOracle};
 use super::FIELD_OPS_ADVISE_QUERY_ID;
 use core::mem::{offset_of, MaybeUninit};
 
+/// The request of a field hint query: the op, and the address and length (in `u32` words) of
+/// the operand. `W` is the querier's word.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GenericFieldOpsHint<W> {
@@ -18,18 +18,15 @@ pub struct GenericFieldOpsHint<W> {
 pub type FieldOpsHint = GenericFieldOpsHint<u32>;
 pub type FieldOpsHint64 = GenericFieldOpsHint<u64>;
 
-/// A field hint. The operand of an op is sent by address: the oracle reads the operand where it
-/// is, in the representation of the target of the querier, which it knows from the run mode (a
-/// querier in this process: the value itself; the RISC-V guest: its memory, see
-/// `Secp256k1Element` and `hints::guest_layout`). The answers are in the representation of
-/// the target too (see [`HintAnswer`]).
+/// A field hint. The oracle reads the operand by address, in the representation of the querier's
+/// target (see `Secp256k1Element` and `hints::guest_layout`); answers are in that representation
+/// too (see [`HintAnswer`]). The numbers are part of the protocol.
 #[repr(u32)]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldHintOp {
     /// secp256k1 base field square root: an element in; a candidate root and a "quadratic
-    /// non-residue" flag out (the root of the input, or of its negation when the input is not a
-    /// square)
+    /// non-residue" flag out (the root of the input, or of its negation if it is not a square)
     Secp256k1BaseFieldSqrt = 0,
     /// secp256k1 base field inverse: an element in, its inverse out
     Secp256k1BaseFieldInverse,
@@ -39,41 +36,31 @@ pub enum FieldHintOp {
     Bn254BaseFieldInverse,
     /// bn254 `Fq12` inverse: an element in, its inverse out
     Bn254Fq12Inverse,
-    /// bls12-381 base field square root: an element in; a candidate root and a "quadratic
-    /// non-residue" flag out. As for secp256k1 (`p = 3 mod 4`), the candidate is the root of the
-    /// input, or of its negation when the input is not a square.
+    /// bls12-381 base field square root: as for secp256k1 (`p = 3 mod 4`)
     Bls12381BaseFieldSqrt,
     /// bls12-381 base field inverse: an element in, its inverse out
     Bls12381BaseFieldInverse,
     /// bls12-381 `Fq12` inverse: an element in, its inverse out
     Bls12381Fq12Inverse,
-    /// The prover's claim about a bn254 pairing product (see `crypto::residue_witness` and
-    /// `hints::PairingClaim`): the slice of the affine pairs `(G1Affine, G2Affine)` in; an
-    /// "is the identity" flag, then for an identity the witness `c`, `d = c^-1` (`Fq12` each) and
-    /// the scaling factor (`Fq6`), otherwise the inverse of the Miller loop output (`Fq12`)
+    /// bn254 pairing claim (`hints::PairingClaim`): `(G1Affine, G2Affine)` pairs in; an
+    /// identity flag, then `c`, `d = c^-1` (`Fq12`) and `s` (`Fq6`), or else the Miller loop
+    /// inverse (`Fq12`)
     Bn254PairingResidueWitness,
-    /// The slopes of the two affine `G2` chains of a bn254 pairing input point (see
-    /// `crypto::bn254::curves::g2_affine`): the `G2Affine` point in; a flag and the 93 slopes
-    /// (`Fq2`) of the subgroup membership test, then a flag and the 87 slopes of the line
-    /// precomputation out. A cleared flag means the chain hit an exceptional case and the
-    /// projective computation is to be used.
+    /// Slopes of the affine `G2` chains of a bn254 pairing point: a `G2Affine` in; a flag and 93
+    /// `Fq2` subgroup-test slopes, then a flag and 87 line slopes out. A cleared flag marks an
+    /// exceptional chain, for which the projective computation is used.
     Bn254G2PairingSlopes,
-    /// The prover's claim about the KZG proof pairing product `e(P1, G2) e(P2, tau G2)`: the
-    /// `G1Affine` points `[P1, P2]` in; an "is the identity" flag, then for an identity the
-    /// witness `d` (`Fq12`) and the scaling factor (`Fq6`), otherwise the inverse of the Miller
-    /// loop output (`Fq12`)
+    /// KZG pairing claim for `e(P1, G2) e(P2, tau G2)`: `[G1Affine; 2]` in; an identity flag, then
+    /// `d` (`Fq12`) and `s` (`Fq6`), or else the Miller loop inverse (`Fq12`)
     Bls12381KzgResidueWitness,
-    /// secp256k1 base field division: the numerator and the denominator (two adjacent elements)
-    /// in, the quotient out
+    /// secp256k1 base field division: numerator and denominator (adjacent) in, the quotient out
     Secp256k1BaseFieldDivision,
-    /// bn254 base field division: the numerator and the denominator (two adjacent elements)
-    /// in, the quotient out
+    /// bn254 base field division: numerator and denominator (adjacent) in, the quotient out
     Bn254BaseFieldDivision,
-    /// bls12-381 base field division: the numerator and the denominator (two adjacent
-    /// elements) in, the quotient out
+    /// bls12-381 base field division: numerator and denominator (adjacent) in, the quotient out
     Bls12381BaseFieldDivision,
-    /// Arbitrary validated BLS12-381 affine pairs (`hints::Bls12381Pair`) in;
-    /// identity flag then `d, s` for an identity, otherwise the conjugated Miller loop inverse.
+    /// bls12-381 pairing claim: `hints::Bls12381Pair`s in; an identity flag, then `d, s`, or else
+    /// the conjugated Miller loop inverse
     Bls12381PairingResidueWitness,
 }
 
@@ -116,8 +103,7 @@ pub(super) fn offset_address(address: usize, offset: usize) -> Result<usize, Hin
         .ok_or(HintError("querier address overflows"))
 }
 
-/// Reads a word of the querier (`QuerierMemory::word_size` bytes), e.g. an element of the address array of
-/// a composite input, or a field of a request struct of querier words.
+/// Reads a querier word (`QuerierMemory::word_size` bytes, low half first).
 pub fn read_querier_word<M: QuerierMemory + ?Sized>(
     memory: &M,
     address: usize,
@@ -134,10 +120,8 @@ pub fn read_querier_word<M: QuerierMemory + ?Sized>(
     }
 }
 
-/// The request of a hint query, as the oracle reads it through the input word, which is the address
-/// of a `GenericFieldOpsHint<usize>` of the querier: a [`FieldOpsHint`] on the proving target, a
-/// [`FieldOpsHint64`] for a querier in the same process. Returns the op, and the address and the
-/// length (in `u32` words) of the operand.
+/// Reads the `GenericFieldOpsHint<usize>` at `address` of the querier ([`FieldOpsHint`] on the
+/// guest, [`FieldOpsHint64`] in this process): the op, and the operand's address and length.
 pub fn read_field_hint_request<M: QuerierMemory + ?Sized>(
     memory: &M,
     address: usize,
@@ -167,17 +151,14 @@ pub fn read_field_hint_request<M: QuerierMemory + ?Sized>(
     ))
 }
 
-/// Sends the request for the hint `op` on `operand`, which the oracle reads where it is (see
-/// [`FieldHintOp`]). The answer is then received with [`HintAnswer::read`] (or
-/// [`read_hint_answer`](super::read_hint_answer)), piecemeal if needed, and the query ended with
-/// [`HintOracle::finish_query`].
+/// Sends the request for the hint `op` on `operand`. The caller then reads the answer with
+/// [`HintAnswer::read`] and ends the query with [`HintOracle::finish_query`].
 ///
 /// # Safety
 ///
-/// `operand` must be a value of the operand type of `op` (see [`FieldHintOp`]), e.g. a
-/// `FieldElement` for [`FieldHintOp::Secp256k1BaseFieldInverse`] or `[FieldElement; 2]` for
-/// [`FieldHintOp::Secp256k1BaseFieldDivision`]: an oracle that answers in this process reads it as
-/// one ([`HintOracle::send_query`]).
+/// `operand` must be a value of the operand type of `op` (see [`FieldHintOp`]), e.g.
+/// `[FieldElement; 2]` for [`FieldHintOp::Secp256k1BaseFieldDivision`]: an oracle in this process
+/// reads it as one.
 #[inline(always)]
 pub unsafe fn send_field_hint_query<O: HintOracle, T: ?Sized>(
     oracle: &mut O,
@@ -186,8 +167,7 @@ pub unsafe fn send_field_hint_query<O: HintOracle, T: ?Sized>(
 ) -> Result<(), HintError> {
     let size = core::mem::size_of_val(operand);
     debug_assert!(size.is_multiple_of(4) && core::mem::align_of_val(operand) >= 4);
-    // the oracle reads the request and the operand while it receives the query: their addresses
-    // are exposed
+    // the oracle reads the request and the operand by address
     let request = GenericFieldOpsHint::<usize> {
         op: op as u32,
         src_ptr: core::ptr::from_ref(operand)
@@ -195,10 +175,8 @@ pub unsafe fn send_field_hint_query<O: HintOracle, T: ?Sized>(
             .expose_provenance(),
         src_len_u32_words: (size / 4) as u32,
     };
-    // SAFETY: the input word is the address of `request`, a live `GenericFieldOpsHint<usize>`
-    // (the request of `FIELD_OPS_ADVISE_QUERY_ID` on this target), whose operand pointer
-    // references `operand`, alive for the call, and a value of the operand type of `op` (the
-    // caller's obligation)
+    // SAFETY: the input word is the address of `request`, live for the call, whose operand is
+    // `operand`, a value of the operand type of `op` (the caller's obligation)
     unsafe {
         oracle.send_query(
             FIELD_OPS_ADVISE_QUERY_ID,
@@ -207,9 +185,8 @@ pub unsafe fn send_field_hint_query<O: HintOracle, T: ?Sized>(
     }
 }
 
-/// Asks the oracle for the hint `op` on `operand` (see [`send_field_hint_query`]), and receives the
-/// answer straight into `dst`. The answer is checked to be well-formed only: it is up to the caller
-/// to check that it is right.
+/// Asks for the hint `op` on `operand` and receives the answer into `dst`, checked to be
+/// well-formed only: the caller checks that it is right.
 ///
 /// # Safety
 ///
