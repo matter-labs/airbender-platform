@@ -15,8 +15,7 @@ static int same(const void* x, const void* y, size_t len) {
     return 1;
 }
 
-/* FNV-1a over every result of the fixture. The RV32 runs must end with the digest of the native
- * run, and a tampered hint must make the guest fail rather than change any result. */
+/* FNV-1a over the fixture's results: every RV32 run must end with the native digest. */
 static uint32_t digest_state;
 static void mix(const void* data, size_t len) {
     const uint8_t* bytes = data;
@@ -28,7 +27,7 @@ static void mix(const void* data, size_t len) {
 static const char BLS_G1[] = "17f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb08b3f481e3aaa0f1a09e30ed741d8ae4fcf5e095d5d00af600db18cb2c04b3edd03cc744a2888ae40caa232946c5e7e1";
 static const char BLS_G2[] = "024aa2b2f08f0a91260805272dc51051c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb813e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049334cf11213945d57e5ac7d055d042b7e0ce5d527727d6e118cc9cdc6da2e351aadfd9baa8cbdd3a76d429a695160d12c923ac9cc3baca289e193548608b828010606c4a02ea734cc32acd2b02bc28b99cb3e287e85a763af267492ab572e99ab3f370d275cec1da1aaa9075ff05f79be";
 
-/* Field bindings, including the extension fields, and zero operands (which take no hint). */
+/* Field bindings; zero operands take no hint. */
 static uint32_t fields(void) {
     zkvm_bytes_32 a = {0}, b = {0}, zero = {0}, result = {0};
     a.data[31] = 6; b.data[31] = 3;
@@ -41,7 +40,7 @@ static uint32_t fields(void) {
     MIX(result);
     CHECK(airbender_secp256k1_fe_inverse(&b, &result), 21); MIX(result);
     CHECK(airbender_secp256k1_scalar_inverse(&b, &result), 22); MIX(result);
-    /* the even root: 2 for 4, and p - 9 for 81, whose natural root x^((p+1)/4) is 9 */
+    /* the even root: 2 for 4, p - 9 for 81 (natural root 9) */
     zkvm_bytes_32 four = {0}, eighty_one = {0}, minus_nine = {0};
     four.data[31] = 4; eighty_one.data[31] = 81;
     unhex(minus_nine.data, "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc26", 32);
@@ -49,7 +48,7 @@ static uint32_t fields(void) {
     for (unsigned i = 0; i < 31; ++i) if (result.data[i]) return 23;
     if (airbender_secp256k1_fe_sqrt(&eighty_one, &result) != ZKVM_EOK || !same(&result, &minus_nine, 32)) return 23;
     MIX(result);
-    /* 3 is not a square modulo the secp256k1 prime: the hint proves it */
+    /* 3 is a nonsquare: the hint proves it */
     if (airbender_secp256k1_fe_sqrt(&b, &result) != ZKVM_EFAIL) return 24;
     if (airbender_secp256k1_fe_inverse(&zero, &result) != ZKVM_EFAIL) return 24;
     if (airbender_bn254_fq_inverse(&zero, &result) != ZKVM_EFAIL) return 24;
@@ -87,8 +86,8 @@ static uint32_t fields(void) {
     return 0;
 }
 
-/* BLS12-381 maps, additions, MSMs (both algorithms, with an infinity point and a zero scalar),
- * subgroup checks, cofactor clearing, Jacobian normalization and the pairing check. */
+/* BLS12-381: maps, additions, MSMs (both algorithms), subgroup checks, cofactor clearing,
+ * normalization and pairings. */
 static uint32_t bls12_381(void) {
     zkvm_bytes_48 fp = {0}; zkvm_bytes_96 point = {0}, product = {0}, doubled = {0}, zero1 = {0};
     CHECK(zkvm_bls12_map_fp_to_g1(&fp, &point), 5); MIX(point);
@@ -108,7 +107,7 @@ static uint32_t bls12_381(void) {
     CHECK(zkvm_bls12_g1_msm(terms, 3, &product), 36);
     if (!same(&product, &doubled, sizeof product)) return 36;
 
-    /* (4, y): a point of the curve outside the subgroup, until its cofactor is cleared */
+    /* (4, y): on the curve, outside the subgroup until its cofactor is cleared */
     zkvm_bytes_96 outside = {0}, cleared = {0};
     unhex(outside.data, "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040a989badd40d6212b33cffc3f3763e9bc760f988c9926b26da9dd85e928483446346b8ed00e1de5d5ea93e354abe706c", 96);
     if (airbender_bls12_g1_is_in_subgroup(&outside, &flag) != ZKVM_EOK || flag) return 37;
@@ -143,8 +142,7 @@ static uint32_t bls12_381(void) {
     return 0;
 }
 
-/* BN254 additions and multiplications (zero scalar, the group order, infinity), normalization,
- * and pairing checks (true, false, empty, with infinity). */
+/* BN254: additions, multiplications, normalization and pairings. */
 static uint32_t bn254(void) {
     zkvm_bn254_g1_point g = {0}, minus_g = {0}, sum = {0}, product = {0}, zero = {0};
     g.data[31] = 1; g.data[63] = 2;
@@ -217,9 +215,8 @@ static uint32_t signatures(void) {
     return 0;
 }
 
-/* ModExp: repeated calls exercise airbender-rt's allocation and deallocation; moduli of 0, 1,
- * 4, 32 and 33 bytes take the single-digit and the multi-digit hinted paths, and a zero modulus
- * gives zeroes. */
+/* ModExp: the repeated calls exercise airbender-rt's allocator; moduli up to 32 bytes take the
+ * single-digit hinted path, longer ones the multi-digit one. */
 static uint32_t modexp(void) {
     const uint8_t base[] = {2}, exponent[] = {10}, modulus[] = {0, 0, 3, 232};
     for (unsigned i = 0; i < 256; ++i) {
@@ -249,9 +246,7 @@ static uint32_t modexp(void) {
     return 0;
 }
 
-/* RV32 c-runtime integration fixture. The runner supplies an exclusive heap. Built natively, it
- * records the hints that the RV32 csr-oracle build reads (see main). The digest of every result
- * goes to *digest. */
+/* The RV32 c-runtime fixture; scenario 1 initializes the heap twice, which must trap. */
 uint32_t airbender_crypto_runtime_smoke(uint8_t* heap_start, uint8_t* heap_end, uint32_t scenario, uint32_t* digest) {
 #ifdef __riscv
     airbender_crypto_init_heap(heap_start, heap_end);
@@ -270,7 +265,7 @@ uint32_t airbender_crypto_runtime_smoke(uint8_t* heap_start, uint8_t* heap_end, 
 }
 
 #ifdef __riscv
-/* Consumer-owned libc symbols must coexist with the static accelerator archive. */
+/* Consumer-owned libc symbols, which must coexist with the archive. */
 void* memcpy(void* out, const void* in, size_t len) {
     uint8_t* d = out; const uint8_t* s = in;
     for (size_t i = 0; i < len; ++i) d[i] = s[i];
@@ -290,10 +285,8 @@ void* memmove(void* out, const void* in, size_t len) {
 #else
 #include <stdio.h>
 #include <stdlib.h>
-/* Native hint recording, for an RV32 csr-oracle build of the fixture: run it without and with a
- * recording (the results must not differ), then print the digest of its results, then the
- * recorded words, one hex word per line. Build it without features: native builds record the
- * hints of the guest's delegated arithmetic without delegation. */
+/* Native: run without and with a recording (the results must agree), then print the digest and
+ * the tape, one hex word per line. */
 int main(void) {
     uint32_t plain = 0, hinted = 0;
     if (airbender_crypto_runtime_smoke(NULL, NULL, 0, &plain) != 0) return 1;

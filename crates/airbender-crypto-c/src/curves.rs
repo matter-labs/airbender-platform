@@ -1,5 +1,5 @@
-//! C bindings of the curve precompiles (airbender-crypto's `precompiles` endpoints, the crypto
-//! half of zksync-os's) and of the subgroup, cofactor and normalization helpers.
+//! C bindings of the curve precompile endpoints and of the subgroup, cofactor and normalization
+//! helpers.
 use crate::{commit, crypto, decode, input, point, point_bytes, read, with_active_oracle};
 use crate::{Bytes, Pair};
 use alloc::alloc::Global;
@@ -15,8 +15,7 @@ use crypto::{
     hints::{self, Bls12381Fq2Divider, Bls12381FqDivider},
 };
 
-/// The EIP-2537 encoding of compact BLS12-381 coordinates: each 48-byte base-field element
-/// widened to 64 bytes with leading zeroes
+/// Compact BLS12-381 coordinates widened to EIP-2537's 64 bytes per base-field element
 fn eip2537<const N: usize, const M: usize>(compact: &[u8; N]) -> [u8; M] {
     const { assert!(N.is_multiple_of(48) && M == N / 48 * 64) };
     let mut padded = [0; M];
@@ -129,7 +128,7 @@ pub unsafe extern "C" fn zkvm_bls12_g2_add(
 }
 
 /// The EIP-2537 MSM input of compact `(point, scalar)` pairs; `None` for none, which EIP-2537
-/// rejects (and the endpoints leave to their caller)
+/// rejects
 fn msm_input<const P: usize, const Q: usize, const N: usize>(
     pairs: &[Pair<P, 32>],
 ) -> Option<Vec<[u8; N]>> {
@@ -188,7 +187,7 @@ pub unsafe extern "C" fn zkvm_bls12_pairing(
 ) -> i32 {
     commit(verified, || {
         let pairs = input(pairs, num_pairs);
-        // no pairs: rejected, as EIP-2537 does (the endpoint leaves it to its caller)
+        // EIP-2537 rejects an empty input; the endpoint leaves it to its caller
         if pairs.is_empty() {
             return None;
         }
@@ -254,7 +253,7 @@ pub unsafe extern "C" fn zkvm_kzg_point_eval(
 }
 
 /// The point of Jacobian coordinates `X || Y || Z`, normalized by `normalize`, if it is on the
-/// curve (`Z = 0` is the point at infinity, whatever `X` and `Y`)
+/// curve (`Z = 0` is infinity, whatever `X` and `Y`)
 unsafe fn normalize<C: SWCurveConfig, const N: usize, const M: usize>(
     point: *const Bytes<N>,
     result: *mut Bytes<M>,
@@ -322,10 +321,8 @@ pub unsafe extern "C" fn airbender_bls12_g2_to_affine(
     })
 }
 
-// These helpers accept any on-curve point; subgroup membership is the operation's result, not a
-// precondition. Cofactor clearing likewise does not reduce its scalar under the assumption that
-// the input is in the prime-order subgroup. With an oracle they are affine, with the dividers of
-// checked hints (the infinity takes none), as the EIP-2537 endpoints check and clear.
+// These take any on-curve point, inside the subgroup or not; cofactor clearing does not reduce its
+// scalar. With an oracle they are affine, with checked division hints.
 
 #[no_mangle]
 /// # Safety

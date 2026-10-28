@@ -1,29 +1,20 @@
-//! C bindings for existing Airbender crypto and hinted operations.
-//! See `include/airbender_crypto.h` for the supported API and pinned standard subset.
+//! C ABI for Airbender's crypto accelerators (see `include/airbender_crypto.h`).
 //!
 //! # Safety
-//! All exported functions require live, initialized input allocations of the declared
-//! sizes, and writable output allocations. Typed pointers must be 8-byte aligned.
-//! Pointers must be non-null even for empty inputs, except for the size query
-//! `airbender_crypto_record_end(NULL, 0)`. Input/output overlap is supported:
-//! outputs are committed only after all input reads have finished. Concurrent access
-//! to the same output requires caller synchronization. Contract violations abort
-//! execution; a wrong or missing hint either aborts it or is ignored, and never changes a
-//! result. Malformed cryptographic inputs return -1.
+//! Every export requires non-null pointers, aligned for their type and valid for the declared
+//! sizes, even for empty inputs; the one exception is `airbender_crypto_record_end(NULL, 0)`.
+//! Inputs may overlap outputs: an output is written only after every input was read.
+//! Violations abort execution. Malformed cryptographic inputs return -1.
 //!
 //! # Hints
-//! The exports call airbender-crypto's endpoints and hinted operations with an oracle when
-//! there is one (`with_active_oracle`), and without one otherwise; the path depends on nothing
-//! else. On RV32 with `csr-oracle` the oracle is the non-determinism CSR, which reads the hint
-//! answers from the guest's input. Natively, it is the recorder of the C recording API, when a
-//! recording is active on the calling thread: the call runs the guest's hinted path and appends
-//! the guest's answers to the tape.
+//! An export takes airbender-crypto's hinted path when there is an oracle (`with_active_oracle`)
+//! and the plain path otherwise. On RV32 with `csr-oracle` the oracle is the non-determinism CSR;
+//! natively it is the recorder of an active recording on the calling thread. A wrong or missing
+//! hint aborts execution or is ignored; it never changes a result.
 #![cfg_attr(target_arch = "riscv32", no_std)]
 #![feature(allocator_api)]
 
-// Native builds record the hints of the guest's delegated arithmetic without delegating: the
-// recorder computes every answer in both representations. A native `proving` build of
-// airbender-crypto would also share one global scratch space between threads.
+// Native builds record the hints of the guest's delegated arithmetic without delegating.
 #[cfg(all(feature = "delegation", not(target_arch = "riscv32")))]
 compile_error!("`delegation` is RV32 only: native builds record hints without it");
 
@@ -45,10 +36,8 @@ use crypto::ark_ec::{
 use crypto::ark_ff::{AdditiveGroup, Field, PrimeField};
 use crypto::hints::{HintError, HintOracle};
 
-/// `$hinted` with the oracle of the call (`$oracle: &mut ActiveOracle`) if there is one, else
-/// `$plain`. airbender-crypto's hinted operations exist natively and, on RV32, with delegated
-/// arithmetic (which `csr-oracle` requires); without it there is never an oracle, and only
-/// `$plain` is compiled. Like `with_active_oracle`, at most once per export.
+/// `$hinted` with the oracle of the call (`$oracle: &mut ActiveOracle`), else `$plain`. The hinted
+/// operations exist natively and on RV32 with `delegation`. At most once per export.
 macro_rules! hinted {
     (|$oracle:ident| $hinted:expr, $plain:expr $(,)?) => {
         $crate::with_active_oracle(|oracle| match oracle {
@@ -67,7 +56,7 @@ mod fields;
 mod recording;
 mod signatures;
 
-/// The oracle of the exports: the non-determinism CSR on RV32, the active recorder natively
+/// The oracle of the exports: the non-determinism CSR on RV32, the active recorder natively.
 pub(crate) enum ActiveOracle<'a> {
     #[cfg(target_arch = "riscv32")]
     Csr(
@@ -78,8 +67,7 @@ pub(crate) enum ActiveOracle<'a> {
     Recording(&'a mut crypto::hints::RecordingHintOracle),
 }
 
-// Forwarding only. Queries come from airbender-crypto's hinted operations, the only code that
-// is given an `ActiveOracle`.
+// Forwarding only: queries come from airbender-crypto's hinted operations.
 impl HintOracle for ActiveOracle<'_> {
     #[inline(always)]
     unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
@@ -126,9 +114,7 @@ impl HintOracle for ActiveOracle<'_> {
     }
 }
 
-/// `f` with the oracle of the call: on RV32 the CSR with `csr-oracle`, and none without it;
-/// natively the recorder of this thread while a recording is active, and none otherwise. The
-/// native recorder is borrowed for the whole of `f`, so an export calls this once.
+/// `f` with the oracle of the call: the CSR with `csr-oracle`, none without.
 #[cfg(target_arch = "riscv32")]
 #[inline(always)]
 pub(crate) fn with_active_oracle<R>(f: impl FnOnce(Option<&mut ActiveOracle<'_>>) -> R) -> R {
@@ -136,9 +122,8 @@ pub(crate) fn with_active_oracle<R>(f: impl FnOnce(Option<&mut ActiveOracle<'_>>
     f(cfg!(feature = "csr-oracle").then_some(&mut oracle))
 }
 
-/// `f` with the oracle of the call: on RV32 the CSR with `csr-oracle`, and none without it;
-/// natively the recorder of this thread while a recording is active, and none otherwise. The
-/// native recorder is borrowed for the whole of `f`, so an export calls this once.
+/// `f` with the recorder of this thread's recording, if any. The recorder is borrowed for the whole
+/// of `f`, so an export calls this once.
 #[cfg(not(target_arch = "riscv32"))]
 pub(crate) fn with_active_oracle<R>(f: impl FnOnce(Option<&mut ActiveOracle<'_>>) -> R) -> R {
     recording::with_active_recorder(|recorder| match recorder {
@@ -149,10 +134,10 @@ pub(crate) fn with_active_oracle<R>(f: impl FnOnce(Option<&mut ActiveOracle<'_>>
 
 #[cfg(all(target_arch = "riscv32", feature = "c-runtime"))]
 #[no_mangle]
-/// Initialize airbender-rt's existing global allocator for a standalone C guest.
+/// Initializes airbender-rt's global allocator for a standalone C guest.
 /// # Safety
-/// Call once after guest memory setup, before any allocations. The exclusive
-/// writable heap range [start, end) must be aligned for usize and remain live.
+/// Call once, before anything allocates. [start, end) must be writable, aligned for usize, owned
+/// by the allocator only, and stay live.
 pub unsafe extern "C" fn airbender_crypto_init_heap(start: *mut u8, end: *mut u8) {
     check_ptr(start.cast::<usize>());
     check_ptr(end.cast::<usize>());
@@ -167,16 +152,15 @@ pub unsafe extern "C" fn airbender_crypto_init_heap(start: *mut u8, end: *mut u8
 
 #[cfg(not(target_arch = "riscv32"))]
 std::thread_local! {
-    /// The words of an ended recording that did not fit the caller's buffer
+    /// The words of an ended recording that did not fit the caller's buffer.
     static RECORDED: core::cell::RefCell<Option<alloc::vec::Vec<u32>>> =
         const { core::cell::RefCell::new(None) };
 }
 
 #[cfg(not(target_arch = "riscv32"))]
 #[no_mangle]
-/// Native builds only: start recording the hints of the calls on this thread, as
-/// `airbender_crypto::hints::record_hints` does for Rust. A recording in progress starts over,
-/// and the words of an ended one that were not claimed are dropped.
+/// Native builds only: starts recording the hints of this thread's calls. A recording in progress
+/// starts over, and words of an ended one that were not copied are dropped.
 pub extern "C" fn airbender_crypto_record_begin() {
     RECORDED.take();
     recording::begin_recording();
@@ -184,14 +168,11 @@ pub extern "C" fn airbender_crypto_record_begin() {
 
 #[cfg(not(target_arch = "riscv32"))]
 #[no_mangle]
-/// Native builds only: end this thread's recording and return its number of words. They are
-/// copied to `words` when they fit in `capacity`; otherwise nothing is copied and they are kept
-/// for the next call. Without a recording (or once its words were copied), 0. With a zero
-/// `capacity`, `words` may be null: the call only returns the number of words (and, as for any
-/// capacity they do not fit, keeps them for the next call).
+/// Native builds only: ends this thread's recording and returns its number of words, 0 without
+/// one. The words are copied when they fit in `capacity`; otherwise they are kept for the next
+/// call. `(NULL, 0)` is a size query.
 /// # Safety
-/// `words` must be valid for writes of `capacity` words. See the crate-level contract; the
-/// exception is a null `words` with a zero `capacity`.
+/// `words` must be valid for writes of `capacity` words, or null with a zero `capacity`.
 pub unsafe extern "C" fn airbender_crypto_record_end(words: *mut u32, capacity: usize) -> usize {
     if !(words.is_null() && capacity == 0) {
         check_ptr(words);
@@ -216,6 +197,7 @@ pub struct Bytes<const N: usize> {
     pub data: [u8; N],
 }
 
+/// Layout of the upstream pair structs: two byte arrays, unpadded.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Pair<const P: usize, const Q: usize> {
@@ -231,8 +213,8 @@ fn check_ptr<T>(p: *const T) {
     assert_eq!(p as usize % mem::align_of::<T>(), 0, "unaligned C pointer");
 }
 
-// Stable C representation: canonical big-endian prime-field components, c0 first
-// recursively for extension fields. Never expose the delegated Montgomery layout.
+// The C encoding: canonical big-endian prime-field components, c0 first recursively for
+// extension fields.
 pub(crate) fn decode<F: Field>(bytes: &[u8]) -> Option<F> {
     let width = (F::BasePrimeField::MODULUS_BIT_SIZE as usize).div_ceil(8);
     let count = F::extension_degree() as usize;
@@ -271,8 +253,7 @@ pub(crate) fn encode_into<F: Field>(value: F, bytes: &mut [u8]) {
     }
 }
 
-// Canonical compact coordinates for the ABI, independent of Montgomery layout
-// and the 64-byte padded EIP-2537 representation. Infinity is all-zero x/y.
+// Compact affine coordinates (not EIP-2537's 64-byte padding); infinity is all-zero x/y.
 pub(crate) fn point<C: SWCurveConfig>(bytes: &[u8]) -> Option<Affine<C>> {
     if bytes.iter().all(|byte| *byte == 0) {
         return Some(Affine::identity());
@@ -379,7 +360,7 @@ impl crypto::modexp::TryExtend<u8> for ModExpOutput<'_> {
 }
 
 #[no_mangle]
-/// Arbitrary-length big-endian ModExp (zksync-os's); output is exactly `mod_len` bytes.
+/// Arbitrary-length big-endian ModExp; the output is exactly `mod_len` bytes.
 /// # Safety
 /// See the crate-level contract. Output may overlap any input.
 pub unsafe extern "C" fn zkvm_modexp(
@@ -399,7 +380,7 @@ pub unsafe extern "C" fn zkvm_modexp(
     let result = with_active_oracle(|oracle| {
         crypto::modexp::modexp(base, exp, modulus, alloc::alloc::Global, oracle)
     });
-    // The result is owned: the output may overlap the operands, which are no longer read.
+    // The result is owned, so the output may overlap the operands.
     let mut output = ModExpOutput {
         bytes: slice::from_raw_parts_mut(output, mod_len),
         written: 0,

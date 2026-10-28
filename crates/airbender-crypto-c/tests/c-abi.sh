@@ -9,7 +9,7 @@ test -n "$native_libs" || { cat "$scratch/link.log"; echo 'No native link flags 
 archive="${CARGO_TARGET_DIR:-target}/release/libairbender_crypto_c.a"
 for language in c c++; do
     if test "$language" = c; then compiler=${CC:-cc}; standard=c11; else compiler=${CXX:-c++}; standard=c++11; fi
-    # Intentional splitting of compiler-reported linker flags.
+    # $native_libs is split on purpose
     $compiler -x "$language" -std="$standard" -Wall -Wextra -Werror -Wno-missing-field-initializers -Wno-missing-braces \
         -Icrates/airbender-crypto-c/include -c crates/airbender-crypto-c/tests/abi.c -o "$scratch/abi.o"
     $compiler "$scratch/abi.o" "$archive" $native_libs -o "$scratch/abi"

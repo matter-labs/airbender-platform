@@ -46,8 +46,8 @@ pub unsafe extern "C" fn zkvm_secp256r1_verify(
 }
 
 #[no_mangle]
-/// Public-key recovery for recovery IDs 0 to 3: the `y` parity, plus 2 for the `x = r + n` of the
-/// signature point. 0 and 1 take zksync-os's ecrecover endpoint.
+/// Public-key recovery for recovery IDs 0 to 3: the `y` parity, plus 2 for `x = r + n`. 0 and 1
+/// take the ecrecover endpoint.
 /// # Safety
 /// See the crate-level contract.
 pub unsafe extern "C" fn zkvm_secp256k1_ecrecover(
@@ -74,8 +74,8 @@ pub unsafe extern "C" fn zkvm_secp256k1_ecrecover(
     })
 }
 
-/// The recovery of a signature whose point has `x = r + n` (`r` below `p - n`, about 2^-128 of
-/// signatures), which the ecrecover of Ethereum does not take
+/// Recovery for a signature point with `x = r + n` (`r < p - n`), which Ethereum's ecrecover
+/// does not take
 fn recover_x_above_order(msg: &[u8; 32], sig: &[u8; 64], recid: u8) -> Option<Bytes<64>> {
     use crypto::k256::{
         ecdsa::{RecoveryId, Signature},

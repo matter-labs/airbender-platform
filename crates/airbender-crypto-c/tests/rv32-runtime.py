@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Link a C-owned startup/libc and execute it on FullUnsigned, including tampered hint tapes.
+"""Run tests/runtime.c on FullUnsigned with a C-owned startup, including tampered hint tapes.
 
-The fixture (tests/runtime.c) is first built natively without features and run under the C
-recording API: it records the hint tape that an RV32 csr-oracle build reads, and the digest of
-its results. Each RV32 build must end with that digest. Only csr-oracle builds read the tape,
-after their scenario word; the others get an empty one and must send no query. Requires clang,
-Python 3, and the pinned Rust toolchain with llvm-tools-preview. Run from any directory. --all
-checks the configurations plain, delegation and csr-oracle + delegation.
+A native build records the tape and the digest of the results; each RV32 build must end with
+that digest, and only csr-oracle builds read the tape. Requires clang and the pinned toolchain's
+llvm-tools-preview. --all checks the plain, delegation and csr-oracle delegation builds.
 """
 import argparse
 import json
@@ -31,7 +28,7 @@ def target_dir():
 
 
 def record(out):
-    """The digest of the fixture's results and its hint tape, from a native build without features."""
+    """The digest and the hint tape of the fixture, from a native build without features."""
     env = dict(os.environ)
     env.pop('RUSTFLAGS', None)
     link = run('cargo', 'rustc', '-p', 'airbender-crypto-c', '--release', '--crate-type', 'staticlib',
@@ -65,10 +62,8 @@ def check(features, digest, tape):
         ir = (out / 'runtime.ll').read_text()
         ir = re.sub(r'"target-features"="[^"]*"', '"target-features"="+m"', ir)
         (out / 'runtime.ll').write_text(ir)
-        # Startup is owned by the consumer. Copy constants/data out of ROM before
-        # any delegation (its operands must be in RAM), and provide the stack. The
-        # fixture's status goes to a0 and the digest of its results to a1. The heap
-        # is 1 MiB: the hinted bn254 pairing builds the 16 KB lines of each G2 point.
+        # The consumer's startup: copy data to RAM before any delegation (its operands must be
+        # in RAM), set the stack, and return the status in a0 and the digest in a1. 1 MiB heap.
         (out / 'start.ll').write_text(r'''
 module asm ".section .text.start,\22ax\22"
 module asm ".globl _start"

@@ -1,7 +1,15 @@
-//! Check the C encodings and error contract; group arithmetic is tested in crypto.
+//! The C encodings and error contract of the curve exports, and the subgroup, cofactor and
+//! normalization bindings with the tapes of the Rust hinted operations they stand for.
 mod common;
 
+use airbender_crypto::ark_ec::short_weierstrass::{Affine, SWCurveConfig};
+use airbender_crypto::ark_ec::{AffineRepr, CurveGroup};
+use airbender_crypto::ark_ff::{AdditiveGroup, Field};
+use airbender_crypto::bls12_381::{self as bls, Fq, Fq2};
+use airbender_crypto::bn254 as bn;
+use airbender_crypto::hints::{self, record_hints, Bls12381Fq2Divider, Bls12381FqDivider};
 use airbender_crypto_c::*;
+use common::{call, encode, point};
 
 #[test]
 fn bn_big_endian_and_in_place_output() {
@@ -23,7 +31,6 @@ fn bn_big_endian_and_in_place_output() {
 
 #[test]
 fn bls_compact_sizes_and_fp2_coefficient_order() {
-    use airbender_crypto::{ark_ec::AffineRepr, ark_ff::PrimeField, bls12_381 as bls};
     let mut fp2 = Bytes { data: [0; 96] };
     fp2.data[47] = 1; // real component
     fp2.data[95] = 2; // imaginary component
@@ -31,26 +38,17 @@ fn bls_compact_sizes_and_fp2_coefficient_order() {
     unsafe {
         assert_eq!(zkvm_bls12_map_fp2_to_g2(&fp2, &mut output), EOK);
     }
-    // Compare encoding to the existing Rust API, without implementing curve math here.
-    let expected = bls::eip2537::map_fp2_to_g2(bls::Fq2::new(1.into(), 2.into()))
+    let expected = bls::eip2537::map_fp2_to_g2(Fq2::new(1.into(), 2.into()))
         .unwrap()
         .clear_cofactor();
-    for (bytes, field) in output.data.as_chunks::<48>().0.iter().zip([
-        expected.x.c0,
-        expected.x.c1,
-        expected.y.c0,
-        expected.y.c1,
-    ]) {
-        assert_eq!(bls::Fq::from_be_bytes_mod_order(bytes), field);
-    }
-    let saved = output;
+    assert_eq!(output, point(&expected));
     unsafe {
         assert_eq!(
             zkvm_bls12_map_fp2_to_g2(&Bytes { data: [0xff; 96] }, &mut output),
             EFAIL
         );
     }
-    assert_eq!(output, saved);
+    assert_eq!(output, point(&expected));
 }
 
 #[test]
@@ -117,174 +115,107 @@ fn canonical_off_curve_coordinates_are_rejected_before_operations() {
     assert!(verified);
 }
 
-/// The compact encoding of the coordinates `values` (canonical big-endian)
-fn compact<const N: usize, F: airbender_crypto::ark_ff::PrimeField>(values: &[F]) -> Bytes<N> {
-    use airbender_crypto::ark_ff::BigInteger;
-    let mut output = Bytes { data: [0; N] };
-    let width = N / values.len();
-    for (dst, value) in output.data.chunks_exact_mut(width).zip(values) {
-        let bytes = value.into_bigint().to_bytes_be();
-        dst.copy_from_slice(&bytes[bytes.len() - width..]);
-    }
-    output
+/// A point of the curve outside its prime-order subgroup: the first `x = from_u64(k)` with one
+fn outside_subgroup<C: SWCurveConfig>(from_u64: impl Fn(u64) -> C::BaseField) -> Affine<C> {
+    (1..)
+        .find_map(|k| {
+            let x = from_u64(k);
+            let point = Affine::<C>::new_unchecked(x, (x.square() * x + C::COEFF_B).sqrt()?);
+            (!point.is_in_correct_subgroup_assuming_on_curve()).then_some(point)
+        })
+        .unwrap()
 }
 
-/// Subgroup checks, cofactor clearing and Jacobian normalization: right without and with a
-/// recording, with the tapes of the hinted Rust operations they stand for
 #[test]
-fn subgroup_cofactor_and_normalization() {
-    use airbender_crypto::ark_ec::{AffineRepr, CurveGroup};
-    use airbender_crypto::ark_ff::Field;
-    use airbender_crypto::bls12_381::{self as bls, Fq, Fq2};
-    use airbender_crypto::hints::{self, record_hints, Bls12381Fq2Divider, Bls12381FqDivider};
-    use common::with_and_without_recording;
-    let g1 = |p: &bls::G1Affine| match p.xy() {
-        Some((x, y)) => compact::<96, Fq>(&[x, y]),
-        None => Bytes { data: [0; 96] },
-    };
-    let g2 = |p: &bls::G2Affine| match p.xy() {
-        Some((x, y)) => compact::<192, Fq>(&[x.c0, x.c1, y.c0, y.c1]),
-        None => Bytes { data: [0; 192] },
-    };
-    // (4, y): on the curve, outside the subgroup
-    let x = Fq::from(4u64);
-    let outside =
-        bls::G1Affine::new_unchecked(x, (x.square() * x + Fq::from(4u64)).sqrt().unwrap());
-    assert!(!outside.is_in_correct_subgroup_assuming_on_curve());
-    let generator = bls::G1Affine::generator();
-    for (point, expected) in [
-        (generator, true),
-        (outside, false),
+fn subgroup_and_cofactor() {
+    let outside1 = outside_subgroup::<bls::g1::Config>(Fq::from);
+    let outside2 = outside_subgroup::<bls::g2::Config>(|k| Fq2::new(k.into(), Fq::ZERO));
+    // infinity is a member without a hint
+    for (p, member) in [
+        (bls::G1Affine::generator(), true),
+        (outside1, false),
         (bls::G1Affine::zero(), true),
     ] {
-        let ((status, member), tape) = with_and_without_recording(|| {
-            let mut member = !expected;
-            let status = unsafe { airbender_bls12_g1_is_in_subgroup(&g1(&point), &mut member) };
-            (status, member)
+        let ((status, result), tape) = call(!member, |out| unsafe {
+            airbender_bls12_g1_is_in_subgroup(&point(&p), out)
         });
-        assert_eq!((status, member), (EOK, expected));
-        if !point.is_zero() {
-            let (_, hinted) = record_hints(|o| {
-                bls::g1::is_in_subgroup_with_divider(&point, &mut Bls12381FqDivider::new(o))
-            });
-            assert_eq!(tape, hinted);
-        }
+        let hinted = record_hints(|o| {
+            p.is_zero() || bls::g1::is_in_subgroup_with_divider(&p, &mut Bls12381FqDivider::new(o))
+        });
+        assert_eq!((status, result, tape), (EOK, member, hinted.1));
     }
-    // the effective cofactor 1 - x of G1, by double-and-add, without any reduction
-    let cleared = outside.mul_bigint([0xd201_0000_0001_0001u64]).into_affine();
-    let ((status, output), tape) = with_and_without_recording(|| {
-        let mut output = Bytes { data: [0; 96] };
-        let status = unsafe { airbender_bls12_g1_clear_cofactor(&g1(&outside), &mut output) };
-        (status, output)
+    for (p, member) in [(bls::G2Affine::generator(), true), (outside2, false)] {
+        let ((status, result), tape) = call(!member, |out| unsafe {
+            airbender_bls12_g2_is_in_subgroup(&point(&p), out)
+        });
+        let (_, hinted) = record_hints(|o| {
+            bls::g2::is_in_subgroup_with_divider(&p, &mut Bls12381Fq2Divider::new(o))
+        });
+        assert_eq!((status, result, tape), (EOK, member, hinted));
+    }
+
+    // clearing does not assume the subgroup: G1's effective cofactor 1 - x, unreduced
+    let cleared = outside1
+        .mul_bigint([0xd201_0000_0001_0001u64])
+        .into_affine();
+    let ((status, output), tape) = call(Bytes { data: [0; 96] }, |out| unsafe {
+        airbender_bls12_g1_clear_cofactor(&point(&outside1), out)
     });
-    assert_eq!((status, output), (EOK, g1(&cleared)));
     let (_, hinted) = record_hints(|o| {
-        bls::g1::clear_cofactor_with_divider(&outside, &mut Bls12381FqDivider::new(o))
+        bls::g1::clear_cofactor_with_divider(&outside1, &mut Bls12381FqDivider::new(o))
     });
-    assert_eq!(tape, hinted);
+    assert_eq!((status, output, tape), (EOK, point(&cleared), hinted));
+    let cleared = outside2.clear_cofactor();
+    assert!(cleared.is_in_correct_subgroup_assuming_on_curve());
+    let ((status, output), tape) = call(Bytes { data: [0; 192] }, |out| unsafe {
+        airbender_bls12_g2_clear_cofactor(&point(&outside2), out)
+    });
+    let (_, hinted) = record_hints(|o| {
+        bls::g2::clear_cofactor_with_divider(&outside2, &mut Bls12381Fq2Divider::new(o))
+    });
+    assert_eq!((status, output, tape), (EOK, point(&cleared), hinted));
+    let outcome = call(Bytes { data: [0xa5; 192] }, |out| unsafe {
+        airbender_bls12_g2_clear_cofactor(&Bytes { data: [0; 192] }, out)
+    });
+    assert_eq!(outcome, ((EOK, Bytes { data: [0; 192] }), vec![]));
+}
+
+/// Jacobian `X || Y || Z`: one inverse hint of Z; Z = 0 is infinity, whatever X and Y
+#[test]
+fn jacobian_normalization() {
+    let g = bls::G1Affine::generator();
+    let z = Fq::from(3u64);
+    let ((status, output), tape) = call(Bytes { data: [0; 96] }, |out| unsafe {
+        airbender_bls12_g1_to_affine(&encode(&[g.x * z.square(), g.y * z.square() * z, z]), out)
+    });
+    assert_eq!((status, output), (EOK, point(&g)));
+    assert_eq!(tape, record_hints(|o| hints::bls12_381_fq_inverse(o, &z)).1);
+    let to_affine = |coordinates: [Fq; 3]| {
+        call(Bytes { data: [0xa5; 96] }, |out| unsafe {
+            airbender_bls12_g1_to_affine(&encode(&coordinates), out)
+        })
+    };
+    let infinity = to_affine([g.x, g.y, Fq::ZERO]);
+    assert_eq!(infinity, ((EOK, Bytes { data: [0; 96] }), vec![]));
+    let off_curve = to_affine([g.x, g.x, Fq::ONE]);
+    assert_eq!(off_curve.0, (EFAIL, Bytes { data: [0xa5; 96] }));
 
     let q = bls::G2Affine::generator();
-    let x = Fq2::new(Fq::from(1u64), Fq::from(0u64));
-    let b =
-        <bls::g2::Config as airbender_crypto::ark_ec::short_weierstrass::SWCurveConfig>::COEFF_B;
-    let outside = (1u64..)
-        .find_map(|k| {
-            let x = x + Fq2::new(Fq::from(k), Fq::from(0u64));
-            let p = bls::G2Affine::new_unchecked(x, (x.square() * x + b).sqrt()?);
-            (!p.is_in_correct_subgroup_assuming_on_curve()).then_some(p)
-        })
-        .unwrap();
-    for (point, expected) in [(q, true), (outside, false)] {
-        let ((status, member), tape) = with_and_without_recording(|| {
-            let mut member = !expected;
-            let status = unsafe { airbender_bls12_g2_is_in_subgroup(&g2(&point), &mut member) };
-            (status, member)
-        });
-        assert_eq!((status, member), (EOK, expected));
-        let (_, hinted) = record_hints(|o| {
-            bls::g2::is_in_subgroup_with_divider(&point, &mut Bls12381Fq2Divider::new(o))
-        });
-        assert_eq!(tape, hinted);
-    }
-    let ((status, output), tape) = with_and_without_recording(|| {
-        let mut output = Bytes { data: [0; 192] };
-        let status = unsafe { airbender_bls12_g2_clear_cofactor(&g2(&outside), &mut output) };
-        (status, output)
+    let z = Fq2::new(Fq::from(3u64), Fq::from(5u64));
+    let ((status, output), tape) = call(Bytes { data: [0; 192] }, |out| unsafe {
+        airbender_bls12_g2_to_affine(&encode(&[q.x * z.square(), q.y * z.square() * z, z]), out)
     });
-    let cleared = outside.clear_cofactor();
-    assert!(cleared.is_in_correct_subgroup_assuming_on_curve());
-    assert_eq!((status, output), (EOK, g2(&cleared)));
-    let (_, hinted) = record_hints(|o| {
-        bls::g2::clear_cofactor_with_divider(&outside, &mut Bls12381Fq2Divider::new(o))
-    });
-    assert_eq!(tape, hinted);
-    // infinity is its own cofactor-cleared point, without hints
-    let ((status, output), tape) = with_and_without_recording(|| {
-        let mut output = Bytes { data: [0xa5; 192] };
-        let status =
-            unsafe { airbender_bls12_g2_clear_cofactor(&Bytes { data: [0; 192] }, &mut output) };
-        (status, output)
-    });
-    assert_eq!((status, output.data, tape), (EOK, [0; 192], vec![]));
-
-    // Jacobian X || Y || Z with Z = 3, Z = 1 and Z = 0, and off the curve
-    let z = Fq::from(3u64);
-    let (gx, gy) = generator.xy().unwrap();
-    let jacobian = compact::<144, Fq>(&[gx * z.square(), gy * z.square() * z, z]);
-    let ((status, output), tape) = with_and_without_recording(|| {
-        let mut output = Bytes { data: [0; 96] };
-        let status = unsafe { airbender_bls12_g1_to_affine(&jacobian, &mut output) };
-        (status, output)
-    });
-    assert_eq!((status, output), (EOK, g1(&generator)));
-    assert_eq!(tape, record_hints(|o| hints::bls12_381_fq_inverse(o, &z)).1);
-    for (coordinates, expected) in [
-        ([gx, gy, Fq::from(1u64)], Some(g1(&generator))),
-        ([gx, gy, Fq::from(0u64)], Some(Bytes { data: [0; 96] })),
-        ([gx, gx, Fq::from(1u64)], None),
-    ] {
-        let ((status, output), tape) = with_and_without_recording(|| {
-            let mut output = Bytes { data: [0xa5; 96] };
-            let status = unsafe {
-                airbender_bls12_g1_to_affine(&compact::<144, Fq>(&coordinates), &mut output)
-            };
-            (status, output)
-        });
-        match expected {
-            Some(point) => assert_eq!((status, output, tape), (EOK, point, vec![])),
-            None => assert_eq!((status, output.data), (EFAIL, [0xa5; 96])),
-        }
-    }
-    let z2 = Fq2::new(Fq::from(3u64), Fq::from(5u64));
-    let (qx, qy) = q.xy().unwrap();
-    let (x, y) = (qx * z2.square(), qy * z2.square() * z2);
-    let jacobian = compact::<288, Fq>(&[x.c0, x.c1, y.c0, y.c1, z2.c0, z2.c1]);
-    let ((status, output), tape) = with_and_without_recording(|| {
-        let mut output = Bytes { data: [0; 192] };
-        let status = unsafe { airbender_bls12_g2_to_affine(&jacobian, &mut output) };
-        (status, output)
-    });
-    assert_eq!((status, output), (EOK, g2(&q)));
+    assert_eq!((status, output), (EOK, point(&q)));
     assert_eq!(
         tape,
-        record_hints(|o| hints::bls12_381_fq2_inverse(o, &z2)).1
+        record_hints(|o| hints::bls12_381_fq2_inverse(o, &z)).1
     );
 
-    use airbender_crypto::bn254 as bn;
+    let g = bn::G1Affine::generator();
     let z = bn::Fq::from(7u64);
-    let jacobian = compact::<96, bn::Fq>(&[
-        bn::Fq::from(1u64) * z.square(),
-        bn::Fq::from(2u64) * z.square() * z,
-        z,
-    ]);
-    let ((status, output), tape) = with_and_without_recording(|| {
-        let mut output = Bytes { data: [0; 64] };
-        let status = unsafe { airbender_bn254_g1_to_affine(&jacobian, &mut output) };
-        (status, output)
+    let ((status, output), tape) = call(Bytes { data: [0; 64] }, |out| unsafe {
+        airbender_bn254_g1_to_affine(&encode(&[g.x * z.square(), g.y * z.square() * z, z]), out)
     });
-    let mut g = Bytes { data: [0; 64] };
-    g.data[31] = 1;
-    g.data[63] = 2;
-    assert_eq!((status, output), (EOK, g));
+    assert_eq!((status, output), (EOK, point(&g)));
     assert_eq!(tape, record_hints(|o| hints::bn254_fq_inverse(o, &z)).1);
 }

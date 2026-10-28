@@ -6,9 +6,8 @@ license.workspace = true
 repository.workspace = true
 description = "C ABI for Airbender cryptographic accelerators"
 
-# The C archive is built with `cargo rustc --crate-type staticlib` (see the README):
-# Cargo builds every listed crate type for dependents too, which would make Rust
-# guests depending on this crate link a standalone archive.
+# The C archive is built with `cargo rustc --crate-type staticlib`; listing it here would build
+# it for every Rust dependent too.
 [lib]
 crate-type = ["rlib"]
 
@@ -20,14 +19,11 @@ airbender-rt = { path = "../airbender-rt", optional = true, default-features = f
 
 [features]
 default = []
-# RV32 only (requires `delegation`): the exports take checked hints through the
-# non-determinism CSR, from a tape that a native build recorded. Native builds record
-# through the C recording API instead, and ignore this feature.
+# RV32 only (requires `delegation`): hints through the non-determinism CSR, from a tape recorded
+# natively. Native builds ignore it.
 csr-oracle = []
-# RV32 only: delegated big-integer arithmetic. Native builds record the hints of a
-# delegation build without it.
+# RV32 only: delegated big-integer arithmetic.
 delegation = ["airbender-crypto/proving"]
-# RV32 only: use airbender-rt's Talc allocator and panic/OOM handlers, with a
-# C heap-initialization entry point. Leave off when the embedding Rust guest
-# already includes and initializes airbender-rt.
+# RV32 only: airbender-rt's allocator and panic handlers for C guests, with
+# `airbender_crypto_init_heap`. Leave off in Rust guests that start through airbender-rt.
 c-runtime = ["dep:airbender-rt"]

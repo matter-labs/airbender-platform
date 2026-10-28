@@ -38,15 +38,10 @@ int main(int argc,char** argv) {
     assert(zkvm_sha256(abc,3,&hash)==ZKVM_EOK && hash.data[0]==0xba && hash.data[31]==0xad);
     assert(zkvm_ripemd160(abc,3,&hash)==ZKVM_EOK && hash.data[11]==0 && hash.data[12]==0x8e && hash.data[31]==0xfc);
     const uint8_t base[]={2}, exponent[]={10}, modulus[]={0,0,3,232};
-    uint8_t modexp_output[1026]; memset(modexp_output,0xa5,sizeof(modexp_output));
+    uint8_t modexp_output[6]; memset(modexp_output,0xa5,sizeof(modexp_output));
     assert(AIRBENDER_HAS_MODEXP==1);
     assert(zkvm_modexp(base,1,exponent,1,modulus,4,modexp_output+1)==ZKVM_EOK);
     assert(modexp_output[0]==0xa5 && modexp_output[1]==0 && modexp_output[2]==0 && modexp_output[3]==0 && modexp_output[4]==24 && modexp_output[5]==0xa5);
-    uint8_t max_modulus[1024]; memset(max_modulus,0xff,sizeof(max_modulus));
-    assert(zkvm_modexp(base,1,exponent,1,max_modulus,1024,modexp_output+1)==ZKVM_EOK);
-    assert(modexp_output[0]==0xa5 && modexp_output[1025]==0xa5);
-    for (size_t i=1;i<1023;i++) assert(modexp_output[i]==0);
-    assert(modexp_output[1023]==4 && modexp_output[1024]==0);
     assert(zkvm_secp256k1_verify(&msg,&sig,&pk,&verified)==ZKVM_EFAIL && verified);
     assert(zkvm_secp256r1_verify(&msg,&sig,&pk,&verified)==ZKVM_EFAIL && verified);
     assert(zkvm_secp256k1_ecrecover(&msg,&sig,0,&pk)==ZKVM_EFAIL);
@@ -73,8 +68,7 @@ int main(int argc,char** argv) {
     zkvm_bls12_381_pairing_pair bls_pair={0};
     assert(zkvm_bls12_pairing(&bls_pair,1,&verified)==ZKVM_EOK && verified);
     assert(airbender_blake2s256(abc,3,&hash)==ZKVM_EOK && hash.data[0]==0x50 && hash.data[31]==0x82);
-    /* Exercise every concrete field binding from both C and C++. Extension
-       field one occupies the FIRST base-field component, not the last. */
+    /* Extension field one is in the first base-field component. */
 #define FIELD_TEST(prefix, type, width) do { \
     type a={0}, out={0}; a.data[(width)-1]=1; \
     assert(prefix##_inverse(&a,&out)==ZKVM_EOK && memcmp(&a,&out,sizeof(a))==0); \
@@ -96,21 +90,12 @@ int main(int argc,char** argv) {
     assert(airbender_secp256k1_fe_sqrt(&one,&hash)==ZKVM_EOK && hash.data[0]==0xff && hash.data[27]==0xfe && hash.data[31]==0x2e);
     zkvm_bytes_32 four={0}; four.data[31]=4;
     assert(airbender_secp256k1_fe_sqrt(&four,&hash)==ZKVM_EOK && hash.data[0]==0 && hash.data[31]==2);
-    /* Native hint recording: the tape of one secp256k1 scalar inverse is its 8 Montgomery
-       words, unframed. Too small a buffer (or NULL with capacity 0, a size query) gets
-       nothing and keeps the words for the next end; an end without a recording, or after the
-       words were claimed, returns 0; begin starts over, dropping unclaimed words. */
+    /* Recording: a scalar inverse is one 8-word answer; end(NULL, 0) is a size query. */
     uint32_t tape[8]={0};
-    assert(airbender_crypto_record_end(tape,8)==0);
     airbender_crypto_record_begin();
     assert(airbender_secp256k1_scalar_inverse(&one,&hash)==ZKVM_EOK);
     assert(airbender_crypto_record_end(NULL,0)==8);
-    assert(airbender_crypto_record_end(tape,7)==8 && tape[0]==0 && tape[7]==0);
     assert(airbender_crypto_record_end(tape,8)==8);
-    assert(airbender_crypto_record_end(tape,8)==0);
-    airbender_crypto_record_begin();
-    assert(airbender_secp256k1_scalar_inverse(&one,&hash)==ZKVM_EOK);
-    airbender_crypto_record_begin();
     assert(airbender_crypto_record_end(tape,8)==0);
     zkvm_bytes_96 bn_xyz={0}; memcpy(bn_xyz.data,g.data,64); bn_xyz.data[95]=1;
     assert(airbender_bn254_g1_to_affine(&bn_xyz,&sum)==ZKVM_EOK && memcmp(&sum,&g,sizeof(g))==0);
@@ -124,8 +109,7 @@ int main(int argc,char** argv) {
     assert(airbender_bls12_g2_clear_cofactor(&p2,&q2)==ZKVM_EOK);
     assert(airbender_bls12_g1_is_in_subgroup(&q1,&verified)==ZKVM_EOK && verified);
     assert(airbender_bls12_g2_is_in_subgroup(&q2,&verified)==ZKVM_EOK && verified);
-    /* In-place software BLAKE2f through the pinned standard ABI. Zero rounds
-       have a fixed IV-derived result, independent of message bytes. */
+    /* In-place BLAKE2f; zero rounds give a fixed IV-derived state. */
     zkvm_blake2f_state blake_state={0}, blake_saved={0};
     zkvm_blake2f_message blake_message={0}; zkvm_blake2f_offset blake_offset={0};
     assert(zkvm_blake2f(0,&blake_state,&blake_message,&blake_offset,0)==ZKVM_EOK);

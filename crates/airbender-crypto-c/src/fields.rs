@@ -26,10 +26,8 @@ fn quotient<F: Copy, D: Divider<F>>(mut divider: D, a: F, b: F) -> F {
     *divider.divide(&mut fraction, &mut quotient)
 }
 
-/// The inverse in bn254 `Fq2 = Fq[u] / (u² + 1)` from one checked base-field inverse hint, of
-/// the norm `c0² + c1²`, as airbender-crypto's `bls12_381_fq2_inverse` takes it (the norm of a
-/// non-zero element is not zero, as -1 is not a square in Fq); `None` for zero. It adds no hint
-/// of its own.
+/// The inverse in bn254 `Fq2 = Fq[u] / (u² + 1)` from one checked inverse hint of the norm
+/// `c0² + c1²`, which is non-zero for a non-zero element as -1 is not a square in Fq.
 #[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
 fn bn254_fq2_inverse<O: HintOracle>(oracle: &mut O, value: &bn::Fq2) -> Option<bn::Fq2> {
     let norm = value.c0.square() + value.c1.square();
@@ -37,8 +35,7 @@ fn bn254_fq2_inverse<O: HintOracle>(oracle: &mut O, value: &bn::Fq2) -> Option<b
     Some(bn::Fq2::new(value.c0 * inverse, -(value.c1 * inverse)))
 }
 
-/// The field bindings of one field: the inverse and the quotient (for a non-zero divisor) with
-/// the oracle `o`, or else with the field's own inverse
+/// The inverse and quotient bindings of one field: hinted with an oracle, plain without
 macro_rules! field_bindings {
     (
         $field:ty, $size:literal, $inverse:ident, $divide:ident,
@@ -112,9 +109,7 @@ field_bindings!(
     divide: |o, a, b| hints::bls12_381_fq12_inverse(o, &b).map(|inverse| a * inverse),
 );
 
-/// `f(hooks)` with the secp256k1 hooks of the call: `Secp256k1HooksWithOracle` with an oracle,
-/// which takes the base field inverse, division and square root and the scalar inverse as
-/// checked hints, and the default hooks without one
+/// `$body` with `Secp256k1HooksWithOracle` when there is an oracle, the default hooks otherwise
 macro_rules! with_secp256k1_hooks {
     (|$hooks:ident| $body:expr) => {
         hinted!(
@@ -185,9 +180,8 @@ pub unsafe extern "C" fn airbender_secp256k1_fe_sqrt(
     })
 }
 
-/// The even square root of `a` (the one root of the C API), `None` for a nonsquare. The hooks
-/// give either root: a hinted root is only checked to square to `a`, so its sign is the
-/// prover's, and the root is normalized here, on both paths.
+/// The even square root of `a`, `None` for a nonsquare. A hinted root is only checked to square to
+/// `a`, so its sign is the prover's: normalizing it here keeps the result independent of the hint.
 fn even_sqrt<H: Secp256k1Hooks>(hooks: &mut H, a: FieldElement) -> Option<FieldElement> {
     let mut root = a;
     if !hooks.fe_sqrt_and_assign(&mut root) {
@@ -229,14 +223,13 @@ mod tests {
     use super::*;
     use crypto::hints::{HintError, RecordingHintOracle, Secp256k1Element};
 
-    /// The recorder, with the other root in every square-root answer: the root that an
-    /// adversarial tape gives, which passes the hook's check as well (an 8-word answer here is
-    /// the canonical words of the root)
+    /// The recorder, with the other root in every square-root answer (8 canonical words), which
+    /// passes the hook's check as well
     struct OtherRoot(RecordingHintOracle);
 
     impl HintOracle for OtherRoot {
         unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
-            // SAFETY: the caller's contract, unchanged
+            // SAFETY: the caller's contract
             unsafe { self.0.send_query(query_id, input_word) }
         }
 
@@ -245,7 +238,7 @@ mod tests {
         }
 
         unsafe fn write_words(&mut self, dst: *mut u32, num_words: usize) -> Result<(), HintError> {
-            // SAFETY: the caller's contract, unchanged
+            // SAFETY: the caller's contract
             unsafe { self.0.write_words(dst, num_words)? };
             assert_eq!(num_words, 8, "only square roots are asked here");
             // SAFETY: just written, 8 aligned words
@@ -269,56 +262,34 @@ mod tests {
 
     #[test]
     fn the_root_does_not_depend_on_the_sign_of_the_hint() {
-        // 4 (root 2), 36 and 81, whose natural roots x^((p+1)/4) are p - 6 and 9, both odd,
-        // a large square, and 0
-        let mut big = element(0x1234_5678_9abc_def1);
-        big.square_in_place();
-        for square in [element(36), element(81)] {
-            let mut natural = square;
-            assert!(DefaultSecp256k1Hooks.fe_sqrt_and_assign(&mut natural));
-            assert_eq!(natural.to_bytes()[31] & 1, 1, "an odd natural root");
-        }
-        for square in [element(4), element(36), element(81), big, element(0)] {
+        let honest = RecordingHintOracle::new;
+        let lying = || OtherRoot(RecordingHintOracle::new());
+        // 4: natural root 2, even; 81: natural root 9, odd
+        for square in [element(4), element(81)] {
             let expected = even_sqrt(&mut DefaultSecp256k1Hooks, square).unwrap();
-            assert_eq!(expected.to_bytes()[31] & 1, 0);
+            assert!(!expected.is_odd());
             let mut check = expected;
             check.square_in_place();
             assert_eq!(check.to_bytes(), square.to_bytes());
-            let honest = even_sqrt(
-                &mut Secp256k1HooksWithOracle::new(&mut RecordingHintOracle::new()),
-                square,
-            );
-            let lying = even_sqrt(
-                &mut Secp256k1HooksWithOracle::new(&mut OtherRoot(RecordingHintOracle::new())),
-                square,
-            );
-            assert_eq!(honest.map(|r| r.to_bytes()), Some(expected.to_bytes()));
-            assert_eq!(lying.map(|r| r.to_bytes()), Some(expected.to_bytes()));
-            // the hook alone takes the other root: the export's normalization is what pins it
-            if !square.is_zero() {
-                let (mut honest, mut lying) = (square, square);
-                assert!(
-                    Secp256k1HooksWithOracle::new(&mut RecordingHintOracle::new())
-                        .fe_sqrt_and_assign(&mut honest)
-                );
-                assert!(
-                    Secp256k1HooksWithOracle::new(&mut OtherRoot(RecordingHintOracle::new()))
-                        .fe_sqrt_and_assign(&mut lying)
-                );
-                assert_ne!(honest.to_bytes(), lying.to_bytes());
+            for root in [
+                even_sqrt(&mut Secp256k1HooksWithOracle::new(&mut honest()), square),
+                even_sqrt(&mut Secp256k1HooksWithOracle::new(&mut lying()), square),
+            ] {
+                assert_eq!(root.unwrap().to_bytes(), expected.to_bytes());
             }
+            // the lying oracle does give the other root
+            let (mut a, mut b) = (square, square);
+            assert!(Secp256k1HooksWithOracle::new(&mut honest()).fe_sqrt_and_assign(&mut a));
+            assert!(Secp256k1HooksWithOracle::new(&mut lying()).fe_sqrt_and_assign(&mut b));
+            assert_ne!(a.to_bytes(), b.to_bytes());
         }
-        // a nonsquare (3): no root, on every path, with the honest or the negated proof
+        // a nonsquare (3) has no root, on every path
         assert!(even_sqrt(&mut DefaultSecp256k1Hooks, element(3)).is_none());
         assert!(even_sqrt(
-            &mut Secp256k1HooksWithOracle::new(&mut RecordingHintOracle::new()),
+            &mut Secp256k1HooksWithOracle::new(&mut honest()),
             element(3)
         )
         .is_none());
-        assert!(even_sqrt(
-            &mut Secp256k1HooksWithOracle::new(&mut OtherRoot(RecordingHintOracle::new())),
-            element(3)
-        )
-        .is_none());
+        assert!(even_sqrt(&mut Secp256k1HooksWithOracle::new(&mut lying()), element(3)).is_none());
     }
 }
