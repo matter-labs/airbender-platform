@@ -38,17 +38,12 @@ impl Scalar {
     pub const ONE: Self = Self(ScalarInner::ONE);
     #[cfg(test)]
     pub(crate) const ORDER: Self = Self(ScalarInner::ORDER);
-    #[cfg(test)]
+    /// Minus the eigenvalue `λ` of the endomorphism `(x, y) -> (β x, y)`
     pub(crate) const MINUS_LAMBDA: Self = Self(ScalarInner::MINUS_LAMBDA);
 
     #[cfg(test)]
     pub(crate) const fn from_bytes_unchecked(bytes: &[u8; 32]) -> Self {
         Self(ScalarInner::from_be_bytes_unchecked(bytes))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_u128(n: u128) -> Self {
-        Self(ScalarInner::from_u128(n))
     }
 
     pub fn from_signature(signature: &crate::k256::ecdsa::Signature) -> (Self, Self) {
@@ -69,6 +64,31 @@ impl Scalar {
             Option::from(crate::k256::Scalar::from_repr((*bytes).into()))
                 .map(Self::from_k256_scalar)
         }
+    }
+
+    /// A non-negative integer below `2^128` as a scalar: no reduction, and in the delegated
+    /// representation one multiplication for the Montgomery form
+    pub(crate) fn from_u128(x: u128) -> Self {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&x.to_be_bytes());
+        let inner = ScalarInner::from_be_bytes_unchecked(&bytes);
+        #[cfg(feature = "bigint_ops")]
+        {
+            Self(inner.to_representation())
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            Self(inner)
+        }
+    }
+
+    /// A non-negative integer below `2^128` in the form `recover::wnaf` reads: the integer form
+    /// of the representation (what `decompose_128` returns), which the delegated scalars use
+    /// only for the digit recoding
+    pub(crate) fn wnaf_form_u128(x: u128) -> Self {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&x.to_be_bytes());
+        Self(ScalarInner::from_be_bytes_unchecked(&bytes))
     }
 
     /// The scalar of a big-endian integer, reduced modulo the order

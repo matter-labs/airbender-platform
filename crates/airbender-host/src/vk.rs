@@ -80,9 +80,9 @@ pub fn verify_proof(
         )));
     }
 
-    let source = ProgramSource::from_paths(
+    let source = ProgramSource::legacy_binaries(
         path_to_string(&resolved_bin_path)?,
-        Some(path_to_string(&resolved_text_path)?),
+        path_to_string(&resolved_text_path)?,
     );
     let verifier_output = verify_artifact(proof, &source)
         .map_err(|err| HostError::Verification(format!("proof verification failed: {err}")))?;

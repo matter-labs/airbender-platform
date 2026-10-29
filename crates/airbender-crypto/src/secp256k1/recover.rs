@@ -116,9 +116,30 @@ pub fn recover_from_bytes_with_hooks<H: super::hooks::Secp256k1Hooks>(
     recover_from_point(&x, sigr, sigs, message, &ECRECOVER_CONTEXT, hooks)
 }
 
-/// `(s / r) x - (message / r) g` for the point `x` of the signature
+/// `(s / r) x - (message / r) g` for the point `x` of the signature: checked against the
+/// hook's witness when there is one (see `recover_witnessed`), computed otherwise
 #[inline(always)]
 fn recover_from_point<H: super::hooks::Secp256k1Hooks>(
+    x: &Affine,
+    sigr: Scalar,
+    sigs: Scalar,
+    message: Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
+    if H::FE_DIVIDE_IS_CHEAP {
+        if let Some(witness) = hooks.recovery_witness(x, &sigr, &sigs, &message) {
+            return super::recover_witnessed::verify_witnessed(
+                x, &sigr, &sigs, &message, &witness, context, hooks,
+            );
+        }
+    }
+    compute_from_point(x, sigr, sigs, message, context, hooks)
+}
+
+/// `(s / r) x - (message / r) g` for the point `x` of the signature, computed
+#[inline(always)]
+pub(super) fn compute_from_point<H: super::hooks::Secp256k1Hooks>(
     x: &Affine,
     mut sigr: Scalar,
     mut sigs: Scalar,

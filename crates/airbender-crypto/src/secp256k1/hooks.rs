@@ -3,6 +3,21 @@
 //! See the [Secp256k1 Hooks](https://matter-labs.github.io/airbender-platform/latest/04-crypto-on-guest-and-host.html#secp256k1-hooks)
 //! section of the book for usage details and examples.
 
+/// What a prover witnesses for a key recovery instead of letting the verifier compute it
+/// (see `recover_witnessed`): the recovered key, and four coefficients `(a, b, c, d)` with
+/// `(a + b λ) r ≡ (c + d λ) s (mod n)` for the eigenvalue `λ` of the endomorphism, each of at
+/// most `WITNESS_COEFFICIENT_BITS` bits in absolute value (a short vector of a lattice of
+/// index `n` in `Z⁴`, so about 64 bits each). The verification is then a multi-scalar
+/// multiplication whose variable-base scalars have about 64 bits instead of 128.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecoveryWitness {
+    /// The coordinates of the key, big-endian
+    pub key_x: [u8; 32],
+    pub key_y: [u8; 32],
+    /// `a, b, c, d`
+    pub coefficients: [i128; 4],
+}
+
 pub trait Secp256k1Hooks {
     /// Tells that `fe_invert_and_assign` costs about as much as a few field multiplications
     /// (e.g. it takes the inverse as a hint and checks it), so the algorithms can use inversions
@@ -15,6 +30,24 @@ pub trait Secp256k1Hooks {
     /// (the slope) and two or three multiplications, instead of the 7 to 11 multiplications of
     /// the Jacobian formulas.
     const FE_DIVIDE_IS_CHEAP: bool = false;
+
+    /// The witness of the recovery of the key of the signature `(r, s)` of `message` (reduced
+    /// modulo the order) with the point `point` (`x = r`, the `y` of the recovery id), if the
+    /// hook provides one: the recovery is then checked against it (`recover_witnessed`), with
+    /// about a fifth fewer group operations, instead of computed. Only used with
+    /// `FE_DIVIDE_IS_CHEAP`. A witness that does not check out fails the recovery, so a hook
+    /// must answer `None` when it has none (e.g. for a signature whose key is the point at
+    /// infinity).
+    fn recovery_witness(
+        &mut self,
+        point: &super::points::Affine,
+        r: &super::scalars::Scalar,
+        s: &super::scalars::Scalar,
+        message: &super::scalars::Scalar,
+    ) -> Option<RecoveryWitness> {
+        let _ = (point, r, s, message);
+        None
+    }
 
     fn fe_sqrt_and_assign(&mut self, fe: &mut super::field::FieldElement) -> bool;
     fn fe_invert_and_assign(&mut self, fe: &mut super::field::FieldElement);

@@ -13,9 +13,14 @@ pub(crate) const ECMULT_TABLE_SIZE_A: usize = 1 << (WINDOW_A - 2);
 pub(crate) const ECMULT_TABLE_SIZE_G: usize = 1 << (WINDOW_G - 2);
 pub(crate) const WNAF_BITS: usize = 129;
 
+/// The odd multiples of `2^(64 i) g` for `i = 0..4`: `pre_g` and `pre_g_128` serve the
+/// recovery (two 128-bit halves of the generator's scalar), all four the witnessed recovery
+/// (four 64-bit chunks, see `recover_affine::ecmult_affine_4d`)
 pub struct ECMultContext {
     pub(crate) pre_g: [AffineStorage; ECMULT_TABLE_SIZE_G],
+    pub(crate) pre_g_64: [AffineStorage; ECMULT_TABLE_SIZE_G],
     pub(crate) pre_g_128: [AffineStorage; ECMULT_TABLE_SIZE_G],
+    pub(crate) pre_g_192: [AffineStorage; ECMULT_TABLE_SIZE_G],
 }
 
 #[cfg(feature = "secp256k1-static-context")]
@@ -28,7 +33,9 @@ impl ECMultContext {
     pub const fn const_new() -> Self {
         let mut context = Self {
             pre_g: [AffineStorage::DEFAULT; ECMULT_TABLE_SIZE_G],
+            pre_g_64: [AffineStorage::DEFAULT; ECMULT_TABLE_SIZE_G],
             pre_g_128: [AffineStorage::DEFAULT; ECMULT_TABLE_SIZE_G],
+            pre_g_192: [AffineStorage::DEFAULT; ECMULT_TABLE_SIZE_G],
         };
 
         context.initialize();
@@ -61,11 +68,20 @@ impl ECMultContext {
         Self::compute_table(&mut self.pre_g, &gj);
 
         use const_for::const_for;
-        const_for!(_ in 0..128 => {
+        const_for!(_ in 0..64 => {
             gj = gj.double(None);
         });
+        Self::compute_table(&mut self.pre_g_64, &gj);
 
+        const_for!(_ in 0..64 => {
+            gj = gj.double(None);
+        });
         Self::compute_table(&mut self.pre_g_128, &gj);
+
+        const_for!(_ in 0..64 => {
+            gj = gj.double(None);
+        });
+        Self::compute_table(&mut self.pre_g_192, &gj);
     }
 
     #[cfg(feature = "alloc")]
@@ -77,7 +93,9 @@ impl ECMultContext {
 
             for i in 0..ECMULT_TABLE_SIZE_G {
                 this.pre_g[i] = AffineStorage::DEFAULT;
+                this.pre_g_64[i] = AffineStorage::DEFAULT;
                 this.pre_g_128[i] = AffineStorage::DEFAULT;
+                this.pre_g_192[i] = AffineStorage::DEFAULT;
             }
 
             this
@@ -92,8 +110,15 @@ impl ECMultContext {
     /// the coordinates in Montgomery form, see `FieldElementConst::to_storage`.
     pub fn new_from_raw_unchecked(
         pre_g: [AffineStorage; ECMULT_TABLE_SIZE_G],
+        pre_g_64: [AffineStorage; ECMULT_TABLE_SIZE_G],
         pre_g_128: [AffineStorage; ECMULT_TABLE_SIZE_G],
+        pre_g_192: [AffineStorage; ECMULT_TABLE_SIZE_G],
     ) -> Self {
-        Self { pre_g, pre_g_128 }
+        Self {
+            pre_g,
+            pre_g_64,
+            pre_g_128,
+            pre_g_192,
+        }
     }
 }

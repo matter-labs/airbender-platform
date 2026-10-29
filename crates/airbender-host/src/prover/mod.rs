@@ -122,9 +122,9 @@ pub(super) fn program_source(app_bin_path: &Path) -> Result<ProgramSource> {
             .map(str::to_string)
             .ok_or_else(|| HostError::Prover("app path is not valid UTF-8".to_string()))
     };
-    Ok(ProgramSource::from_paths(
+    Ok(ProgramSource::legacy_binaries(
         to_string(&app_bin_path)?,
-        Some(to_string(&app_text_path)?),
+        to_string(&app_text_path)?,
     ))
 }
 

@@ -480,10 +480,307 @@ impl FieldElement10x26 {
         ret
     }
 
+    /// `self = self²`: the multiplication with the symmetric products folded, 55 limb products
+    /// instead of 100. The sums are the ones of `mul_in_place` with `rhs = self`, so its bounds
+    /// hold.
     #[inline(always)]
-    pub(super) fn square_in_place(&mut self) {
-        let rhs = *self;
-        self.mul_in_place(&rhs);
+    pub(super) const fn square_in_place(&mut self) {
+        let m = 0x3FFFFFFu64;
+        let rr0 = 0x3D10u64;
+        let rr1 = 0x400u64;
+
+        let a0 = self.0[0] as u64;
+        let a1 = self.0[1] as u64;
+        let a2 = self.0[2] as u64;
+        let a3 = self.0[3] as u64;
+        let a4 = self.0[4] as u64;
+        let a5 = self.0[5] as u64;
+        let a6 = self.0[6] as u64;
+        let a7 = self.0[7] as u64;
+        let a8 = self.0[8] as u64;
+        let a9 = self.0[9] as u64;
+        // the doubled limbs as 32-bit values (the inputs have magnitude at most 8, so the limbs
+        // are below 2^29): the products stay 32 x 32 -> 64, as in `mul_in_place`; a 64-bit
+        // factor would make them full 64-bit multiplications
+        debug_assert!(self.0[0] >> 30 == 0);
+        debug_assert!(self.0[1] >> 30 == 0);
+        debug_assert!(self.0[2] >> 30 == 0);
+        debug_assert!(self.0[3] >> 30 == 0);
+        debug_assert!(self.0[4] >> 30 == 0);
+        debug_assert!(self.0[5] >> 30 == 0);
+        debug_assert!(self.0[6] >> 30 == 0);
+        debug_assert!(self.0[7] >> 30 == 0);
+        debug_assert!(self.0[8] >> 30 == 0);
+        let a02 = (self.0[0] * 2) as u64;
+        let a12 = (self.0[1] * 2) as u64;
+        let a22 = (self.0[2] * 2) as u64;
+        let a32 = (self.0[3] * 2) as u64;
+        let a42 = (self.0[4] * 2) as u64;
+        let a52 = (self.0[5] * 2) as u64;
+        let a62 = (self.0[6] * 2) as u64;
+        let a72 = (self.0[7] * 2) as u64;
+        let a82 = (self.0[8] * 2) as u64;
+
+        // [... a b c] is a shorthand for ... + a<<52 + b<<26 + c<<0 mod n.
+        // for 0 <= x <= 9, px is a shorthand for sum(a[i]*b[x-i], i=0..x).
+        // for 9 <= x <= 18, px is a shorthand for sum(a[i]*b[x-i], i=(x-9)..9)
+        // Note that [x 0 0 0 0 0 0 0 0 0 0] = [x*rr1 x*rr0].
+
+        let mut c: u64;
+        let mut d: u64;
+
+        d = a02 * a9 + a12 * a8 + a22 * a7 + a32 * a6 + a42 * a5;
+        // [d 0 0 0 0 0 0 0 0 0] = [p9 0 0 0 0 0 0 0 0 0]
+        let t9 = (d & m) as u32;
+        d >>= 26;
+        debug_assert!(t9 >> 26 == 0);
+        debug_assert!(d >> 38 == 0);
+        // [d t9 0 0 0 0 0 0 0 0 0] = [p9 0 0 0 0 0 0 0 0 0]
+
+        c = a0 * a0;
+        debug_assert!(c >> 60 == 0);
+        // [d t9 0 0 0 0 0 0 0 0 c] = [p9 0 0 0 0 0 0 0 0 p0]
+        d += a12 * a9 + a22 * a8 + a32 * a7 + a42 * a6 + a5 * a5;
+        debug_assert!(d >> 63 == 0);
+        // [d t9 0 0 0 0 0 0 0 0 c] = [p10 p9 0 0 0 0 0 0 0 0 p0]
+        let u0 = (d & m) as u32;
+        d >>= 26;
+        c += u0 as u64 * rr0;
+        debug_assert!(u0 >> 26 == 0);
+        debug_assert!(d >> 37 == 0);
+        debug_assert!(c >> 61 == 0);
+        // [d u0 t9 0 0 0 0 0 0 0 0 c-u0*rr0] = [p10 p9 0 0 0 0 0 0 0 0 p0]
+        let t0 = (c & m) as u32;
+        c >>= 26;
+        c += u0 as u64 * rr1;
+        debug_assert!(t0 >> 26 == 0);
+        debug_assert!(c >> 37 == 0);
+        // [d u0 t9 0 0 0 0 0 0 0 c-u0*rr1 t0-u0*rr0] = [p10 p9 0 0 0 0 0 0 0 0 p0]
+        // [d 0 t9 0 0 0 0 0 0 0 c t0] = [p10 p9 0 0 0 0 0 0 0 0 p0]
+
+        c += a02 * a1;
+        debug_assert!(c >> 62 == 0);
+        // [d 0 t9 0 0 0 0 0 0 0 c t0] = [p10 p9 0 0 0 0 0 0 0 p1 p0]
+        d += a22 * a9 + a32 * a8 + a42 * a7 + a52 * a6;
+        debug_assert!(d >> 63 == 0);
+        // [d 0 t9 0 0 0 0 0 0 0 c t0] = [p11 p10 p9 0 0 0 0 0 0 0 p1 p0]
+        let u1 = (d & m) as u32;
+        d >>= 26;
+        c += u1 as u64 * rr0;
+        debug_assert!(u1 >> 26 == 0);
+        debug_assert!(d >> 37 == 0);
+        debug_assert!(c >> 63 == 0);
+        // [d u1 0 t9 0 0 0 0 0 0 0 c-u1*rr0 t0] = [p11 p10 p9 0 0 0 0 0 0 0 p1 p0]
+        let t1 = (c & m) as u32;
+        c >>= 26;
+        c += u1 as u64 * rr1;
+        debug_assert!(t1 >> 26 == 0);
+        debug_assert!(c >> 38 == 0);
+        // [d u1 0 t9 0 0 0 0 0 0 c-u1*rr1 t1-u1*rr0 t0] = [p11 p10 p9 0 0 0 0 0 0 0 p1 p0]
+        // [d 0 0 t9 0 0 0 0 0 0 c t1 t0] = [p11 p10 p9 0 0 0 0 0 0 0 p1 p0]
+
+        c += a02 * a2 + a1 * a1;
+        debug_assert!(c >> 62 == 0);
+        // [d 0 0 t9 0 0 0 0 0 0 c t1 t0] = [p11 p10 p9 0 0 0 0 0 0 p2 p1 p0]
+        d += a32 * a9 + a42 * a8 + a52 * a7 + a6 * a6;
+        debug_assert!(d >> 63 == 0);
+        // [d 0 0 t9 0 0 0 0 0 0 c t1 t0] = [p12 p11 p10 p9 0 0 0 0 0 0 p2 p1 p0]
+        let u2 = (d & m) as u32;
+        d >>= 26;
+        c += u2 as u64 * rr0;
+        debug_assert!(u2 >> 26 == 0);
+        debug_assert!(d >> 37 == 0);
+        debug_assert!(c >> 63 == 0);
+        // [d u2 0 0 t9 0 0 0 0 0 0 c-u2*rr0 t1 t0] = [p12 p11 p10 p9 0 0 0 0 0 0 p2 p1 p0]
+        let t2 = (c & m) as u32;
+        c >>= 26;
+        c += u2 as u64 * rr1;
+        debug_assert!(t2 >> 26 == 0);
+        debug_assert!(c >> 38 == 0);
+        // [d u2 0 0 t9 0 0 0 0 0 c-u2*rr1 t2-u2*rr0 t1 t0] = [p12 p11 p10 p9 0 0 0 0 0 0 p2 p1 p0]
+        // [d 0 0 0 t9 0 0 0 0 0 c t2 t1 t0] = [p12 p11 p10 p9 0 0 0 0 0 0 p2 p1 p0]
+
+        c += a02 * a3 + a12 * a2;
+        debug_assert!(c >> 63 == 0);
+        // [d 0 0 0 t9 0 0 0 0 0 c t2 t1 t0] = [p12 p11 p10 p9 0 0 0 0 0 p3 p2 p1 p0]
+        d += a42 * a9 + a52 * a8 + a62 * a7;
+        debug_assert!(d >> 63 == 0);
+        // [d 0 0 0 t9 0 0 0 0 0 c t2 t1 t0] = [p13 p12 p11 p10 p9 0 0 0 0 0 p3 p2 p1 p0]
+        let u3 = (d & m) as u32;
+        d >>= 26;
+        c += u3 as u64 * rr0;
+        debug_assert!(u3 >> 26 == 0);
+        debug_assert!(d >> 37 == 0);
+        // [d u3 0 0 0 t9 0 0 0 0 0 c-u3*rr0 t2 t1 t0] = [p13 p12 p11 p10 p9 0 0 0 0 0 p3 p2 p1 p0]
+        let t3 = (c & m) as u32;
+        c >>= 26;
+        c += u3 as u64 * rr1;
+        debug_assert!(t3 >> 26 == 0);
+        debug_assert!(c >> 39 == 0);
+        // [d u3 0 0 0 t9 0 0 0 0 c-u3*rr1 t3-u3*rr0 t2 t1 t0] = [p13 p12 p11 p10 p9 0 0 0 0 0 p3 p2 p1 p0]
+        // [d 0 0 0 0 t9 0 0 0 0 c t3 t2 t1 t0] = [p13 p12 p11 p10 p9 0 0 0 0 0 p3 p2 p1 p0]
+
+        c += a02 * a4 + a12 * a3 + a2 * a2;
+        debug_assert!(c >> 63 == 0);
+        // [d 0 0 0 0 t9 0 0 0 0 c t3 t2 t1 t0] = [p13 p12 p11 p10 p9 0 0 0 0 p4 p3 p2 p1 p0]
+        d += a52 * a9 + a62 * a8 + a7 * a7;
+        debug_assert!(d >> 62 == 0);
+        // [d 0 0 0 0 t9 0 0 0 0 c t3 t2 t1 t0] = [p14 p13 p12 p11 p10 p9 0 0 0 0 p4 p3 p2 p1 p0]
+        let u4 = (d & m) as u32;
+        d >>= 26;
+        c += u4 as u64 * rr0;
+        debug_assert!(u4 >> 26 == 0);
+        debug_assert!(d >> 36 == 0);
+        // [d u4 0 0 0 0 t9 0 0 0 0 c-u4*rr0 t3 t2 t1 t0] = [p14 p13 p12 p11 p10 p9 0 0 0 0 p4 p3 p2 p1 p0]
+        let t4 = (c & m) as u32;
+        c >>= 26;
+        c += u4 as u64 * rr1;
+        debug_assert!(t4 >> 26 == 0);
+        debug_assert!(c >> 39 == 0);
+        // [d u4 0 0 0 0 t9 0 0 0 c-u4*rr1 t4-u4*rr0 t3 t2 t1 t0] = [p14 p13 p12 p11 p10 p9 0 0 0 0 p4 p3 p2 p1 p0]
+        // [d 0 0 0 0 0 t9 0 0 0 c t4 t3 t2 t1 t0] = [p14 p13 p12 p11 p10 p9 0 0 0 0 p4 p3 p2 p1 p0]
+
+        c += a02 * a5 + a12 * a4 + a22 * a3;
+        debug_assert!(c >> 63 == 0);
+        // [d 0 0 0 0 0 t9 0 0 0 c t4 t3 t2 t1 t0] = [p14 p13 p12 p11 p10 p9 0 0 0 p5 p4 p3 p2 p1 p0]
+        d += a62 * a9 + a72 * a8;
+        debug_assert!(d >> 62 == 0);
+        // [d 0 0 0 0 0 t9 0 0 0 c t4 t3 t2 t1 t0] = [p15 p14 p13 p12 p11 p10 p9 0 0 0 p5 p4 p3 p2 p1 p0]
+        let u5 = (d & m) as u32;
+        d >>= 26;
+        c += u5 as u64 * rr0;
+        debug_assert!(u5 >> 26 == 0);
+        debug_assert!(d >> 36 == 0);
+        // [d u5 0 0 0 0 0 t9 0 0 0 c-u5*rr0 t4 t3 t2 t1 t0] = [p15 p14 p13 p12 p11 p10 p9 0 0 0 p5 p4 p3 p2 p1 p0]
+        let t5 = (c & m) as u32;
+        c >>= 26;
+        c += u5 as u64 * rr1;
+        debug_assert!(t5 >> 26 == 0);
+        debug_assert!(c >> 39 == 0);
+        // [d u5 0 0 0 0 0 t9 0 0 c-u5*rr1 t5-u5*rr0 t4 t3 t2 t1 t0] = [p15 p14 p13 p12 p11 p10 p9 0 0 0 p5 p4 p3 p2 p1 p0]
+        // [d 0 0 0 0 0 0 t9 0 0 c t5 t4 t3 t2 t1 t0] = [p15 p14 p13 p12 p11 p10 p9 0 0 0 p5 p4 p3 p2 p1 p0]
+
+        c += a02 * a6 + a12 * a5 + a22 * a4 + a3 * a3;
+        debug_assert!(c >> 63 == 0);
+        // [d 0 0 0 0 0 0 t9 0 0 c t5 t4 t3 t2 t1 t0] = [p15 p14 p13 p12 p11 p10 p9 0 0 p6 p5 p4 p3 p2 p1 p0]
+        d += a72 * a9 + a8 * a8;
+        debug_assert!(d >> 61 == 0);
+        // [d 0 0 0 0 0 0 t9 0 0 c t5 t4 t3 t2 t1 t0] = [p16 p15 p14 p13 p12 p11 p10 p9 0 0 p6 p5 p4 p3 p2 p1 p0]
+        let u6 = (d & m) as u32;
+        d >>= 26;
+        c += u6 as u64 * rr0;
+        debug_assert!(u6 >> 26 == 0);
+        debug_assert!(d >> 35 == 0);
+        // [d u6 0 0 0 0 0 0 t9 0 0 c-u6*rr0 t5 t4 t3 t2 t1 t0] = [p16 p15 p14 p13 p12 p11 p10 p9 0 0 p6 p5 p4 p3 p2 p1 p0]
+        let t6 = (c & m) as u32;
+        c >>= 26;
+        c += u6 as u64 * rr1;
+        debug_assert!(t6 >> 26 == 0);
+        debug_assert!(c >> 39 == 0);
+        // [d u6 0 0 0 0 0 0 t9 0 c-u6*rr1 t6-u6*rr0 t5 t4 t3 t2 t1 t0] = [p16 p15 p14 p13 p12 p11 p10 p9 0 0 p6 p5 p4 p3 p2 p1 p0]
+        // [d 0 0 0 0 0 0 0 t9 0 c t6 t5 t4 t3 t2 t1 t0] = [p16 p15 p14 p13 p12 p11 p10 p9 0 0 p6 p5 p4 p3 p2 p1 p0]
+
+        c += a02 * a7 + a12 * a6 + a22 * a5 + a32 * a4;
+        debug_assert!(c <= 0x8000007C00000007u64);
+        // [d 0 0 0 0 0 0 0 t9 0 c t6 t5 t4 t3 t2 t1 t0] = [p16 p15 p14 p13 p12 p11 p10 p9 0 p7 p6 p5 p4 p3 p2 p1 p0]
+        d += a82 * a9;
+        debug_assert!(d >> 58 == 0);
+        // [d 0 0 0 0 0 0 0 t9 0 c t6 t5 t4 t3 t2 t1 t0] = [p17 p16 p15 p14 p13 p12 p11 p10 p9 0 p7 p6 p5 p4 p3 p2 p1 p0]
+        let u7 = (d & m) as u32;
+        d >>= 26;
+        c += u7 as u64 * rr0;
+        debug_assert!(u7 >> 26 == 0);
+        debug_assert!(d >> 32 == 0);
+        let d32 = d as u32;
+        debug_assert!(c <= 0x800001703FFFC2F7u64);
+        // [d u7 0 0 0 0 0 0 0 t9 0 c-u7*rr0 t6 t5 t4 t3 t2 t1 t0] = [p17 p16 p15 p14 p13 p12 p11 p10 p9 0 p7 p6 p5 p4 p3 p2 p1 p0]
+        let t7 = (c & m) as u32;
+        c >>= 26;
+        c += u7 as u64 * rr1;
+        debug_assert!(t7 >> 26 == 0);
+        debug_assert!(c >> 38 == 0);
+        // [d u7 0 0 0 0 0 0 0 t9 c-u7*rr1 t7-u7*rr0 t6 t5 t4 t3 t2 t1 t0] = [p17 p16 p15 p14 p13 p12 p11 p10 p9 0 p7 p6 p5 p4 p3 p2 p1 p0]
+        // [d 0 0 0 0 0 0 0 0 t9 c t7 t6 t5 t4 t3 t2 t1 t0] = [p17 p16 p15 p14 p13 p12 p11 p10 p9 0 p7 p6 p5 p4 p3 p2 p1 p0]
+
+        c += a02 * a8 + a12 * a7 + a22 * a6 + a32 * a5 + a4 * a4;
+        debug_assert!(c <= 0x9000007B80000008u64);
+        // [d 0 0 0 0 0 0 0 0 t9 c t7 t6 t5 t4 t3 t2 t1 t0] = [p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        d = d32 as u64 + a9 * a9;
+        debug_assert!(d >> 57 == 0);
+        // [d 0 0 0 0 0 0 0 0 t9 c t7 t6 t5 t4 t3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let u8 = (d & m) as u32;
+        d >>= 26;
+        c += u8 as u64 * rr0;
+        debug_assert!(u8 >> 26 == 0);
+        debug_assert!(d >> 31 == 0);
+        let d32 = d as u32;
+        debug_assert!(c <= 0x9000016FBFFFC2F8u64);
+        // [d u8 0 0 0 0 0 0 0 0 t9 c-u8*rr0 t7 t6 t5 t4 t3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+
+        let r3 = t3;
+        debug_assert!(r3 >> 26 == 0);
+        // [d u8 0 0 0 0 0 0 0 0 t9 c-u8*rr0 t7 t6 t5 t4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r4 = t4;
+        debug_assert!(r4 >> 26 == 0);
+        // [d u8 0 0 0 0 0 0 0 0 t9 c-u8*rr0 t7 t6 t5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r5 = t5;
+        debug_assert!(r5 >> 26 == 0);
+        // [d u8 0 0 0 0 0 0 0 0 t9 c-u8*rr0 t7 t6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r6 = t6;
+        debug_assert!(r6 >> 26 == 0);
+        // [d u8 0 0 0 0 0 0 0 0 t9 c-u8*rr0 t7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r7 = t7;
+        debug_assert!(r7 >> 26 == 0);
+        // [d u8 0 0 0 0 0 0 0 0 t9 c-u8*rr0 r7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+
+        let r8 = (c & m) as u32;
+        c >>= 26;
+        c += u8 as u64 * rr1;
+        debug_assert!(r8 >> 26 == 0);
+        debug_assert!(c >> 39 == 0);
+        // [d u8 0 0 0 0 0 0 0 0 t9+c-u8*rr1 r8-u8*rr0 r7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        // [d 0 0 0 0 0 0 0 0 0 t9+c r8 r7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        c += d32 as u64 * rr0 + t9 as u64;
+        debug_assert!(c >> 45 == 0);
+        // [d 0 0 0 0 0 0 0 0 0 c-d*rr0 r8 r7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r9 = (c & (m >> 4)) as u32;
+        c >>= 22;
+        c += d * (rr1 << 4);
+        debug_assert!(r9 >> 22 == 0);
+        debug_assert!(c >> 46 == 0);
+        // [d 0 0 0 0 0 0 0 0 r9+((c-d*rr1<<4)<<22)-d*rr0 r8 r7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        // [d 0 0 0 0 0 0 0 -d*rr1 r9+(c<<22)-d*rr0 r8 r7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        // [r9+(c<<22) r8 r7 r6 r5 r4 r3 t2 t1 t0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+
+        d = c * (rr0 >> 4) + t0 as u64;
+        debug_assert!(d >> 56 == 0);
+        // [r9+(c<<22) r8 r7 r6 r5 r4 r3 t2 t1 d-c*rr0>>4] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r0 = (d & m) as u32;
+        d >>= 26;
+        debug_assert!(r0 >> 26 == 0);
+        debug_assert!(d >> 30 == 0);
+        let d32 = d as u32;
+        // [r9+(c<<22) r8 r7 r6 r5 r4 r3 t2 t1+d r0-c*rr0>>4] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        d = d32 as u64 + c * (rr1 >> 4) + t1 as u64;
+        debug_assert!(d >> 53 == 0);
+        debug_assert!(d <= 0x10000003FFFFBFu64);
+        // [r9+(c<<22) r8 r7 r6 r5 r4 r3 t2 d-c*rr1>>4 r0-c*rr0>>4] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        // [r9 r8 r7 r6 r5 r4 r3 t2 d r0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r1 = (d & m) as u32;
+        d >>= 26;
+        debug_assert!(r1 >> 26 == 0);
+        debug_assert!(d >> 27 == 0);
+        let d32 = d as u32;
+        debug_assert!(d <= 0x4000000u64);
+        // [r9 r8 r7 r6 r5 r4 r3 t2+d r1 r0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        d = d32 as u64 + t2 as u64;
+        debug_assert!(d >> 27 == 0);
+        // [r9 r8 r7 r6 r5 r4 r3 d r1 r0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+        let r2 = d as u32;
+        debug_assert!(r2 >> 27 == 0);
+        // [r9 r8 r7 r6 r5 r4 r3 r2 r1 r0] = [p18 p17 p16 p15 p14 p13 p12 p11 p10 p9 p8 p7 p6 p5 p4 p3 p2 p1 p0]
+
+        *self = Self([r0, r1, r2, r3, r4, r5, r6, r7, r8, r9]);
     }
 
     #[inline(always)]
@@ -545,6 +842,47 @@ impl FieldElement10x26 {
         rhs.normalize_in_place();
         rhs.negate_in_place(1);
         self.add_in_place(&rhs);
+    }
+
+    /// `self -= rhs` for a `rhs` of magnitude at most `magnitude`, without normalizing it: the
+    /// result has the magnitude of `self` plus `magnitude + 1`
+    #[inline(always)]
+    pub(super) const fn sub_in_place_magnitude(&mut self, rhs: &Self, magnitude: u32) {
+        self.add_in_place(&rhs.negate(magnitude));
+    }
+
+    /// Brings the magnitude to 1 without the final reduction below the modulus (the value may
+    /// still be the modulus or above, by less than `2^26 * 0x3D1`): one carry pass, where the
+    /// full normalization does two and a comparison. Enough between the operations; the
+    /// comparisons and the byte encodings normalize fully.
+    #[inline(always)]
+    pub(super) const fn normalize_weak_in_place(&mut self) {
+        let m = 0x3FFFFFFu32;
+        let mut t9 = self.0[9];
+        let x = t9 >> 22;
+        t9 &= 0x03FFFFF;
+        let mut t0 = self.0[0] + x * 0x3D1;
+        let mut t1 = self.0[1] + (x << 6);
+        t1 += t0 >> 26;
+        t0 &= m;
+        let mut t2 = self.0[2] + (t1 >> 26);
+        t1 &= m;
+        let mut t3 = self.0[3] + (t2 >> 26);
+        t2 &= m;
+        let mut t4 = self.0[4] + (t3 >> 26);
+        t3 &= m;
+        let mut t5 = self.0[5] + (t4 >> 26);
+        t4 &= m;
+        let mut t6 = self.0[6] + (t5 >> 26);
+        t5 &= m;
+        let mut t7 = self.0[7] + (t6 >> 26);
+        t6 &= m;
+        let mut t8 = self.0[8] + (t7 >> 26);
+        t7 &= m;
+        t9 += t8 >> 26;
+        t8 &= m;
+        debug_assert!(t9 >> 23 == 0);
+        *self = Self([t0, t1, t2, t3, t4, t5, t6, t7, t8, t9]);
     }
 
     #[inline(always)]
@@ -808,7 +1146,7 @@ impl proptest::arbitrary::Arbitrary for FieldElement10x26 {
 
 #[cfg(test)]
 mod tests {
-    use proptest::{prop_assert_eq, proptest};
+    use proptest::{prop_assert, prop_assert_eq, proptest};
 
     use super::FieldElement10x26;
 
@@ -843,6 +1181,43 @@ mod tests {
             prop_assert_eq!(x.mul(&ZERO), ZERO);
 
             prop_assert_eq!(x.mul(&y.add(&z)), x.mul(&y).add(&x.mul(&z)));
+        })
+    }
+
+    #[test]
+    fn test_square() {
+        proptest!(|(x: FieldElement10x26, y: FieldElement10x26)| {
+            prop_assert_eq!(x.square(), x.mul(&x));
+            // at a higher magnitude too
+            let s = x.add(&y).add(&x);
+            prop_assert_eq!(s.square(), s.mul(&s));
+        })
+    }
+
+    #[test]
+    fn test_normalize_weak_and_sub_magnitude() {
+        proptest!(|(x: FieldElement10x26, y: FieldElement10x26, z: FieldElement10x26)| {
+            // a value of magnitude 8, weakly normalized: magnitude 1 (every limb below 2^26, the
+            // top one below 2^23) and the same element
+            let mut sum = x.add(&y).add(&z).add(&x).add(&y).add(&z).add(&x).add(&y);
+            let full = sum.normalize();
+            sum.normalize_weak_in_place();
+            prop_assert!(sum.0[..9].iter().all(|limb| *limb >> 26 == 0) && sum.0[9] >> 23 == 0);
+            prop_assert_eq!(sum, full);
+            prop_assert_eq!(sum.mul(&x), full.mul(&x));
+
+            // a subtraction with the magnitude of the subtrahend given is the subtraction
+            let mut a = x;
+            a.sub_in_place_magnitude(&y, 1);
+            let mut b = x;
+            b.sub_in_place(&y);
+            prop_assert_eq!(a, b);
+            let yz = y.add(&z);
+            let mut a = x;
+            a.sub_in_place_magnitude(&yz, 2);
+            let mut b = x;
+            b.sub_in_place(&yz);
+            prop_assert_eq!(a, b);
         })
     }
 

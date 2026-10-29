@@ -187,6 +187,25 @@ impl FieldElement {
         self.0.sub_in_place(&rhs.0);
     }
 
+    /// `self -= rhs` for a `rhs` of magnitude at most `magnitude` (1 for a product, a normalized
+    /// value or a decoded one; a sum adds the magnitudes of its terms, a negation one): the
+    /// representations with magnitudes skip the normalization of `rhs` that `sub_in_place` does,
+    /// and the result has the magnitude of `self` plus `magnitude + 1`. The inputs of a
+    /// multiplication must stay within magnitude 8.
+    #[cfg(not(feature = "bigint_ops"))]
+    #[inline(always)]
+    pub fn sub_in_place_magnitude(&mut self, rhs: &Self, magnitude: u32) {
+        self.0.sub_in_place_magnitude(&rhs.0, magnitude);
+    }
+
+    /// Brings the magnitude back to 1 between the operations, cheaper than the full
+    /// normalization (which the comparisons and the byte encodings do themselves)
+    #[cfg(not(feature = "bigint_ops"))]
+    #[inline(always)]
+    pub fn normalize_weak_in_place(&mut self) {
+        self.0.normalize_weak_in_place();
+    }
+
     /// Computes `self = minuend - self`
     #[cfg(feature = "bigint_ops")]
     #[inline(always)]

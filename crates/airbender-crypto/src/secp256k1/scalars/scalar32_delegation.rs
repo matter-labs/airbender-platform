@@ -87,11 +87,6 @@ impl ScalarInner {
         Self(u256::from_bytes_unchecked(bytes))
     }
 
-    #[cfg(all(test, feature = "bigint_ops"))]
-    pub(super) fn from_u128(n: u128) -> Self {
-        Self::from_words([n as u64, (n >> 64) as u64, 0, 0]).to_representation()
-    }
-
     /// The scalar of a big-endian integer, reduced modulo the order: the Montgomery
     /// multiplication by `R2` takes any 256-bit integer (the product with a factor below the
     /// order reduces to below twice the order, and then to below the order)

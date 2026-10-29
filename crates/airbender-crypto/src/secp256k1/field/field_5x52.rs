@@ -370,6 +370,18 @@ impl FieldElement5x52 {
         self.add_in_place(&rhs);
     }
 
+    /// As `sub_in_place`: the magnitude is not used by this representation (64-bit hosts)
+    #[inline(always)]
+    pub(super) fn sub_in_place_magnitude(&mut self, rhs: &Self, _magnitude: u32) {
+        self.sub_in_place(rhs);
+    }
+
+    /// The full normalization: this representation (64-bit hosts) is not optimized for it
+    #[inline(always)]
+    pub(super) const fn normalize_weak_in_place(&mut self) {
+        self.normalize_in_place();
+    }
+
     #[inline(always)]
     pub(super) const fn negate_in_place(&mut self, magnitude: u32) {
         let m = (magnitude + 1) as u64;

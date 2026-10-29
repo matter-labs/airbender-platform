@@ -69,23 +69,24 @@ fn triple(x: &mut FieldElement) {
     }
 }
 
-/// `x = minuend - x`
+/// `x = minuend - x`, where `x` has magnitude at most `magnitude` (see `sub`)
 #[inline(always)]
-fn subtract_from(x: &mut FieldElement, minuend: &FieldElement) {
+fn subtract_from(x: &mut FieldElement, minuend: &FieldElement, magnitude: u32) {
     #[cfg(feature = "bigint_ops")]
     {
+        let _ = magnitude;
         x.sub_and_negate_in_place(minuend);
     }
     #[cfg(not(feature = "bigint_ops"))]
     {
         let mut difference = *minuend;
-        difference.sub_in_place(x);
+        difference.sub_in_place_magnitude(x, magnitude);
         *x = difference;
     }
 }
 
-/// The representations with magnitudes are kept normalized between the steps; the delegated
-/// one needs nothing
+/// The representations with magnitudes are brought back to magnitude 1 between the steps (a
+/// weak normalization: the bounds below count on it); the delegated one needs nothing
 #[inline(always)]
 fn settle(x: &mut FieldElement) {
     #[cfg(feature = "bigint_ops")]
@@ -94,7 +95,25 @@ fn settle(x: &mut FieldElement) {
     }
     #[cfg(not(feature = "bigint_ops"))]
     {
-        x.normalize_in_place();
+        x.normalize_weak_in_place();
+    }
+}
+
+/// `x -= rhs`, where `rhs` has magnitude at most `magnitude` in the representations with
+/// magnitudes (1 for a settled value, a product or a table entry; see
+/// `FieldElement::sub_in_place_magnitude`): the subtraction without normalizing `rhs`. The
+/// magnitudes are tracked in the comments of the callers; a multiplication takes inputs of
+/// magnitude at most 8.
+#[inline(always)]
+fn sub(x: &mut FieldElement, rhs: &FieldElement, magnitude: u32) {
+    #[cfg(feature = "bigint_ops")]
+    {
+        let _ = magnitude;
+        x.sub_in_place(rhs);
+    }
+    #[cfg(not(feature = "bigint_ops"))]
+    {
+        x.sub_in_place_magnitude(rhs, magnitude);
     }
 }
 
@@ -140,19 +159,20 @@ impl Fraction {
 }
 
 /// The rest of an addition of a point with the coordinate `x2` (a doubling if `None`) to `r`,
-/// given the slope: `x3 = slope² - x1 - x2`, `y3 = slope (x1 - x3) - y1`
+/// given the slope: `x3 = slope² - x1 - x2`, `y3 = slope (x1 - x3) - y1`. `r`, `x2` and the
+/// slope have magnitude 1 (the magnitudes in brackets).
 #[inline(always)]
 fn apply_slope(r: &mut Affine, slope: &FieldElement, x2: Option<&FieldElement>) {
     let mut x3 = MaybeUninit::uninit();
     let x3 = write_copy(&mut x3, slope);
-    x3.square_in_place();
-    x3.sub_in_place(&r.x);
-    x3.sub_in_place(x2.unwrap_or(&r.x));
+    x3.square_in_place(); // [1]
+    sub(x3, &r.x, 1); // [3]
+    sub(x3, x2.unwrap_or(&r.x), 1); // [5]
 
-    r.x.sub_in_place(x3);
-    r.x.mul_in_place(slope);
-    subtract_from(&mut r.y, &r.x);
-    assign(&mut r.x, x3);
+    sub(&mut r.x, x3, 5); // [7]
+    r.x.mul_in_place(slope); // [1]
+    subtract_from(&mut r.y, &r.x, 1); // [3]
+    assign(&mut r.x, x3); // [5]
     settle(&mut r.x);
     settle(&mut r.y);
 }
@@ -167,9 +187,9 @@ fn double<H: Secp256k1Hooks>(r: &mut Affine, hooks: &mut H) {
     let (numerator, denominator) = fraction.parts();
     let numerator = write_copy(numerator, &r.x);
     numerator.square_in_place();
-    triple(numerator);
+    triple(numerator); // [3]
     let denominator = write_copy(denominator, &r.y);
-    denominator.double_in_place();
+    denominator.double_in_place(); // [2]
     if denominator.is_zero() {
         // a point of order 2 (the curve has none, its order is odd)
         r.infinity = true;
@@ -196,15 +216,15 @@ fn slope_of_sum(
     let (numerator, denominator) = if negate {
         // (-y - y_r) / (x - x_r) = (y + y_r) / (x_r - x)
         let numerator = write_copy(numerator, y);
-        numerator.add_in_place(&r.y);
+        numerator.add_in_place(&r.y); // [2]
         let denominator = write_copy(denominator, &r.x);
-        denominator.sub_in_place(x);
+        sub(denominator, x, 1); // [3]
         (numerator, denominator)
     } else {
         let numerator = write_copy(numerator, y);
-        numerator.sub_in_place(&r.y);
+        sub(numerator, &r.y, 1); // [3]
         let denominator = write_copy(denominator, x);
-        denominator.sub_in_place(&r.x);
+        sub(denominator, &r.x, 1); // [3]
         (numerator, denominator)
     };
     if denominator.is_zero() {
@@ -282,16 +302,17 @@ fn double_and_add<H: Secp256k1Hooks>(
     // x_t = slope² - x_r - x, the coordinate of r + p
     let mut x_t = MaybeUninit::uninit();
     let x_t = write_copy(&mut x_t, slope);
-    x_t.square_in_place();
-    x_t.sub_in_place(&r.x);
-    x_t.sub_in_place(x);
+    x_t.square_in_place(); // [1]
+    sub(x_t, &r.x, 1); // [3]
+    sub(x_t, x, 1); // [5]
+    settle(x_t); // [1]
 
     // the slope of (r + p) + r is -(slope + 2 y_r / (x_t - x_r))
     let (numerator, denominator) = fraction.parts();
     let numerator = write_copy(numerator, &r.y);
-    numerator.double_in_place();
+    numerator.double_in_place(); // [2]
     let denominator = write_copy(denominator, x_t);
-    denominator.sub_in_place(&r.x);
+    sub(denominator, &r.x, 1); // [3]
     if denominator.is_zero() {
         double(r, hooks);
         add(r, x, y, negate, hooks);
@@ -300,20 +321,20 @@ fn double_and_add<H: Secp256k1Hooks>(
     let mut negated_slope = MaybeUninit::uninit();
     // SAFETY: both parts were written, and the denominator is not zero
     let negated_slope = unsafe { fraction.divide(&mut negated_slope, hooks) };
-    negated_slope.add_in_place(slope);
-    settle(negated_slope);
+    negated_slope.add_in_place(slope); // [2]
+    settle(negated_slope); // [1]
 
     // x3 = slope_2² - x_r - x_t, y3 = slope_2 (x_r - x3) - y_r = -slope_2 (x3 - x_r) - y_r
     let mut x3 = MaybeUninit::uninit();
     let x3 = write_copy(&mut x3, negated_slope);
-    x3.square_in_place();
-    x3.sub_in_place(&r.x);
-    x3.sub_in_place(x_t);
+    x3.square_in_place(); // [1]
+    sub(x3, &r.x, 1); // [3]
+    sub(x3, x_t, 1); // [5]
 
-    subtract_from(&mut r.x, x3);
-    r.x.mul_in_place(negated_slope);
-    subtract_from(&mut r.y, &r.x);
-    assign(&mut r.x, x3);
+    subtract_from(&mut r.x, x3, 1); // [7]
+    r.x.mul_in_place(negated_slope); // [1]
+    subtract_from(&mut r.y, &r.x, 1); // [3]
+    assign(&mut r.x, x3); // [5]
     settle(&mut r.x);
     settle(&mut r.y);
 }
@@ -436,6 +457,178 @@ pub(super) fn ecmult_affine<H: Secp256k1Hooks>(
         if n != 0 {
             let (idx, negate) = table_index(n, WINDOW_G);
             with_stored(&context.pre_g_128[idx], |x, y| {
+                step(&mut r, &mut doubled, x, y, negate, hooks)
+            });
+        }
+
+        if !doubled {
+            double(&mut r, hooks);
+        }
+    }
+
+    r
+}
+
+/// The odd multiples `p, 3 p, ..., (2^WINDOW_A - 1) p` of a point that is not the point at
+/// infinity, and the `x` of their images under the endomorphism (`β x`)
+#[inline(always)]
+fn odd_multiples<H: Secp256k1Hooks>(
+    p: &Affine,
+    multiples: &mut [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A],
+    images: &mut [MaybeUninit<FieldElement>; ECMULT_TABLE_SIZE_A],
+    hooks: &mut H,
+) {
+    let mut doubled = *p;
+    doubled.infinity = false;
+    double(&mut doubled, hooks);
+    let mut multiple = *p;
+    multiple.infinity = false;
+    for i in 0..ECMULT_TABLE_SIZE_A {
+        if i > 0 && !doubled.infinity {
+            add(&mut multiple, &doubled.x, &doubled.y, false, hooks);
+        }
+        let image = write_copy(&mut images[i], &FieldElement::BETA);
+        image.mul_in_place(&multiple.x);
+        multiples[i].write(multiple);
+    }
+}
+
+/// The wNAF digits of a witnessed coefficient (`recover_witnessed::WITNESS_COEFFICIENT_BITS`
+/// bits, one more digit) and of a 64-bit chunk of the generator's scalar
+const WNAF_BITS_COEFFICIENT: usize = super::recover_witnessed::WITNESS_COEFFICIENT_BITS + 1;
+const WNAF_BITS_G_CHUNK: usize = 65;
+
+/// A non-negative integer below `2^128` as a scalar in the form `wnaf` reads (the integer
+/// form of the representation, as `decompose_128` returns it; the delegated scalars are
+/// otherwise in Montgomery form)
+fn wnaf_scalar(magnitude: u128) -> Scalar {
+    Scalar::wnaf_form_u128(magnitude)
+}
+
+/// The 64-bit chunk `i` of a scalar given by its canonical big-endian bytes, in the form
+/// `wnaf` reads
+fn chunk_64(repr: &[u8; 32], i: usize) -> Scalar {
+    let chunk = u64::from_be_bytes(repr[24 - 8 * i..32 - 8 * i].try_into().expect("8 bytes"));
+    wnaf_scalar(u128::from(chunk))
+}
+
+/// `a p + b φ(p) + c q + d φ(q) + k g` for the points `p` and `q` (not the point at infinity),
+/// the signed coefficients `[a, b, c, d]` of at most `WITNESS_COEFFICIENT_BITS` bits in
+/// absolute value and any scalar `k` of the generator, which is split into four 64-bit
+/// chunks over the four generator tables. The doublings are those of the longest coefficient:
+/// about 64 for the witnessed recovery instead of the 128 of `ecmult_affine`.
+pub(super) fn ecmult_affine_4d<H: Secp256k1Hooks>(
+    p: &Affine,
+    q: &Affine,
+    coefficients: &[i128; 4],
+    k: &Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Affine {
+    let mut multiples_p: [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A] =
+        [const { MaybeUninit::uninit() }; ECMULT_TABLE_SIZE_A];
+    let mut images_p: [MaybeUninit<FieldElement>; ECMULT_TABLE_SIZE_A] =
+        [const { MaybeUninit::uninit() }; ECMULT_TABLE_SIZE_A];
+    let mut multiples_q: [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A] =
+        [const { MaybeUninit::uninit() }; ECMULT_TABLE_SIZE_A];
+    let mut images_q: [MaybeUninit<FieldElement>; ECMULT_TABLE_SIZE_A] =
+        [const { MaybeUninit::uninit() }; ECMULT_TABLE_SIZE_A];
+    odd_multiples(p, &mut multiples_p, &mut images_p, hooks);
+    odd_multiples(q, &mut multiples_q, &mut images_q, hooks);
+    // SAFETY: `odd_multiples` wrote every entry
+    let (multiples_p, images_p, multiples_q, images_q) = unsafe {
+        (
+            &*(&multiples_p as *const [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A])
+                .cast::<[Affine; ECMULT_TABLE_SIZE_A]>(),
+            &*(&images_p as *const [MaybeUninit<FieldElement>; ECMULT_TABLE_SIZE_A])
+                .cast::<[FieldElement; ECMULT_TABLE_SIZE_A]>(),
+            &*(&multiples_q as *const [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A])
+                .cast::<[Affine; ECMULT_TABLE_SIZE_A]>(),
+            &*(&images_q as *const [MaybeUninit<FieldElement>; ECMULT_TABLE_SIZE_A])
+                .cast::<[FieldElement; ECMULT_TABLE_SIZE_A]>(),
+        )
+    };
+    let tables: [(
+        &[Affine; ECMULT_TABLE_SIZE_A],
+        Option<&[FieldElement; ECMULT_TABLE_SIZE_A]>,
+    ); 4] = [
+        (multiples_p, None),
+        (multiples_p, Some(images_p)),
+        (multiples_q, None),
+        (multiples_q, Some(images_q)),
+    ];
+
+    // the digits of the magnitudes are zero above their bits; a negative coefficient negates
+    // its points
+    let mut digits = [[0 as WnafDigit; WNAF_BITS_COEFFICIENT]; 4];
+    let mut bits = 0;
+    for (digits, coefficient) in digits.iter_mut().zip(coefficients) {
+        if *coefficient != 0 {
+            let magnitude = wnaf_scalar(coefficient.unsigned_abs());
+            bits = bits.max(wnaf(digits, &magnitude, WINDOW_A));
+        }
+    }
+    let negative = coefficients.map(|coefficient| coefficient < 0);
+    let mut g_digits = [[0 as WnafDigit; WNAF_BITS_G_CHUNK]; 4];
+    let k_repr: [u8; 32] = k.to_repr().into();
+    for (i, digits) in g_digits.iter_mut().enumerate() {
+        let chunk = chunk_64(&k_repr, i);
+        if !chunk.is_zero() {
+            bits = bits.max(wnaf(digits, &chunk, WINDOW_G));
+        }
+    }
+    let g_tables = [
+        &context.pre_g,
+        &context.pre_g_64,
+        &context.pre_g_128,
+        &context.pre_g_192,
+    ];
+
+    let mut r = Affine::INFINITY;
+
+    // the first addition after a doubling goes together with it
+    let step = |r: &mut Affine,
+                doubled: &mut bool,
+                x: &FieldElement,
+                y: &FieldElement,
+                negate: bool,
+                hooks: &mut H| {
+        if *doubled {
+            add(r, x, y, negate, hooks);
+        } else {
+            double_and_add(r, x, y, negate, hooks);
+            *doubled = true;
+        }
+    };
+
+    for i in (0..bits as usize).rev() {
+        let mut doubled = false;
+
+        for ((digits, (multiples, images)), negative) in digits.iter().zip(tables).zip(negative) {
+            let n = digits.get(i).copied().unwrap_or(0);
+            if n == 0 {
+                continue;
+            }
+            let (idx, negate) = table_index(n, WINDOW_A);
+            let negate = negate != negative;
+            let multiple = &multiples[idx];
+            if multiple.infinity {
+                continue;
+            }
+            let x = match images {
+                Some(images) => &images[idx],
+                None => &multiple.x,
+            };
+            step(&mut r, &mut doubled, x, &multiple.y, negate, hooks);
+        }
+
+        for (digits, table) in g_digits.iter().zip(g_tables) {
+            let n = digits.get(i).copied().unwrap_or(0);
+            if n == 0 {
+                continue;
+            }
+            let (idx, negate) = table_index(n, WINDOW_G);
+            with_stored(&table[idx], |x, y| {
                 step(&mut r, &mut doubled, x, y, negate, hooks)
             });
         }
