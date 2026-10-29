@@ -138,6 +138,8 @@ mod tests {
     use core::mem::MaybeUninit;
     use proptest::{prop_assert, prop_assert_eq, proptest};
 
+    type SignatureInput = ([u8; 32], [u8; 32], [u8; 32], bool);
+
     /// Divisions by the host's arithmetic, counted, and a fixed witness
     struct WitnessHooks {
         witness: Option<RecoveryWitness>,
@@ -201,7 +203,7 @@ mod tests {
     }
 
     /// A signature of a random digest by a random key, as `(digest, r, s, y_is_odd)`
-    fn sign(key: &[u8; 32], digest: &[u8; 32]) -> Option<([u8; 32], [u8; 32], [u8; 32], bool)> {
+    fn sign(key: &[u8; 32], digest: &[u8; 32]) -> Option<SignatureInput> {
         let key = crate::k256::ecdsa::SigningKey::from_bytes(key.into()).ok()?;
         let (signature, recovery_id) = key.sign_prehash_recoverable(digest).ok()?;
         if recovery_id.is_x_reduced() {

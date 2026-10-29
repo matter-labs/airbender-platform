@@ -209,6 +209,10 @@ impl Affine {
 
         if self.y.is_odd() != y_is_odd {
             self.y.negate_in_place(1);
+            // back to magnitude 1 (a negation gives 2): the affine recovery takes the point as
+            // a table entry of magnitude 1 and negates it again
+            #[cfg(not(feature = "bigint_ops"))]
+            self.y.normalize_weak_in_place();
         }
 
         self.x = *x;

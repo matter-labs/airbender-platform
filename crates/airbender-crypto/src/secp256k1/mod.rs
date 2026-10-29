@@ -4,6 +4,7 @@
 mod context;
 pub mod field;
 pub mod hooks;
+pub mod oracle;
 mod points;
 mod recover;
 mod recover_affine;
