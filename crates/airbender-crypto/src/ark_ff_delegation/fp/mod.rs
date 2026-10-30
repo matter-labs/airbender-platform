@@ -144,10 +144,6 @@ impl<P: FpConfig<N>, const N: usize> Fp<P, N> {
     pub fn is_geq_modulus(&self) -> bool {
         self.0 >= P::MODULUS
     }
-
-    fn num_bits_to_shave() -> usize {
-        64 * N - (Self::MODULUS_BIT_SIZE as usize)
-    }
 }
 
 impl<P: FpConfig<N>, const N: usize> ark_std::fmt::Debug for Fp<P, N> {
@@ -243,44 +239,21 @@ impl<P: FpConfig<N>, const N: usize> Field for Fp<P, N> {
         if F::BIT_SIZE > 8 {
             None
         } else {
-            let shave_bits = Self::num_bits_to_shave();
-            let mut result_bytes = super::const_helpers::SerBuffer::<N>::zeroed();
-            // Copy the input into a temporary buffer.
-            result_bytes.copy_from_u8_slice(bytes);
-            // This mask retains everything in the last limb
-            // that is below `P::MODULUS_BIT_SIZE`.
-            let last_limb_mask =
-                (u64::MAX.checked_shr(shave_bits as u32).unwrap_or(0)).to_le_bytes();
-            let mut last_bytes_mask = [0u8; 9];
-            last_bytes_mask[..8].copy_from_slice(&last_limb_mask);
-
-            // Length of the buffer containing the field element and the flag.
+            let mut result = super::const_helpers::SerBuffer::<N>::zeroed();
+            result.copy_from_u8_slice(bytes);
             let output_byte_size = buffer_byte_size(Self::MODULUS_BIT_SIZE as usize + F::BIT_SIZE);
-            // Location of the flag is the last byte of the serialized
-            // form of the field element.
-            let flag_location = output_byte_size - 1;
-
-            // At which byte is the flag located in the last limb?
-            let flag_location_in_last_limb = flag_location.saturating_sub(8 * (N - 1));
-
-            // Take all but the last 9 bytes.
-            let last_bytes = result_bytes.last_n_plus_1_bytes_mut();
-
-            // The mask only has the last `F::BIT_SIZE` bits set
-            let flags_mask = u8::MAX.checked_shl(8 - (F::BIT_SIZE as u32)).unwrap_or(0);
-
-            // Mask away the remaining bytes, and try to reconstruct the
-            // flag
-            let mut flags: u8 = 0;
-            for (i, (b, m)) in last_bytes.zip(&last_bytes_mask).enumerate() {
-                if i == flag_location_in_last_limb {
-                    flags = *b & flags_mask
-                }
-                *b &= m;
+            let flags_mask = u8::MAX.checked_shl(8 - F::BIT_SIZE as u32).unwrap_or(0);
+            let flags = result[output_byte_size - 1] & flags_mask;
+            // Clear every bit at or above the modulus size: mask the boundary byte and zero the
+            // bytes above it, including the unused limbs of padded fields (cheaper on RV32 than
+            // masking every byte). `MODULUS_BIT_SIZE <= 64 * N`, so the boundary is in range.
+            let boundary = Self::MODULUS_BIT_SIZE as usize / 8;
+            result[boundary] &= (1u8 << (Self::MODULUS_BIT_SIZE % 8)) - 1;
+            for i in boundary + 1..N * 8 + 1 {
+                result[i] = 0;
             }
-            Self::deserialize_compressed(&result_bytes.as_slice()[..(N * 8)])
-                .ok()
-                .and_then(|f| F::from_u8(flags).map(|flag| (f, flag)))
+            Self::from_bigint(result.to_bigint())
+                .and_then(|value| F::from_u8(flags).map(|flags| (value, flags)))
         }
     }
 
@@ -518,17 +491,12 @@ impl<P: FpConfig<N>, const N: usize> ark_std::rand::distributions::Distribution<
                 rng.sample(ark_std::rand::distributions::Standard),
                 PhantomData,
             );
-            let shave_bits = Fp::<P, N>::num_bits_to_shave();
-            // Mask away the unused bits at the beginning.
-            assert!(shave_bits <= 64);
-            let mask = if shave_bits == 64 {
-                0
-            } else {
-                u64::MAX >> shave_bits
-            };
-
-            if let Some(val) = tmp.0 .0.last_mut() {
-                *val &= mask
+            // Padded representations can contain several entirely unused limbs.
+            for (i, limb) in tmp.0 .0.iter_mut().enumerate() {
+                let bits = (Fp::<P, N>::MODULUS_BIT_SIZE as usize)
+                    .saturating_sub(i * 64)
+                    .min(64);
+                *limb &= u64::MAX.checked_shr((64 - bits) as u32).unwrap_or(0);
             }
 
             if !tmp.is_geq_modulus() {
@@ -986,5 +954,81 @@ impl<P: FpConfig<N>, const N: usize> From<BigInt<N>> for Fp<P, N> {
     #[inline(always)]
     fn from(int: BigInt<N>) -> Self {
         Self::from_bigint(int).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_ec::short_weierstrass::SWFlags;
+    use ark_ff::BigInteger;
+    use ark_std::rand::RngCore;
+
+    /// Canonical encoding plus flag bits, comparable across field implementations.
+    fn canonical<T: CanonicalSerialize, F: Flags>(result: Option<(T, F)>) -> Option<(Vec<u8>, u8)> {
+        result.map(|(value, flags)| {
+            let mut bytes = Vec::new();
+            value.serialize_compressed(&mut bytes).unwrap();
+            (bytes, flags.u8_bitmask())
+        })
+    }
+
+    fn assert_same_result<P: FpConfig<N>, const N: usize, R: Field, F: Flags>(bytes: &[u8]) {
+        let ours = canonical(Fp::<P, N>::from_random_bytes_with_flags::<F>(bytes));
+        let arkworks = canonical(R::from_random_bytes_with_flags::<F>(bytes));
+        assert_eq!(
+            ours,
+            arkworks,
+            "{} flag bits, input {bytes:02x?}",
+            F::BIT_SIZE
+        );
+    }
+
+    /// `from_random_bytes_with_flags` against `R`, the arkworks field with the same modulus, for
+    /// every input length up to `8 * N + 1`: all zeroes, all ones, prefixes of the modulus and of
+    /// the modulus minus one, and random bytes, without flags and with the two SW flag bits
+    fn assert_matches_arkworks<P: FpConfig<N>, const N: usize, R: Field>(
+        _: PhantomData<(Fp<P, N>, R)>,
+    ) {
+        let mut rng = ark_std::test_rng();
+        let modulus = P::MODULUS.to_bytes_le();
+        let mut modulus_minus_one = P::MODULUS;
+        modulus_minus_one.sub_with_borrow(&BigInt::from(1u64));
+        let modulus_minus_one = modulus_minus_one.to_bytes_le();
+        for len in 0..=8 * N + 1 {
+            let mut inputs = vec![vec![0; len], vec![0xff; len]];
+            for limit in [&modulus, &modulus_minus_one] {
+                let mut bytes = vec![0; len];
+                rng.fill_bytes(&mut bytes);
+                let prefix = len.min(Fp::<P, N>::MODULUS_BIT_SIZE.div_ceil(8) as usize);
+                bytes[..prefix].copy_from_slice(&limit[..prefix]);
+                inputs.push(bytes);
+            }
+            for _ in 0..16 {
+                let mut bytes = vec![0; len];
+                rng.fill_bytes(&mut bytes);
+                inputs.push(bytes);
+            }
+            for bytes in &inputs {
+                assert_same_result::<P, N, R, EmptyFlags>(bytes);
+                assert_same_result::<P, N, R, SWFlags>(bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn from_random_bytes_matches_arkworks_unpadded() {
+        assert_eq!(crate::bn254::Fr::MODULUS_BIT_SIZE, 254);
+        assert_matches_arkworks(PhantomData::<(crate::bn254::Fr, ark_bn254::Fr)>);
+        assert_eq!(crate::bls12_381::Fr::MODULUS_BIT_SIZE, 255);
+        assert_matches_arkworks(PhantomData::<(crate::bls12_381::Fr, ark_bls12_381::Fr)>);
+    }
+
+    #[test]
+    fn from_random_bytes_matches_arkworks_padded() {
+        // 381 bits stored in 8 limbs: two whole unused limbs above the boundary byte.
+        assert_eq!(crate::bls12_381::Fq::MODULUS_BIT_SIZE, 381);
+        assert_eq!(core::mem::size_of::<crate::bls12_381::Fq>(), 64);
+        assert_matches_arkworks(PhantomData::<(crate::bls12_381::Fq, ark_bls12_381::Fq)>);
     }
 }

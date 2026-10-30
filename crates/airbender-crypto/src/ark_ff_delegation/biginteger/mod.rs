@@ -255,7 +255,14 @@ impl<const N: usize> BigInt<N> {
     /// Find the number of bits in the binary decomposition of `self`.
     #[doc(hidden)]
     pub const fn const_num_bits(self) -> u32 {
-        ((N - 1) * 64) as u32 + (64 - self.0[N - 1].leading_zeros())
+        let mut limbs = N;
+        while limbs != 0 {
+            limbs -= 1;
+            if self.0[limbs] != 0 {
+                return (limbs * 64) as u32 + (64 - self.0[limbs].leading_zeros());
+            }
+        }
+        0
     }
 
     #[inline]

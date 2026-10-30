@@ -12,6 +12,7 @@ description = "Shared crypto primitives for Airbender host and guest programs"
 readme = "README.md"
 
 [dependencies]
+airbender-oracle = { path = "../airbender-oracle" }
 common_constants = { workspace = true }
 riscv_common = { workspace = true }
 blake2 = { workspace = true }

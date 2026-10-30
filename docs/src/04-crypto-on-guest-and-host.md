@@ -103,22 +103,24 @@ The [`examples/ecrecover-hooks/`](https://github.com/matter-labs/airbender-platf
 
 ### Hints from the host over the CSR
 
-`secp256k1::oracle::OracleHooks` is a ready-made `Secp256k1Hooks` that takes every hint from the
-host over a word channel and checks it on the guest; on the RISC-V guest the channel is the
-non-determinism CSR (`CsrHooks`, i.e. `OracleHooks::new(CsrChannel)`). It also witnesses the
-recovered key (`Secp256k1Hooks::recovery_witness`), which saves about a fifth of the group
-operations of a recovery. The wire protocol is the memory-based oracle protocol of ZKsync OS
-(query id `0x40050011`, a request with the op and the address of the operand, the answers read
-word by word), so a host that serves ZKsync OS serves these hooks. The host side is
-`secp256k1::oracle::host::serve`, which reads the request from the guest's memory and answers in
-the representation of the guest's build (`Representation::Montgomery` with the `bigint_ops`
-delegation, `Representation::Canonical` otherwise).
+`hints::Secp256k1HooksWithOracle` is a ready-made `Secp256k1Hooks` that takes every hint from an
+oracle (`airbender_oracle::MemoryOracle`) and checks it on the guest; on the RISC-V guest the oracle
+is the non-determinism CSR (`airbender_oracle::CsrOracle`). It also witnesses the recovered key
+(`Secp256k1Hooks::recovery_witness`), which saves about a fifth of the group operations of a
+recovery; a witness that does not check out panics, as any wrong hint does. The protocol is the field
+hints of ZKsync OS (query ID `FIELD_OPS_ADVISE_QUERY_ID`, `0x40050011`, with the ops of
+`hints::FieldHintOp`), so a host that serves ZKsync OS serves these hooks. The host side is
+`hints::answer_query`, which reads the request from the guest's memory and answers in the guest's
+representation; natively, `hints::RecordingHintOracle` answers a querier in the same process and
+records the guest's tape.
 
 ```rust
-use airbender_crypto::secp256k1::oracle::{CsrChannel, OracleHooks};
+use airbender_crypto::hints::{HintError, Secp256k1HooksWithOracle};
 use airbender_crypto::secp256k1::recover_from_bytes_with_hooks;
+use airbender_oracle::{CsrChannel, CsrOracle};
 
-let mut hooks = OracleHooks::new(CsrChannel);
+let mut oracle = CsrOracle::<HintError>::new(CsrChannel);
+let mut hooks = Secp256k1HooksWithOracle::new(&mut oracle);
 let key = recover_from_bytes_with_hooks(&digest, &r, &s, y_is_odd, &mut hooks)?;
 ```
 

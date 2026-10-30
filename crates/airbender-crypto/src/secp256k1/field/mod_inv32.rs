@@ -10,6 +10,32 @@ use core::{
 
 use super::field_10x26::FieldElement10x26;
 
+// Airbender proves unsigned MUL/MULHU, not MULH/MULHSU. Correct the high
+// unsigned word for the sign extension of each operand. Inline assembly keeps
+// LLVM from recognizing the expression and reintroducing MULH on RV32.
+#[inline(always)]
+fn mul_signed(a: i32, b: i32) -> i64 {
+    #[cfg(target_arch = "riscv32")]
+    {
+        let (lo, hi): (u32, u32);
+        unsafe {
+            core::arch::asm!(
+                "mul {lo}, {a}, {b}", "mulhu {hi}, {a}, {b}",
+                a = in(reg) a, b = in(reg) b, lo = out(reg) lo, hi = out(reg) hi,
+                options(pure, nomem, nostack)
+            );
+        }
+        let hi = hi
+            .wrapping_sub((a >> 31) as u32 & b as u32)
+            .wrapping_sub((b >> 31) as u32 & a as u32);
+        ((u64::from(hi) << 32) | u64::from(lo)) as i64
+    }
+    #[cfg(not(target_arch = "riscv32"))]
+    {
+        i64::from(a) * i64::from(b)
+    }
+}
+
 const MODINV32_INV256: [u8; 128] = [
     0xFF, 0x55, 0x33, 0x49, 0xC7, 0x5D, 0x3B, 0x11, 0x0F, 0xE5, 0xC3, 0x59, 0xD7, 0xED, 0xCB, 0x21,
     0x1F, 0x75, 0x53, 0x69, 0xE7, 0x7D, 0x5B, 0x31, 0x2F, 0x05, 0xE3, 0x79, 0xF7, 0x0D, 0xEB, 0x41,
@@ -33,7 +59,7 @@ struct TransitionMatrix {
 
 impl TransitionMatrix {
     fn det(&self) -> i64 {
-        self.u as i64 * self.r as i64 - self.v as i64 * self.q as i64
+        mul_signed(self.u, self.r) - mul_signed(self.v, self.q)
     }
 
     fn divsteps30(eta: &mut i32, f0: Wrapping<u32>, g0: Wrapping<u32>) -> Self {
@@ -127,8 +153,8 @@ impl TransitionMatrix {
         let mut f_out = Signed30::ZERO;
         let mut g_out = Signed30::ZERO;
 
-        let mut cf = u * fi + v * gi;
-        let mut cg = q * fi + r * gi;
+        let mut cf = mul_signed(u as i32, fi as i32) + mul_signed(v as i32, gi as i32);
+        let mut cg = mul_signed(q as i32, fi as i32) + mul_signed(r as i32, gi as i32);
 
         debug_assert!(cf as i32 & M30 == 0);
         debug_assert!(cg as i32 & M30 == 0);
@@ -140,8 +166,8 @@ impl TransitionMatrix {
             fi = f.0[i] as i64;
             gi = g.0[i] as i64;
 
-            cf += u * fi + v * gi;
-            cg += q * fi + r * gi;
+            cf += mul_signed(u as i32, fi as i32) + mul_signed(v as i32, gi as i32);
+            cg += mul_signed(q as i32, fi as i32) + mul_signed(r as i32, gi as i32);
 
             f_out.0[i - 1] = cf as i32 & M30;
             g_out.0[i - 1] = cg as i32 & M30;
@@ -179,14 +205,14 @@ impl TransitionMatrix {
 
         let mut di = d.0[0] as i64;
         let mut ei = e.0[0] as i64;
-        let mut cd = u * di + v * ei;
-        let mut ce = q * di + r * ei;
+        let mut cd = mul_signed(u as i32, di as i32) + mul_signed(v as i32, ei as i32);
+        let mut ce = mul_signed(q as i32, di as i32) + mul_signed(r as i32, ei as i32);
 
         md -= (mod_info.modulus_inv30.wrapping_mul(cd as u32) as i32).wrapping_add(md) & M30;
         me -= (mod_info.modulus_inv30.wrapping_mul(ce as u32) as i32).wrapping_add(me) & M30;
 
-        cd += mod_info.modulus.0[0] as i64 * md as i64;
-        ce += mod_info.modulus.0[0] as i64 * me as i64;
+        cd += mul_signed(mod_info.modulus.0[0], md);
+        ce += mul_signed(mod_info.modulus.0[0], me);
 
         debug_assert!(cd as i32 & M30 == 0);
         debug_assert!(ce as i32 & M30 == 0);
@@ -198,10 +224,10 @@ impl TransitionMatrix {
             di = d.0[i] as i64;
             ei = e.0[i] as i64;
 
-            cd += u * di + v * ei;
-            ce += q * di + r * ei;
-            cd += mod_info.modulus.0[i] as i64 * md as i64;
-            ce += mod_info.modulus.0[i] as i64 * me as i64;
+            cd += mul_signed(u as i32, di as i32) + mul_signed(v as i32, ei as i32);
+            ce += mul_signed(q as i32, di as i32) + mul_signed(r as i32, ei as i32);
+            cd += mul_signed(mod_info.modulus.0[i], md);
+            ce += mul_signed(mod_info.modulus.0[i], me);
 
             d_out.0[i - 1] = cd as i32 & M30;
             e_out.0[i - 1] = ce as i32 & M30;
@@ -461,12 +487,12 @@ impl Mul<i32> for Signed30 {
         let mut c = 0i64;
         let mut r = Signed30::ZERO;
         for i in 0..8 {
-            c += self.0[i] as i64 * rhs as i64;
+            c += mul_signed(self.0[i], rhs);
             r.0[i] = (c as u32 & M30) as i32;
             c >>= 30;
         }
 
-        c += self.0[8] as i64 * rhs as i64;
+        c += mul_signed(self.0[8], rhs);
 
         debug_assert_eq!(c, c as i32 as i64);
 
@@ -503,6 +529,15 @@ mod tests {
     use super::{ModInfo, Signed30};
 
     const MOD_INFO: ModInfo = ModInfo::new([-0x3D1, -4, 0, 0, 0, 0, 0, 0, 65536], 0x2DDACACF);
+
+    #[test]
+    fn signed_widening_matches_native_product() {
+        for a in [i32::MIN, -1073741824, -1, 0, 1, 1073741823, i32::MAX] {
+            for b in [i32::MIN, -1073741824, -1, 0, 1, 1073741823, i32::MAX] {
+                assert_eq!(super::mul_signed(a, b), i64::from(a) * i64::from(b));
+            }
+        }
+    }
 
     #[allow(clippy::erasing_op)] // multiplication by 0 is intentional
     #[test]
