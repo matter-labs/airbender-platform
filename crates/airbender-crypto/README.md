@@ -53,6 +53,11 @@ query IDs are allocated in `airbender_oracle::query_ids`. Field hints use `0x400
 elements are the raw Montgomery limbs of the guest's delegated fields; the ModExp queries are
 described in `src/modexp/README.md`.
 
+ecrecover takes the recovered key from the oracle with a short 4-dimensional decomposition of the
+signature (`FieldHintOp::Secp256k1RecoveryWitness`), and checks it with about a fifth fewer group
+operations than computing it. A witness that does not check out panics, as any wrong hint does; the
+oracle answers "no witness" for a key at infinity, and the key is then computed.
+
 Functions that take a divider or a hinted inverse (`*_with_divider`, `into_affine_with_inverse`,
 `hinted_ops::to_affine_with_inverse`) assume their points are on the curve. The byte-level
 endpoints check this when decoding, and the MSMs and pairing checks also check the subgroup.

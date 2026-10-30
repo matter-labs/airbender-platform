@@ -6,6 +6,7 @@ use super::answer::{read_hint_answer, HintAnswer};
 use super::request::{send_field_hint_query, FieldHintOp};
 use crate::secp256k1::field::FieldElement;
 use crate::secp256k1::scalars::Scalar;
+use crate::secp256k1::{Affine, RecoveryWitness};
 use crate::{bigint_op_delegation_raw, BigIntOps};
 use airbender_oracle::{MemoryOracle, OracleError};
 #[cfg(any(feature = "alloc", test))]
@@ -332,6 +333,85 @@ macro_rules! impl_hint_answer_for_secp256k1_element {
 
 impl_hint_answer_for_secp256k1_element!(FieldElement, Scalar);
 
+/// The operand of [`FieldHintOp::Secp256k1RecoveryWitness`]: the signature `(r, s)` of `message`
+/// (the digest reduced modulo the order) and the point `(x, y)` of the signature, with `x = r` and
+/// the `y` of the recovery id, each in the querier's representation (see [`Secp256k1Element`]).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RecoveryRequest {
+    pub r: Scalar,
+    pub s: Scalar,
+    pub message: Scalar,
+    pub x: FieldElement,
+    pub y: FieldElement,
+}
+
+// The guest sends the five elements as their Montgomery words, back to back.
+#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+const _: () = assert!(core::mem::size_of::<RecoveryRequest>() == 5 * 32);
+
+impl RecoveryRequest {
+    /// The request of the witness of the recovery of the key of the signature `(r, s)` of
+    /// `message` with the point `point` of the signature
+    pub fn new(point: &Affine, r: &Scalar, s: &Scalar, message: &Scalar) -> Self {
+        Self {
+            r: *r,
+            s: *s,
+            message: *message,
+            x: point.x,
+            y: point.y,
+        }
+    }
+
+    /// The point of the signature
+    pub fn point(&self) -> Affine {
+        Affine {
+            x: self.x,
+            y: self.y,
+            infinity: false,
+        }
+    }
+}
+
+/// The words of a witness, the same on every target: the coordinates of the key as canonical
+/// little-endian words, then each coefficient as the 4 little-endian words of its two's
+/// complement. Read unchecked: the recovery checks the witness, and panics if it is wrong.
+impl HintAnswer for RecoveryWitness {
+    #[inline(always)]
+    fn read<'a, O: MemoryOracle>(
+        oracle: &mut O,
+        dst: &'a mut MaybeUninit<Self>,
+    ) -> Result<&'a mut Self, O::Error> {
+        let mut words = [0u32; 32];
+        // SAFETY: the buffer holds 32 words
+        unsafe { oracle.write_words(words.as_mut_ptr(), 32)? };
+        let (key, coefficients) = words.as_chunks::<8>().0.split_at(2);
+        Ok(dst.write(RecoveryWitness {
+            key_x: be_bytes(&key[0]),
+            key_y: be_bytes(&key[1]),
+            coefficients: core::array::from_fn(|i| {
+                let words = &coefficients[i / 2][4 * (i % 2)..][..4];
+                let mut value = 0u128;
+                for (j, word) in words.iter().enumerate() {
+                    value |= u128::from(*word) << (32 * j);
+                }
+                value as i128
+            }),
+        }))
+    }
+
+    #[cfg(any(feature = "alloc", test))]
+    fn write(&self, _target: HintTarget, response: &mut Vec<u32>) {
+        response.extend_from_slice(&words_of_be_bytes(&self.key_x));
+        response.extend_from_slice(&words_of_be_bytes(&self.key_y));
+        for coefficient in self.coefficients {
+            for word in coefficient.to_le_bytes().as_chunks::<4>().0 {
+                response.push(u32::from_le_bytes(*word));
+            }
+        }
+    }
+}
+
 /// Secp256k1 hooks implementation that uses an oracle for field operations.
 pub struct Secp256k1HooksWithOracle<'a, O: MemoryOracle> {
     oracle: &'a mut O,
@@ -353,6 +433,30 @@ impl<'a, O: MemoryOracle> crate::secp256k1::hooks::Secp256k1Hooks
     /// A hinted division costs one multiplication, so the scalar multiplication works in affine
     /// coordinates
     const FE_DIVIDE_IS_CHEAP: bool = true;
+
+    /// The key and its 4-dimensional decomposition from the oracle, which the recovery checks
+    /// with about a fifth fewer group operations than it computes the key with
+    fn recovery_witness(
+        &mut self,
+        point: &Affine,
+        r: &Scalar,
+        s: &Scalar,
+        message: &Scalar,
+    ) -> Option<RecoveryWitness> {
+        let request = RecoveryRequest::new(point, r, s, message);
+        // SAFETY: `RecoveryRequest` is the operand type of the recovery witness
+        unsafe {
+            send_field_hint_query(self.oracle, FieldHintOp::Secp256k1RecoveryWitness, &request)
+        }
+        .expect("must send the field hint query");
+        let present: bool = read_hint_answer(self.oracle).expect("the hint answer is well-formed");
+        let witness =
+            present.then(|| read_hint_answer(self.oracle).expect("the hint answer is well-formed"));
+        self.oracle
+            .finish_query()
+            .expect("the hint answer has no excess data");
+        witness
+    }
 
     fn fe_divide<'q>(
         &mut self,
@@ -477,9 +581,9 @@ mod tests {
     use super::*;
     use crate::hints::host::RecordingHintOracle;
     use crate::hints::test_support::{lying_oracle, lying_oracle_last_word, TapeOracle};
-    use crate::hints::HintError;
+    use crate::hints::{HintError, QuerierMemory};
     use crate::secp256k1::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
-    use proptest::{prop_assert_eq, proptest};
+    use proptest::{prop_assert, prop_assert_eq, proptest};
 
     /// The integer of little-endian words plus the modulus, if it stays below `2^256`
     fn plus_modulus(words: &[u32; 8], modulus: &[u32; 8]) -> Option<[u32; 8]> {
@@ -685,4 +789,225 @@ mod tests {
         Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut seven());
     }
 
+    /// `(digest, r, s, y_is_odd)`
+    type SignatureInput = ([u8; 32], [u8; 32], [u8; 32], bool);
+
+    /// A signature of `digest` by `key`, as `(digest, r, s, y_is_odd)`, if its `x` is the
+    /// unreduced `r`
+    fn sign(key: &[u8; 32], digest: &[u8; 32]) -> Option<SignatureInput> {
+        let key = crate::k256::ecdsa::SigningKey::from_bytes(key.into()).ok()?;
+        let (signature, recovery_id) = key.sign_prehash_recoverable(digest).ok()?;
+        if recovery_id.is_x_reduced() {
+            return None;
+        }
+        let bytes = signature.to_bytes();
+        let (r, s) = bytes.split_at(32);
+        Some((
+            *digest,
+            r.try_into().unwrap(),
+            s.try_into().unwrap(),
+            recovery_id.is_y_odd(),
+        ))
+    }
+
+    /// An oracle that records the op of every field hint query, read from its request
+    struct OpRecording<O> {
+        inner: O,
+        ops: Vec<FieldHintOp>,
+    }
+
+    impl<O: MemoryOracle> MemoryOracle for OpRecording<O> {
+        type Error = O::Error;
+
+        unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), O::Error> {
+            assert_eq!(query_id, crate::hints::FIELD_OPS_ADVISE_QUERY_ID);
+            // SAFETY: the request is live during the query (the caller's contract)
+            let memory = unsafe { crate::hints::host::NativeQuerierMemory::new() };
+            let (op, _, _) = crate::hints::read_field_hint_request(&memory, input_word).unwrap();
+            self.ops.push(FieldHintOp::parse_u32(op).unwrap());
+            // SAFETY: the caller's contract
+            unsafe { self.inner.send_query(query_id, input_word) }
+        }
+
+        fn read_word(&mut self) -> Result<u32, O::Error> {
+            self.inner.read_word()
+        }
+
+        unsafe fn write_words(&mut self, dst: *mut u32, num_words: usize) -> Result<(), O::Error> {
+            // SAFETY: the caller's contract
+            unsafe { self.inner.write_words(dst, num_words) }
+        }
+
+        fn finish_query(&mut self) -> Result<(), O::Error> {
+            self.inner.finish_query()
+        }
+    }
+
+    #[test]
+    fn recovery_with_oracle_is_witnessed() {
+        use crate::secp256k1::recover_from_bytes_with_hooks;
+        use proptest::test_runner::{Config, TestRunner};
+
+        let mut runner = TestRunner::new(Config::with_cases(32));
+        runner
+            .run(
+                &(
+                    proptest::prelude::any::<[u8; 32]>(),
+                    proptest::prelude::any::<[u8; 32]>(),
+                ),
+                |(key, digest)| {
+                    let Some((digest, r, s, odd)) = sign(&key, &digest) else {
+                        return Ok(());
+                    };
+                    let expected = recover_from_bytes_with_hooks(
+                        &digest,
+                        &r,
+                        &s,
+                        odd,
+                        &mut DefaultSecp256k1Hooks,
+                    )
+                    .unwrap();
+                    let mut oracle = OpRecording {
+                        inner: RecordingHintOracle::new(),
+                        ops: Vec::new(),
+                    };
+                    let recovered = recover_from_bytes_with_hooks(
+                        &digest,
+                        &r,
+                        &s,
+                        odd,
+                        &mut Secp256k1HooksWithOracle::new(&mut oracle),
+                    )
+                    .unwrap();
+                    prop_assert_eq!(recovered, expected);
+                    let count = |op| oracle.ops.iter().filter(|o| **o == op).count();
+                    prop_assert_eq!(count(FieldHintOp::Secp256k1RecoveryWitness), 1);
+                    prop_assert_eq!(count(FieldHintOp::Secp256k1BaseFieldSqrt), 1);
+                    prop_assert_eq!(count(FieldHintOp::Secp256k1ScalarFieldInverse), 1);
+                    prop_assert!(count(FieldHintOp::Secp256k1BaseFieldDivision) > 100);
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn recovery_without_a_witness_computes_the_key() {
+        use crate::hints::host::answer_query;
+        use crate::hints::test_support::InProcessMemoryOracle;
+        use crate::secp256k1::recover_from_bytes_with_hooks;
+
+        let (digest, r, s, odd) = sign(&[5; 32], &[9; 32]).unwrap();
+        let expected =
+            recover_from_bytes_with_hooks(&digest, &r, &s, odd, &mut DefaultSecp256k1Hooks)
+                .unwrap();
+        // honest, except that it has no witness
+        let mut oracle = OpRecording {
+            inner: InProcessMemoryOracle::new(
+                |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
+                    let (op, _, _) =
+                        crate::hints::read_field_hint_request(memory, input_word).unwrap();
+                    if op == FieldHintOp::Secp256k1RecoveryWitness as u32 {
+                        return std::vec![0];
+                    }
+                    let mut words = Vec::new();
+                    // SAFETY: the handler runs during the query, while its request is live
+                    let answered = unsafe {
+                        answer_query(query_id, input_word, memory, Some(&mut words), None)
+                    };
+                    assert_eq!(answered, Ok(true));
+                    words
+                },
+            ),
+            ops: Vec::new(),
+        };
+        let recovered = recover_from_bytes_with_hooks(
+            &digest,
+            &r,
+            &s,
+            odd,
+            &mut Secp256k1HooksWithOracle::new(&mut oracle),
+        )
+        .unwrap();
+        assert_eq!(recovered, expected);
+        assert_eq!(
+            oracle
+                .ops
+                .iter()
+                .filter(|op| **op == FieldHintOp::Secp256k1RecoveryWitness)
+                .count(),
+            1
+        );
+    }
+
+    /// A wrong witness stops the recovery, as a wrong hint does: a valid signature is never
+    /// turned into a failed recovery
+    #[test]
+    fn wrong_witnesses_are_rejected() {
+        use crate::secp256k1::recover_from_bytes_with_hooks;
+
+        fn recovery_panics_with<O: MemoryOracle>(mut oracle: O) -> std::string::String {
+            let (digest, r, s, odd) = sign(&[5; 32], &[9; 32]).unwrap();
+            let failed = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+                let _ = recover_from_bytes_with_hooks(
+                    &digest,
+                    &r,
+                    &s,
+                    odd,
+                    &mut Secp256k1HooksWithOracle::new(&mut oracle),
+                );
+            }));
+            let payload = failed.unwrap_err();
+            payload
+                .downcast_ref::<std::string::String>()
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        let ops = [FieldHintOp::Secp256k1RecoveryWitness];
+        // a coordinate of the key, then the top word of the last coefficient
+        for message in [
+            recovery_panics_with(lying_oracle(&ops)),
+            recovery_panics_with(lying_oracle_last_word(&ops)),
+        ] {
+            assert!(
+                message.contains("the witness of the recovery is wrong"),
+                "{message}"
+            );
+        }
+    }
+
+    /// A signature whose key is the point at infinity has no witness: the recovery is computed,
+    /// and fails
+    #[test]
+    fn a_key_at_infinity_has_no_witness() {
+        use crate::k256::elliptic_curve::sec1::ToEncodedPoint;
+        use crate::secp256k1::recover_from_bytes_with_hooks;
+
+        // R = 7 G, and z / s = 7, so s R - z G is the point at infinity
+        let point = (crate::k256::ProjectivePoint::GENERATOR * crate::k256::Scalar::from(7u64))
+            .to_affine()
+            .to_encoded_point(false);
+        let r: [u8; 32] = (*point.x().unwrap()).into();
+        let odd = point.y().unwrap()[31] & 1 == 1;
+        let s = be_bytes_of(3);
+        let digest = be_bytes_of(21);
+        assert!(
+            recover_from_bytes_with_hooks(&digest, &r, &s, odd, &mut DefaultSecp256k1Hooks)
+                .is_err()
+        );
+        let mut oracle = OpRecording {
+            inner: RecordingHintOracle::new(),
+            ops: Vec::new(),
+        };
+        let recovered = recover_from_bytes_with_hooks(
+            &digest,
+            &r,
+            &s,
+            odd,
+            &mut Secp256k1HooksWithOracle::new(&mut oracle),
+        );
+        assert!(recovered.is_err());
+        assert!(oracle.ops.contains(&FieldHintOp::Secp256k1RecoveryWitness));
+    }
 }

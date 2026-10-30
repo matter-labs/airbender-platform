@@ -199,9 +199,12 @@ mod in_process {
                         _ if last_word => words.len() - 1,
                         FieldHintOp::Bn254PairingResidueWitness
                         | FieldHintOp::Bls12381KzgResidueWitness
-                        | FieldHintOp::Bls12381PairingResidueWitness => 1,
+                        | FieldHintOp::Bls12381PairingResidueWitness
+                        | FieldHintOp::Secp256k1RecoveryWitness => 1,
                         _ => 0,
                     };
+                    // an answer that is only its flag (no recovery witness) has the flag flipped
+                    let index = index.min(words.len() - 1);
                     words[index] ^= 1;
                 }
                 words

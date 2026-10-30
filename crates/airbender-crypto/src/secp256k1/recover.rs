@@ -117,7 +117,13 @@ pub fn recover_from_bytes_with_hooks<H: super::hooks::Secp256k1Hooks>(
 }
 
 /// `(s / r) x - (message / r) g` for the point `x` of the signature: checked against the
-/// hook's witness when there is one (see `recover_witnessed`), computed otherwise
+/// hook's witness when there is one (see `recover_witnessed`), computed otherwise.
+///
+/// # Panics
+///
+/// If the hook's witness does not check out. An honest witness always does, and a hook answers
+/// `None` when it has none (the key is the point at infinity), so a wrong witness is a broken
+/// prover: it must stop the computation, not turn a valid signature into a failed recovery.
 #[inline(always)]
 fn recover_from_point<H: super::hooks::Secp256k1Hooks>(
     x: &Affine,
@@ -129,9 +135,10 @@ fn recover_from_point<H: super::hooks::Secp256k1Hooks>(
 ) -> Result<Affine, Secp256k1Err> {
     if H::FE_DIVIDE_IS_CHEAP {
         if let Some(witness) = hooks.recovery_witness(x, &sigr, &sigs, &message) {
-            return super::recover_witnessed::verify_witnessed(
+            let key = super::recover_witnessed::verify_witnessed(
                 x, &sigr, &sigs, &message, &witness, context, hooks,
             );
+            return Ok(key.expect("the witness of the recovery is wrong"));
         }
     }
     compute_from_point(x, sigr, sigs, message, context, hooks)

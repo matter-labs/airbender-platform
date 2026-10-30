@@ -190,15 +190,17 @@ mod tests {
         recover_from_bytes_with_hooks(digest, r, s, *odd, hooks)
     }
 
-    /// Whether the recovery rejects the witness
+    /// Whether the recovery rejects the witness: it panics, as for a wrong hint
     fn rejects(input: &([u8; 32], [u8; 32], [u8; 32], bool), witness: RecoveryWitness) -> bool {
-        recover(
-            input,
-            &mut WitnessHooks {
-                witness: Some(witness),
-                divisions: 0,
-            },
-        )
+        std::panic::catch_unwind(|| {
+            recover(
+                input,
+                &mut WitnessHooks {
+                    witness: Some(witness),
+                    divisions: 0,
+                },
+            )
+        })
         .is_err()
     }
 

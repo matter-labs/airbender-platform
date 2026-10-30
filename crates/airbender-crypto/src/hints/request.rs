@@ -30,44 +30,49 @@ pub enum FieldHintOp {
     /// non-residue" flag out (the root of the input, or of its negation if it is not a square)
     Secp256k1BaseFieldSqrt = 0,
     /// secp256k1 base field inverse: an element in, its inverse out
-    Secp256k1BaseFieldInverse,
+    Secp256k1BaseFieldInverse = 1,
     /// secp256k1 scalar field inverse: a scalar in, its inverse out
-    Secp256k1ScalarFieldInverse,
+    Secp256k1ScalarFieldInverse = 2,
     /// bn254 base field inverse: an element in, its inverse out
-    Bn254BaseFieldInverse,
+    Bn254BaseFieldInverse = 3,
     /// bn254 `Fq12` inverse: an element in, its inverse out
-    Bn254Fq12Inverse,
+    Bn254Fq12Inverse = 4,
     /// bls12-381 base field square root: as for secp256k1 (`p = 3 mod 4`)
-    Bls12381BaseFieldSqrt,
+    Bls12381BaseFieldSqrt = 5,
     /// bls12-381 base field inverse: an element in, its inverse out
-    Bls12381BaseFieldInverse,
+    Bls12381BaseFieldInverse = 6,
     /// bls12-381 `Fq12` inverse: an element in, its inverse out
-    Bls12381Fq12Inverse,
+    Bls12381Fq12Inverse = 7,
     /// bn254 pairing claim (`hints::PairingClaim`): `(G1Affine, G2Affine)` pairs in; an
     /// identity flag, then `c`, `d = c^-1` (`Fq12`) and `s` (`Fq6`), or else the Miller loop
     /// inverse (`Fq12`)
-    Bn254PairingResidueWitness,
+    Bn254PairingResidueWitness = 8,
     /// Slopes of the affine `G2` chains of a bn254 pairing point: a `G2Affine` in; a flag and 93
     /// `Fq2` subgroup-test slopes, then a flag and 87 line slopes out. A cleared flag marks an
     /// exceptional chain, for which the projective computation is used.
-    Bn254G2PairingSlopes,
+    Bn254G2PairingSlopes = 9,
     /// KZG pairing claim for `e(P1, G2) e(P2, tau G2)`: `[G1Affine; 2]` in; an identity flag, then
     /// `d` (`Fq12`) and `s` (`Fq6`), or else the Miller loop inverse (`Fq12`)
-    Bls12381KzgResidueWitness,
+    Bls12381KzgResidueWitness = 10,
     /// secp256k1 base field division: numerator and denominator (adjacent) in, the quotient out
-    Secp256k1BaseFieldDivision,
+    Secp256k1BaseFieldDivision = 11,
     /// bn254 base field division: numerator and denominator (adjacent) in, the quotient out
-    Bn254BaseFieldDivision,
+    Bn254BaseFieldDivision = 12,
     /// bls12-381 base field division: numerator and denominator (adjacent) in, the quotient out
-    Bls12381BaseFieldDivision,
+    Bls12381BaseFieldDivision = 13,
+    /// The witness of a secp256k1 key recovery (`secp256k1::RecoveryWitness`, checked by the
+    /// recovery): a `hints::RecoveryRequest` in; a flag out (cleared: no witness, nothing more),
+    /// then the coordinates of the key (8 canonical little-endian words each) and the four
+    /// coefficients (`i128`, 4 little-endian words each), the same words on every target
+    Secp256k1RecoveryWitness = 14,
     /// bls12-381 pairing claim: `hints::Bls12381Pair`s in; an identity flag, then `d, s`, or else
     /// the conjugated Miller loop inverse
-    Bls12381PairingResidueWitness,
+    Bls12381PairingResidueWitness = 15,
 }
 
 impl FieldHintOp {
     pub fn parse_u32(value: u32) -> Option<Self> {
-        const ALL: [FieldHintOp; 15] = [
+        const ALL: [FieldHintOp; 16] = [
             FieldHintOp::Secp256k1BaseFieldSqrt,
             FieldHintOp::Secp256k1BaseFieldInverse,
             FieldHintOp::Secp256k1ScalarFieldInverse,
@@ -82,6 +87,7 @@ impl FieldHintOp {
             FieldHintOp::Secp256k1BaseFieldDivision,
             FieldHintOp::Bn254BaseFieldDivision,
             FieldHintOp::Bls12381BaseFieldDivision,
+            FieldHintOp::Secp256k1RecoveryWitness,
             FieldHintOp::Bls12381PairingResidueWitness,
         ];
         ALL.into_iter().find(|op| *op as u32 == value)

@@ -5,10 +5,11 @@
 use super::read_querier_u32_words;
 use crate::hints::{
     guest_layout, read_field_hint_request, FieldHintOp, HintAnswer, HintEncoding, HintTarget,
-    QuerierMemory, Secp256k1Element, FIELD_OPS_ADVISE_QUERY_ID,
+    QuerierMemory, RecoveryRequest, Secp256k1Element, FIELD_OPS_ADVISE_QUERY_ID,
 };
 use crate::secp256k1::field::FieldElement;
 use crate::secp256k1::scalars::Scalar;
+use crate::secp256k1::RecoveryWitness;
 use alloc::vec::Vec;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ff::{Field, One, PrimeField, Zero};
@@ -64,6 +65,10 @@ fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) {
         FieldHintOp::Secp256k1BaseFieldDivision => {
             responses.write(&secp256k1_base_field_division(operand))
         }
+        FieldHintOp::Secp256k1RecoveryWitness => match secp256k1_recovery_witness(operand) {
+            Some(witness) => responses.write(&(true, witness)),
+            None => responses.write(&false),
+        },
         FieldHintOp::Bn254BaseFieldInverse => {
             responses.write(&inverse::<crate::bn254::Fq>(operand))
         }
@@ -330,6 +335,42 @@ pub(crate) fn secp256k1_base_field_division(operand: &Operand) -> FieldElement {
     quotient.invert_in_place();
     quotient.mul_in_place(&numerator);
     quotient
+}
+
+/// The witness of the key recovery the operand (a `RecoveryRequest`) asks for, if there is one:
+/// none for a key at infinity, for which the recovery fails as computed. Without the static
+/// context there is no witness either, and the querier computes the key.
+pub(crate) fn secp256k1_recovery_witness(operand: &Operand) -> Option<RecoveryWitness> {
+    let request: RecoveryRequest = match operand.querier {
+        HintTarget::Native => operand.native_value(),
+        HintTarget::Guest => {
+            assert_eq!(operand.size(), 5 * 32, "the operand is a recovery request");
+            let words = |i: usize| -> [u32; 8] {
+                operand.guest_words(32 * i, 8).try_into().expect("8 words")
+            };
+            RecoveryRequest {
+                r: Scalar::from_guest_operand_words(&words(0)),
+                s: Scalar::from_guest_operand_words(&words(1)),
+                message: Scalar::from_guest_operand_words(&words(2)),
+                x: FieldElement::from_guest_operand_words(&words(3)),
+                y: FieldElement::from_guest_operand_words(&words(4)),
+            }
+        }
+    };
+    #[cfg(feature = "secp256k1-static-context")]
+    {
+        crate::secp256k1::witness_host::recovery_witness(
+            &request.point(),
+            &request.r,
+            &request.s,
+            &request.message,
+        )
+    }
+    #[cfg(not(feature = "secp256k1-static-context"))]
+    {
+        let _ = request;
+        None
+    }
 }
 
 pub(crate) fn secp256k1_scalar_field_inverse(operand: &Operand) -> Scalar {
@@ -816,5 +857,64 @@ mod native_query_tests {
             src_len_u32_words: 8,
         };
         let _ = process(&hint, true, false);
+    }
+
+    /// The request of the witness of the recovery of the signature by `key` of the digest
+    /// `digest` (not reduced), with its `r` below the base field modulus
+    fn recovery_request(key: [u8; 32], digest: [u8; 32]) -> RecoveryRequest {
+        use crate::secp256k1::hooks::DefaultSecp256k1Hooks;
+        use crate::secp256k1::Affine;
+
+        let key = crate::k256::ecdsa::SigningKey::from_bytes((&key).into()).unwrap();
+        let (signature, recovery_id) = key.sign_prehash_recoverable(&digest).unwrap();
+        assert!(!recovery_id.is_x_reduced());
+        let bytes: [u8; 64] = signature.to_bytes().into();
+        let r = <Scalar as Secp256k1Element>::from_be_bytes(bytes[..32].try_into().unwrap());
+        let s = <Scalar as Secp256k1Element>::from_be_bytes(bytes[32..].try_into().unwrap());
+        let x = FieldElement::from_bytes(bytes[..32].try_into().unwrap()).unwrap();
+        let point =
+            Affine::lift_x_with_hooks(&x, recovery_id.is_y_odd(), &mut DefaultSecp256k1Hooks)
+                .unwrap();
+        RecoveryRequest::new(
+            &point,
+            &r.unwrap(),
+            &s.unwrap(),
+            &Scalar::from_be_bytes_reduced(&digest),
+        )
+    }
+
+    #[test]
+    fn the_recovery_witness_is_the_same_words_for_every_target() {
+        let operand = recovery_request([5; 32], [9; 32]);
+        // the guest's request: the five elements as their Montgomery words, back to back
+        let mut guest = Vec::new();
+        for words in [
+            operand.r.to_montgomery_words(),
+            operand.s.to_montgomery_words(),
+            operand.message.to_montgomery_words(),
+            operand.x.to_montgomery_words(),
+            operand.y.to_montgomery_words(),
+        ] {
+            guest.extend(words);
+        }
+        assert_same_guest_answers(FieldHintOp::Secp256k1RecoveryWitness, &operand, &guest);
+
+        let (native, guest) = process(
+            &request(FieldHintOp::Secp256k1RecoveryWitness, &operand),
+            true,
+            true,
+        );
+        let witness = crate::secp256k1::witness_host::recovery_witness(
+            &operand.point(),
+            &operand.r,
+            &operand.s,
+            &operand.message,
+        )
+        .unwrap();
+        let mut expected = Vec::new();
+        (true, witness).write(HintTarget::Guest, &mut expected);
+        assert_eq!(expected.len(), 1 + 8 + 8 + 16);
+        assert_eq!(native, expected);
+        assert_eq!(guest, expected);
     }
 }

@@ -52,7 +52,7 @@ pub use self::request::{
     send_field_hint_query, FieldHintOp, FieldOpsHint, FieldOpsHint64, GenericFieldOpsHint,
     QuerierMemory,
 };
-pub use self::secp256k1::{Secp256k1Element, Secp256k1HooksWithOracle};
+pub use self::secp256k1::{RecoveryRequest, Secp256k1Element, Secp256k1HooksWithOracle};
 
 pub use airbender_oracle::{MemoryOracle, OracleError};
 
@@ -92,13 +92,14 @@ mod tests {
             (FieldHintOp::Secp256k1BaseFieldDivision, 11),
             (FieldHintOp::Bn254BaseFieldDivision, 12),
             (FieldHintOp::Bls12381BaseFieldDivision, 13),
-            (FieldHintOp::Bls12381PairingResidueWitness, 14),
+            (FieldHintOp::Secp256k1RecoveryWitness, 14),
+            (FieldHintOp::Bls12381PairingResidueWitness, 15),
         ];
         for (op, number) in ops {
             assert_eq!(op as u32, number, "{op:?}");
             assert_eq!(FieldHintOp::parse_u32(number), Some(op));
         }
-        assert_eq!(FieldHintOp::parse_u32(15), None);
+        assert_eq!(FieldHintOp::parse_u32(16), None);
     }
 
     #[test]
