@@ -10,13 +10,13 @@ pub(crate) mod u256;
 #[cfg(all(test, target_pointer_width = "64"))]
 mod test_vectors;
 
-use crate::hints::{read_querier_word, HintError, HintOracle, QuerierMemory};
+use crate::hints::{read_querier_word, HintError, MemoryOracle, QuerierMemory};
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 
 /// `base^exp mod modulus` for big-endian operands: the advice path with an oracle, the software
 /// path without one.
-pub fn modexp<O: HintOracle, A: Allocator + Clone>(
+pub fn modexp<O: MemoryOracle, A: Allocator + Clone>(
     base: &[u8],
     exp: &[u8],
     modulus: &[u8],

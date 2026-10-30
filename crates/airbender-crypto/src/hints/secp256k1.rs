@@ -3,11 +3,11 @@
 #[cfg(any(feature = "alloc", test))]
 use super::answer::HintTarget;
 use super::answer::{read_hint_answer, HintAnswer};
-use super::oracle::{HintError, HintOracle};
 use super::request::{send_field_hint_query, FieldHintOp};
 use crate::secp256k1::field::FieldElement;
 use crate::secp256k1::scalars::Scalar;
 use crate::{bigint_op_delegation_raw, BigIntOps};
+use airbender_oracle::{MemoryOracle, OracleError};
 #[cfg(any(feature = "alloc", test))]
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
@@ -142,7 +142,7 @@ pub trait Secp256k1Element: Copy {
     /// # Safety
     ///
     /// `words` must be valid for reads and writes, and 32-byte aligned: a delegation operand.
-    unsafe fn validate(words: *mut [u32; 8]) -> Result<(), HintError>;
+    unsafe fn validate<E: OracleError>(words: *mut [u32; 8]) -> Result<(), E>;
 }
 
 /// A 32-byte aligned operand of the bigint delegation. As an immutable static it lands in
@@ -161,10 +161,10 @@ static SCALAR_MODULUS: DelegationOperand = DelegationOperand(<Scalar as Secp256k
 ///
 /// `words` must be valid for reads and writes, and 32-byte aligned.
 #[inline(always)]
-unsafe fn check_below_with_delegation(
+unsafe fn check_below_with_delegation<E: OracleError>(
     words: *mut [u32; 8],
     modulus: &'static DelegationOperand,
-) -> Result<(), HintError> {
+) -> Result<(), E> {
     let modulus = core::ptr::from_ref(modulus).cast::<()>();
     // SAFETY: both operands are distinct 32-byte aligned 32-byte values in RAM, and the delegation
     // only writes the first one
@@ -174,7 +174,7 @@ unsafe fn check_below_with_delegation(
     if borrow {
         Ok(())
     } else {
-        Err(HintError("the secp256k1 hint is not canonical"))
+        Err(E::new("the secp256k1 hint is not canonical"))
     }
 }
 
@@ -205,7 +205,7 @@ impl Secp256k1Element for FieldElement {
         self
     }
 
-    unsafe fn validate(words: *mut [u32; 8]) -> Result<(), HintError> {
+    unsafe fn validate<E: OracleError>(words: *mut [u32; 8]) -> Result<(), E> {
         // SAFETY: guaranteed by the caller
         unsafe { check_below_with_delegation(words, &FIELD_MODULUS) }
     }
@@ -237,7 +237,7 @@ impl Secp256k1Element for Scalar {
         self
     }
 
-    unsafe fn validate(words: *mut [u32; 8]) -> Result<(), HintError> {
+    unsafe fn validate<E: OracleError>(words: *mut [u32; 8]) -> Result<(), E> {
         // SAFETY: guaranteed by the caller
         unsafe { check_below_with_delegation(words, &SCALAR_MODULUS) }
     }
@@ -253,10 +253,10 @@ fn scalar_of_be_bytes(bytes: &[u8; 32]) -> Scalar {
 
 /// Receives an element in this target's representation (see [`Secp256k1Element`]), validated.
 #[inline(always)]
-fn read_secp256k1_element<'a, T: Secp256k1Element, O: HintOracle>(
+fn read_secp256k1_element<'a, T: Secp256k1Element, O: MemoryOracle>(
     oracle: &mut O,
     dst: &'a mut MaybeUninit<T>,
-) -> Result<&'a mut T, HintError> {
+) -> Result<&'a mut T, O::Error> {
     #[cfg(target_arch = "riscv32")]
     {
         // `validate` relies on the element being its Montgomery words, 32-byte aligned
@@ -275,7 +275,7 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: HintOracle>(
         // SAFETY: the buffer holds 8 words
         unsafe { oracle.write_words(words.as_mut_ptr(), 8)? };
         let element = T::from_canonical_words(&words)
-            .ok_or(HintError("the secp256k1 hint is not canonical"))?;
+            .ok_or(O::Error::new("the secp256k1 hint is not canonical"))?;
         Ok(dst.write(element))
     }
 }
@@ -284,10 +284,10 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: HintOracle>(
 /// words are taken unchecked: the delegated representation accepts any 256-bit representative and
 /// the caller's check is modulo `p`, so a representative above `p` is the same element.
 #[inline(always)]
-fn read_secp256k1_quotient<'a, O: HintOracle>(
+fn read_secp256k1_quotient<'a, O: MemoryOracle>(
     oracle: &mut O,
     dst: &'a mut MaybeUninit<FieldElement>,
-) -> Result<&'a mut FieldElement, HintError> {
+) -> Result<&'a mut FieldElement, O::Error> {
     #[cfg(target_arch = "riscv32")]
     {
         const {
@@ -312,10 +312,10 @@ macro_rules! impl_hint_answer_for_secp256k1_element {
     ($($t:ty),+) => {$(
         impl HintAnswer for $t {
             #[inline(always)]
-            fn read<'a, O: HintOracle>(
+            fn read<'a, O: MemoryOracle>(
                 oracle: &mut O,
                 dst: &'a mut MaybeUninit<Self>,
-            ) -> Result<&'a mut Self, HintError> {
+            ) -> Result<&'a mut Self, O::Error> {
                 read_secp256k1_element(oracle, dst)
             }
 
@@ -333,17 +333,17 @@ macro_rules! impl_hint_answer_for_secp256k1_element {
 impl_hint_answer_for_secp256k1_element!(FieldElement, Scalar);
 
 /// Secp256k1 hooks implementation that uses an oracle for field operations.
-pub struct Secp256k1HooksWithOracle<'a, O: HintOracle> {
+pub struct Secp256k1HooksWithOracle<'a, O: MemoryOracle> {
     oracle: &'a mut O,
 }
 
-impl<'a, O: HintOracle> Secp256k1HooksWithOracle<'a, O> {
+impl<'a, O: MemoryOracle> Secp256k1HooksWithOracle<'a, O> {
     pub fn new(oracle: &'a mut O) -> Self {
         Self { oracle }
     }
 }
 
-impl<'a, O: HintOracle> crate::secp256k1::hooks::Secp256k1Hooks
+impl<'a, O: MemoryOracle> crate::secp256k1::hooks::Secp256k1Hooks
     for Secp256k1HooksWithOracle<'a, O>
 {
     /// A hinted inversion costs one multiplication, so the scalar multiplication makes its table
@@ -443,7 +443,7 @@ impl<'a, O: HintOracle> crate::secp256k1::hooks::Secp256k1Hooks
     }
 }
 
-impl<'a, O: HintOracle> Secp256k1HooksWithOracle<'a, O> {
+impl<'a, O: MemoryOracle> Secp256k1HooksWithOracle<'a, O> {
     /// Asks for the hint `op` on `x` and receives the answer element into `x`, then the rest of
     /// the answer with `rest`. The oracle reads the operand before the answer overwrites it.
     ///
@@ -455,7 +455,7 @@ impl<'a, O: HintOracle> Secp256k1HooksWithOracle<'a, O> {
         &mut self,
         op: FieldHintOp,
         x: &mut T,
-        rest: impl FnOnce(&mut O) -> Result<R, HintError>,
+        rest: impl FnOnce(&mut O) -> Result<R, O::Error>,
     ) -> R {
         // SAFETY: `x` is a value of the operand type of `op` (the caller's obligation)
         unsafe { send_field_hint_query(self.oracle, op, &*x) }
@@ -477,6 +477,7 @@ mod tests {
     use super::*;
     use crate::hints::host::RecordingHintOracle;
     use crate::hints::test_support::{lying_oracle, lying_oracle_last_word, TapeOracle};
+    use crate::hints::HintError;
     use crate::secp256k1::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
     use proptest::{prop_assert_eq, proptest};
 
@@ -536,7 +537,7 @@ mod tests {
     fn below<T: Secp256k1Element>(words: [u32; 8]) -> bool {
         let mut operand = DelegationOperand(words);
         // SAFETY: the words are a 32-byte aligned local
-        let valid = unsafe { T::validate(&raw mut operand.0) }.is_ok();
+        let valid = unsafe { T::validate::<HintError>(&raw mut operand.0) }.is_ok();
         assert_eq!(operand.0, words);
         valid
     }
@@ -683,4 +684,5 @@ mod tests {
         let mut oracle = TapeOracle::new(<FieldElement as Secp256k1Element>::MODULUS);
         Secp256k1HooksWithOracle::new(&mut oracle).fe_invert_and_assign(&mut seven());
     }
+
 }

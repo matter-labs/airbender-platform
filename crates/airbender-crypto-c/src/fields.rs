@@ -8,7 +8,7 @@ use crypto::secp256k1::{field::FieldElement, scalars::Scalar};
 #[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
 use crypto::{
     affine_glv::Divider,
-    hints::{self, HintOracle, Secp256k1HooksWithOracle},
+    hints::{self, MemoryOracle, Secp256k1HooksWithOracle},
 };
 use crypto::{bls12_381 as bls, bn254 as bn};
 
@@ -29,7 +29,7 @@ fn quotient<F: Copy, D: Divider<F>>(mut divider: D, a: F, b: F) -> F {
 /// The inverse in bn254 `Fq2 = Fq[u] / (u² + 1)` from one checked inverse hint of the norm
 /// `c0² + c1²`, which is non-zero for a non-zero element as -1 is not a square in Fq.
 #[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
-fn bn254_fq2_inverse<O: HintOracle>(oracle: &mut O, value: &bn::Fq2) -> Option<bn::Fq2> {
+fn bn254_fq2_inverse<O: MemoryOracle>(oracle: &mut O, value: &bn::Fq2) -> Option<bn::Fq2> {
     let norm = value.c0.square() + value.c1.square();
     let inverse = hints::bn254_fq_inverse(oracle, &norm)?;
     Some(bn::Fq2::new(value.c0 * inverse, -(value.c1 * inverse)))
@@ -227,7 +227,9 @@ mod tests {
     /// passes the hook's check as well
     struct OtherRoot(RecordingHintOracle);
 
-    impl HintOracle for OtherRoot {
+    impl MemoryOracle for OtherRoot {
+        type Error = HintError;
+
         unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
             // SAFETY: the caller's contract
             unsafe { self.0.send_query(query_id, input_word) }

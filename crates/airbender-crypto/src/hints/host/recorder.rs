@@ -1,7 +1,8 @@
 //! Native recording of the hint answers the RISC-V guest reads (the hint part of the prover input).
 
 use super::{answer_query, NativeQuerierMemory};
-use crate::hints::{HintError, HintOracle};
+use crate::hints::HintError;
+use airbender_oracle::MemoryOracle;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
@@ -18,7 +19,7 @@ use alloc::vec::Vec;
 /// its emulated delegation keeps one `static mut` scratch space for all threads.
 ///
 /// Trust boundary: it dereferences each query's request and operands, per the `unsafe` contract
-/// of [`HintOracle::send_query`]; its answers are trusted by no one, as the hinted operations
+/// of [`MemoryOracle::send_query`]; its answers are trusted by no one, as the hinted operations
 /// check them.
 #[derive(Debug, Default)]
 pub struct RecordingHintOracle {
@@ -49,7 +50,9 @@ impl RecordingHintOracle {
 }
 
 /// The querier runs in this process.
-impl HintOracle for RecordingHintOracle {
+impl MemoryOracle for RecordingHintOracle {
+    type Error = HintError;
+
     unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
         if !self.response.is_empty() {
             self.response.clear();
@@ -124,7 +127,7 @@ pub fn record_hints<R>(f: impl FnOnce(&mut RecordingHintOracle) -> R) -> (R, Vec
 mod tests {
     use super::*;
     use crate::hints::{send_field_hint_query, FieldHintOp, Secp256k1Element};
-    use crate::hints::{HintError, HintOracle, Secp256k1HooksWithOracle};
+    use crate::hints::{HintError, MemoryOracle, Secp256k1HooksWithOracle};
     use crate::secp256k1::field::FieldElement;
     use crate::secp256k1::hooks::Secp256k1Hooks;
 

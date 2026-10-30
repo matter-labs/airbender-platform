@@ -15,6 +15,7 @@ crate-type = ["rlib"]
 airbender-crypto = { path = "../airbender-crypto", features = ["alloc"] }
 
 [target.'cfg(target_arch = "riscv32")'.dependencies]
+airbender-oracle = { path = "../airbender-oracle" }
 airbender-rt = { path = "../airbender-rt", optional = true, default-features = false, features = ["allocator-talc", "external-startup"] }
 
 [features]

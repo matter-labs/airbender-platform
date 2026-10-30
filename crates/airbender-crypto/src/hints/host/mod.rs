@@ -25,7 +25,7 @@ pub struct NativeQuerierMemory(());
 impl NativeQuerierMemory {
     /// # Safety
     ///
-    /// Only for reading the inputs of queries sent through [`HintOracle`](super::HintOracle) by
+    /// Only for reading the inputs of queries sent through [`MemoryOracle`](super::MemoryOracle) by
     /// this process, while they are being sent.
     pub const unsafe fn new() -> Self {
         Self(())
@@ -76,7 +76,7 @@ pub fn read_querier_u32_words<M: QuerierMemory + ?Sized>(
 ///
 /// If `native` is `Some`, `memory` must be this process's memory and `input_word` the address of
 /// a live request whose operands are live values of its op's types, for the duration of the call
-/// (the contract of [`HintOracle::send_query`](super::HintOracle::send_query)): they are read in
+/// (the contract of [`MemoryOracle::send_query`](super::MemoryOracle::send_query)): they are read in
 /// place as those types. A guest querier is read through `memory` only.
 pub unsafe fn answer_query(
     query_id: u32,

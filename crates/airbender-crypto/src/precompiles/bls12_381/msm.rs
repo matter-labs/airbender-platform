@@ -136,7 +136,7 @@ fn msm<G: CurveGroup, A: core::alloc::Allocator + Clone>(
 /// With an oracle, the subgroup checks take checked hinted divisions; one or two pairs use a
 /// joint affine double-and-add with hinted divisions, more the projective `msm` and a hinted
 /// inverse. A wrong hint panics. Points, scalars and buckets go into vectors of `allocator`.
-pub fn bls12_381_g1_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
+pub fn bls12_381_g1_msm<O: MemoryOracle, A: core::alloc::Allocator + Clone>(
     input: &[[u8; G1_MSM_PAIR_LEN]],
     allocator: A,
     mut oracle: Option<&mut O>,
@@ -194,7 +194,7 @@ pub fn bls12_381_g1_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
 /// The G2 MSM of `input`, as [`bls12_381_g1_msm`], except that an empty input gives the point at
 /// infinity without hints, and with an oracle any number of pairs takes the projective `msm` and
 /// a hinted inverse.
-pub fn bls12_381_g2_msm<O: HintOracle, A: core::alloc::Allocator + Clone>(
+pub fn bls12_381_g2_msm<O: MemoryOracle, A: core::alloc::Allocator + Clone>(
     input: &[[u8; G2_MSM_PAIR_LEN]],
     allocator: A,
     mut oracle: Option<&mut O>,

@@ -4,7 +4,9 @@
 use super::answer::HintAnswer;
 #[cfg(any(feature = "alloc", test))]
 use super::answer::HintTarget;
-use super::oracle::{HintError, HintOracle};
+use airbender_oracle::MemoryOracle;
+#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+use airbender_oracle::OracleError;
 #[cfg(any(feature = "alloc", test))]
 use alloc::vec::Vec;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
@@ -120,11 +122,11 @@ fn is_below(value: &[u64], modulus: &[u64]) -> bool {
 /// `limbs` must point to the limbs of an `F`, all of its bytes, valid for writes.
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 #[inline(always)]
-unsafe fn read_prime_field<F: PrimeField, O: HintOracle>(
+unsafe fn read_prime_field<F: PrimeField, O: MemoryOracle>(
     oracle: &mut O,
     limbs: *mut u64,
     wire_limbs: usize,
-) -> Result<(), HintError> {
+) -> Result<(), O::Error> {
     let num_limbs = <F::BigInt as BigInteger>::NUM_LIMBS;
     debug_assert!(wire_limbs <= num_limbs);
     // SAFETY: the limbs are aligned for `u32`, and `num_limbs` long
@@ -135,7 +137,7 @@ unsafe fn read_prime_field<F: PrimeField, O: HintOracle>(
     // SAFETY: just initialized
     let value = unsafe { core::slice::from_raw_parts(limbs, num_limbs) };
     if !is_below(value, F::MODULUS.as_ref()) {
-        return Err(HintError("the hint is not a canonical field element"));
+        return Err(O::Error::new("the hint is not a canonical field element"));
     }
     Ok(())
 }
@@ -193,10 +195,10 @@ macro_rules! prime_field_answer {
 
         impl HintAnswer for $field {
             #[inline(always)]
-            fn read<'a, O: HintOracle>(
+            fn read<'a, O: MemoryOracle>(
                 oracle: &mut O,
                 dst: &'a mut MaybeUninit<Self>,
-            ) -> Result<&'a mut Self, HintError> {
+            ) -> Result<&'a mut Self, O::Error> {
                 let this = dst.as_mut_ptr();
                 // SAFETY: the limbs (the other field is zero-sized) are all of `dst`
                 unsafe {
@@ -233,10 +235,10 @@ where
     P::BaseField: HintAnswer,
 {
     #[inline(always)]
-    fn read<'a, O: HintOracle>(
+    fn read<'a, O: MemoryOracle>(
         oracle: &mut O,
         dst: &'a mut MaybeUninit<Self>,
-    ) -> Result<&'a mut Self, HintError> {
+    ) -> Result<&'a mut Self, O::Error> {
         let this = dst.as_mut_ptr();
         // SAFETY: the components are disjoint places inside `dst`, which they initialize
         unsafe {
@@ -259,10 +261,10 @@ where
     P::BaseField: HintAnswer,
 {
     #[inline(always)]
-    fn read<'a, O: HintOracle>(
+    fn read<'a, O: MemoryOracle>(
         oracle: &mut O,
         dst: &'a mut MaybeUninit<Self>,
-    ) -> Result<&'a mut Self, HintError> {
+    ) -> Result<&'a mut Self, O::Error> {
         let this = dst.as_mut_ptr();
         // SAFETY: as for the quadratic extension
         unsafe {

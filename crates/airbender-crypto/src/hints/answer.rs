@@ -1,6 +1,6 @@
 //! The answers of field hints: how the querier receives them, and how the oracle writes them.
 
-use super::oracle::{HintError, HintOracle};
+use airbender_oracle::MemoryOracle;
 #[cfg(any(feature = "alloc", test))]
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
@@ -23,10 +23,10 @@ pub enum HintTarget {
 /// implementation compiles with or without `alloc`, not both.
 pub trait HintAnswer: Sized {
     /// Receives the value from the response to the current hint query into `dst`, and validates it.
-    fn read<'a, O: HintOracle>(
+    fn read<'a, O: MemoryOracle>(
         oracle: &mut O,
         dst: &'a mut MaybeUninit<Self>,
-    ) -> Result<&'a mut Self, HintError>;
+    ) -> Result<&'a mut Self, O::Error>;
 
     /// Oracle side: appends the words of the value, as [`read`](Self::read) receives them on
     /// `target`.
@@ -37,10 +37,10 @@ pub trait HintAnswer: Sized {
 /// A flag: one word, any non-zero word is `true`.
 impl HintAnswer for bool {
     #[inline(always)]
-    fn read<'a, O: HintOracle>(
+    fn read<'a, O: MemoryOracle>(
         oracle: &mut O,
         dst: &'a mut MaybeUninit<Self>,
-    ) -> Result<&'a mut Self, HintError> {
+    ) -> Result<&'a mut Self, O::Error> {
         Ok(dst.write(oracle.read_word()? != 0))
     }
 
@@ -53,10 +53,10 @@ impl HintAnswer for bool {
 /// The elements in turn.
 impl<T: HintAnswer, const N: usize> HintAnswer for [T; N] {
     #[inline(always)]
-    fn read<'a, O: HintOracle>(
+    fn read<'a, O: MemoryOracle>(
         oracle: &mut O,
         dst: &'a mut MaybeUninit<Self>,
-    ) -> Result<&'a mut Self, HintError> {
+    ) -> Result<&'a mut Self, O::Error> {
         let first = dst.as_mut_ptr().cast::<MaybeUninit<T>>();
         for i in 0..N {
             // SAFETY: element `i` is inside `dst`, and `MaybeUninit<T>` has the layout of `T`
@@ -79,10 +79,10 @@ macro_rules! impl_hint_answer_for_tuple {
         /// The elements in turn.
         impl<$($element: HintAnswer),+> HintAnswer for ($($element,)+) {
             #[inline(always)]
-            fn read<'a, O: HintOracle>(
+            fn read<'a, O: MemoryOracle>(
                 oracle: &mut O,
                 dst: &'a mut MaybeUninit<Self>,
-            ) -> Result<&'a mut Self, HintError> {
+            ) -> Result<&'a mut Self, O::Error> {
                 let this = dst.as_mut_ptr();
                 // SAFETY: the elements are disjoint places inside `dst`
                 unsafe {
@@ -111,7 +111,7 @@ impl_hint_answer_for_tuple!(A 0, B 1, C 2, D 3);
 
 /// Receives a value of the answer to the current hint query.
 #[inline(always)]
-pub fn read_hint_answer<O: HintOracle, R: HintAnswer>(oracle: &mut O) -> Result<R, HintError> {
+pub fn read_hint_answer<O: MemoryOracle, R: HintAnswer>(oracle: &mut O) -> Result<R, O::Error> {
     let mut value = MaybeUninit::uninit();
     R::read(oracle, &mut value)?;
     // SAFETY: initialized by `read`

@@ -10,7 +10,7 @@ compile_error!("host-side modexp advice handling requires a 64-bit little-endian
 
 use super::digit::*;
 use super::exponent::{exponentiate, ModMul};
-use crate::hints::{HintOracle, MODEXP_ADVICE_QUERY_ID};
+use crate::hints::{MemoryOracle, MODEXP_ADVICE_QUERY_ID};
 use crate::modexp::strip_leading_zeroes;
 use crate::modexp::u256::U256 as HintU256;
 use crate::modexp::ModExpAdviceParamsGeneric;
@@ -681,7 +681,7 @@ pub(crate) mod naive_advisor {
         }
     }
 }
-pub(crate) struct OracleAdvisor<'a, O: HintOracle> {
+pub(crate) struct OracleAdvisor<'a, O: MemoryOracle> {
     pub(crate) inner: &'a mut O,
 }
 
@@ -690,7 +690,7 @@ const BIGINT_DIGIT_WORDS: usize = U256::BYTES / core::mem::size_of::<u32>();
 
 /// Receives the next `num_words` words of the hint straight into the digits of `dst`, whole digits
 /// at a time (the last digit zero-padded)
-fn write_bigint<O: HintOracle>(
+fn write_bigint<O: MemoryOracle>(
     oracle: &mut O,
     num_words: usize,
     dst: &mut BigintRepr<impl Allocator + Clone>,
@@ -712,7 +712,7 @@ fn write_bigint<O: HintOracle>(
     }
 }
 
-impl<'a, O: HintOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
+impl<'a, O: MemoryOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
     fn get_reduction_op_advice<A: Allocator + Clone>(
         &mut self,
         a: &BigintRepr<A>,

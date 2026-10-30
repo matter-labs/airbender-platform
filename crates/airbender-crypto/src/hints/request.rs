@@ -1,8 +1,9 @@
 //! The request of a field hint query, how the oracle reads it, and the query itself.
 
 use super::answer::HintAnswer;
-use super::oracle::{HintError, HintOracle};
+use super::oracle::HintError;
 use super::FIELD_OPS_ADVISE_QUERY_ID;
+use airbender_oracle::MemoryOracle;
 use core::mem::{offset_of, MaybeUninit};
 
 /// The request of a field hint query: the op, and the address and length (in `u32` words) of
@@ -152,7 +153,7 @@ pub fn read_field_hint_request<M: QuerierMemory + ?Sized>(
 }
 
 /// Sends the request for the hint `op` on `operand`. The caller then reads the answer with
-/// [`HintAnswer::read`] and ends the query with [`HintOracle::finish_query`].
+/// [`HintAnswer::read`] and ends the query with [`MemoryOracle::finish_query`].
 ///
 /// # Safety
 ///
@@ -160,11 +161,11 @@ pub fn read_field_hint_request<M: QuerierMemory + ?Sized>(
 /// `[FieldElement; 2]` for [`FieldHintOp::Secp256k1BaseFieldDivision`]: an oracle in this process
 /// reads it as one.
 #[inline(always)]
-pub unsafe fn send_field_hint_query<O: HintOracle, T: ?Sized>(
+pub unsafe fn send_field_hint_query<O: MemoryOracle, T: ?Sized>(
     oracle: &mut O,
     op: FieldHintOp,
     operand: &T,
-) -> Result<(), HintError> {
+) -> Result<(), O::Error> {
     let size = core::mem::size_of_val(operand);
     debug_assert!(size.is_multiple_of(4) && core::mem::align_of_val(operand) >= 4);
     // the oracle reads the request and the operand by address
@@ -192,7 +193,7 @@ pub unsafe fn send_field_hint_query<O: HintOracle, T: ?Sized>(
 ///
 /// As for [`send_field_hint_query`]: `operand` must be a value of the operand type of `op`.
 #[inline(always)]
-pub unsafe fn query_field_hint_into<'a, O: HintOracle, R: HintAnswer, T: ?Sized>(
+pub unsafe fn query_field_hint_into<'a, O: MemoryOracle, R: HintAnswer, T: ?Sized>(
     oracle: &mut O,
     op: FieldHintOp,
     operand: &T,
@@ -213,7 +214,7 @@ pub unsafe fn query_field_hint_into<'a, O: HintOracle, R: HintAnswer, T: ?Sized>
 ///
 /// As for [`send_field_hint_query`]: `operand` must be a value of the operand type of `op`.
 #[inline(always)]
-pub unsafe fn query_field_hint<O: HintOracle, R: HintAnswer, T: ?Sized>(
+pub unsafe fn query_field_hint<O: MemoryOracle, R: HintAnswer, T: ?Sized>(
     oracle: &mut O,
     op: FieldHintOp,
     operand: &T,

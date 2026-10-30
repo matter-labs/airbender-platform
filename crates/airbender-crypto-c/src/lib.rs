@@ -34,7 +34,7 @@ use crypto::ark_ec::{
     AffineRepr,
 };
 use crypto::ark_ff::{AdditiveGroup, Field, PrimeField};
-use crypto::hints::{HintError, HintOracle};
+use crypto::hints::{HintError, MemoryOracle};
 
 /// `$hinted` with the oracle of the call (`$oracle: &mut ActiveOracle`), else `$plain`. The hinted
 /// operations exist natively and on RV32 with `delegation`. At most once per export.
@@ -60,7 +60,7 @@ mod signatures;
 pub(crate) enum ActiveOracle<'a> {
     #[cfg(target_arch = "riscv32")]
     Csr(
-        crypto::hints::CsrHintOracle,
+        airbender_oracle::CsrOracle<HintError>,
         core::marker::PhantomData<&'a mut ()>,
     ),
     #[cfg(not(target_arch = "riscv32"))]
@@ -68,7 +68,9 @@ pub(crate) enum ActiveOracle<'a> {
 }
 
 // Forwarding only: queries come from airbender-crypto's hinted operations.
-impl HintOracle for ActiveOracle<'_> {
+impl MemoryOracle for ActiveOracle<'_> {
+    type Error = HintError;
+
     #[inline(always)]
     unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
         match self {
@@ -118,7 +120,10 @@ impl HintOracle for ActiveOracle<'_> {
 #[cfg(target_arch = "riscv32")]
 #[inline(always)]
 pub(crate) fn with_active_oracle<R>(f: impl FnOnce(Option<&mut ActiveOracle<'_>>) -> R) -> R {
-    let mut oracle = ActiveOracle::Csr(crypto::hints::CsrHintOracle, core::marker::PhantomData);
+    let mut oracle = ActiveOracle::Csr(
+        airbender_oracle::CsrOracle::new(airbender_oracle::CsrChannel),
+        core::marker::PhantomData,
+    );
     f(cfg!(feature = "csr-oracle").then_some(&mut oracle))
 }
 

@@ -8,13 +8,13 @@ mod exponent;
 mod single_digit;
 
 use self::bigint::BigintRepr;
-use crate::hints::HintOracle;
 use crate::modexp::strip_leading_zeroes;
+use airbender_oracle::MemoryOracle;
 
 /// `base^exp mod modulus` for big-endian operands, with hints from `oracle`. Every hint is checked
 /// and a wrong one panics. A zero result (also for a modulus of 0 or 1) has no bytes;
 /// [`write_modexp_output`](super::write_modexp_output) pads it.
-pub fn modexp<O: HintOracle, A: Allocator + Clone>(
+pub fn modexp<O: MemoryOracle, A: Allocator + Clone>(
     base: &[u8],
     exp: &[u8],
     modulus: &[u8],

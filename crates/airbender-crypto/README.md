@@ -40,16 +40,18 @@ equation. A wrong answer fails the computation or is ignored (unused bn254 G2 sl
 never changes a result.
 
 Every endpoint (the `precompiles` functions and `modexp::modexp`) takes `Option<&mut O>` with
-`O: HintOracle`. `Some(oracle)` runs the hinted path, which asks the same queries in the same order
-as zksync-os; `None::<&mut NoHints>` runs the plain path. Both give the same result (for `modexp`,
+`O: MemoryOracle` (from `airbender-oracle`, whose `Error` type is the caller's). `Some(oracle)` runs
+the hinted path, which asks the same queries in the same order as zksync-os; `None::<&mut NoHints>`
+runs the plain path. Both give the same result (for `modexp`,
 after `modexp::write_modexp_output` pads it). On `riscv32` the hints need `bigint_ops`; without it
 the endpoints panic when given an oracle. `precompiles` covers ecrecover, bn254 (EIP-196/197),
 BLS12-381 (EIP-2537) and KZG point evaluation (EIP-4844); `airbender-crypto-c` exposes them to C.
 
 A query is two words written to the non-determinism CSR: the query ID, then the address of a
-request in guest memory. The answer is raw `u32` words, one CSR read each, with no framing. Field
-hints use query ID `0x4005_0011`, and their elements are the raw Montgomery limbs of the guest's
-delegated fields; the ModExp queries are described in `src/modexp/README.md`.
+request in guest memory. The answer is raw `u32` words, one CSR read each, with no framing. The
+query IDs are allocated in `airbender_oracle::query_ids`. Field hints use `0x4005_0011`, and their
+elements are the raw Montgomery limbs of the guest's delegated fields; the ModExp queries are
+described in `src/modexp/README.md`.
 
 Functions that take a divider or a hinted inverse (`*_with_divider`, `into_affine_with_inverse`,
 `hinted_ops::to_affine_with_inverse`) assume their points are on the curve. The byte-level

@@ -1,6 +1,7 @@
 //! Test doubles of the oracle and of the querier's memory.
 
-use super::oracle::{HintError, HintOracle};
+use super::oracle::HintError;
+use airbender_oracle::MemoryOracle;
 use std::collections::VecDeque;
 use std::vec::Vec;
 
@@ -21,7 +22,9 @@ impl TapeOracle {
     }
 }
 
-impl HintOracle for TapeOracle {
+impl MemoryOracle for TapeOracle {
+    type Error = HintError;
+
     unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
         self.queries.push((query_id, input_word));
         Ok(())
@@ -54,7 +57,7 @@ pub(crate) use self::in_process::{
 mod in_process {
     use crate::hints::host::{answer_query, not_identity_claim, NativeQuerierMemory};
     use crate::hints::{
-        read_field_hint_request, FieldHintOp, HintError, HintOracle, QuerierMemory,
+        read_field_hint_request, FieldHintOp, HintError, MemoryOracle, QuerierMemory,
     };
     use std::collections::{BTreeMap, VecDeque};
     use std::vec::Vec;
@@ -75,7 +78,11 @@ mod in_process {
         }
     }
 
-    impl<H: FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> HintOracle for InProcessMemoryOracle<H> {
+    impl<H: FnMut(u32, usize, &dyn QuerierMemory) -> Vec<u32>> MemoryOracle
+        for InProcessMemoryOracle<H>
+    {
+        type Error = HintError;
+
         /// The handler runs during the query, with the memory of this process, which holds a live
         /// request (the contract of `send_query`): it may answer with `answer_query`.
         unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {

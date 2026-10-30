@@ -9,8 +9,8 @@ pub use self::bls12_381_extension::{
 };
 
 use super::answer::HintAnswer;
-use super::oracle::HintOracle;
 use super::request::{query_field_hint, query_field_hint_into, FieldHintOp};
+use airbender_oracle::MemoryOracle;
 use ark_ff::{Field, PrimeField, Zero};
 use core::mem::MaybeUninit;
 
@@ -19,7 +19,7 @@ use core::mem::MaybeUninit;
 /// # Safety
 ///
 /// `F` must be the operand type of `op` (see `send_field_hint_query`).
-unsafe fn inverse_from_hint<O: HintOracle, F: Field + HintAnswer>(
+unsafe fn inverse_from_hint<O: MemoryOracle, F: Field + HintAnswer>(
     oracle: &mut O,
     op: FieldHintOp,
     a: &F,
@@ -36,7 +36,7 @@ unsafe fn inverse_from_hint<O: HintOracle, F: Field + HintAnswer>(
 }
 
 /// `a^-1` in the bn254 base field, `None` for a zero `a`
-pub fn bn254_fq_inverse<O: HintOracle>(
+pub fn bn254_fq_inverse<O: MemoryOracle>(
     oracle: &mut O,
     a: &crate::bn254::Fq,
 ) -> Option<crate::bn254::Fq> {
@@ -46,17 +46,17 @@ pub fn bn254_fq_inverse<O: HintOracle>(
 
 /// Divisions in the bn254 base field from hints, for the curve arithmetic in affine coordinates
 /// (`crate::affine_glv`)
-pub struct Bn254FqDivider<'a, O: HintOracle> {
+pub struct Bn254FqDivider<'a, O: MemoryOracle> {
     oracle: &'a mut O,
 }
 
-impl<'a, O: HintOracle> Bn254FqDivider<'a, O> {
+impl<'a, O: MemoryOracle> Bn254FqDivider<'a, O> {
     pub fn new(oracle: &'a mut O) -> Self {
         Self { oracle }
     }
 }
 
-impl<O: HintOracle> crate::affine_glv::Divider<crate::bn254::Fq> for Bn254FqDivider<'_, O> {
+impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bn254::Fq> for Bn254FqDivider<'_, O> {
     #[inline(always)]
     fn divide<'q>(
         &mut self,
@@ -83,17 +83,19 @@ impl<O: HintOracle> crate::affine_glv::Divider<crate::bn254::Fq> for Bn254FqDivi
 }
 
 /// Divisions in the bls12-381 base field from hints, as [`Bn254FqDivider`]
-pub struct Bls12381FqDivider<'a, O: HintOracle> {
+pub struct Bls12381FqDivider<'a, O: MemoryOracle> {
     oracle: &'a mut O,
 }
 
-impl<'a, O: HintOracle> Bls12381FqDivider<'a, O> {
+impl<'a, O: MemoryOracle> Bls12381FqDivider<'a, O> {
     pub fn new(oracle: &'a mut O) -> Self {
         Self { oracle }
     }
 }
 
-impl<O: HintOracle> crate::affine_glv::Divider<crate::bls12_381::Fq> for Bls12381FqDivider<'_, O> {
+impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bls12_381::Fq>
+    for Bls12381FqDivider<'_, O>
+{
     #[inline(always)]
     fn divide<'q>(
         &mut self,
@@ -119,7 +121,7 @@ impl<O: HintOracle> crate::affine_glv::Divider<crate::bls12_381::Fq> for Bls1238
 }
 
 /// `f^-1` in the bn254 degree-12 extension field, `None` for a zero `f`
-pub fn bn254_fq12_inverse<O: HintOracle>(
+pub fn bn254_fq12_inverse<O: MemoryOracle>(
     oracle: &mut O,
     f: &crate::bn254::Fq12,
 ) -> Option<crate::bn254::Fq12> {
@@ -128,7 +130,7 @@ pub fn bn254_fq12_inverse<O: HintOracle>(
 }
 
 /// `a^-1` in the bls12-381 base field, `None` for a zero `a`
-pub fn bls12_381_fq_inverse<O: HintOracle>(
+pub fn bls12_381_fq_inverse<O: MemoryOracle>(
     oracle: &mut O,
     a: &crate::bls12_381::Fq,
 ) -> Option<crate::bls12_381::Fq> {
@@ -137,7 +139,7 @@ pub fn bls12_381_fq_inverse<O: HintOracle>(
 }
 
 /// `f^-1` in the bls12-381 degree-12 extension field, `None` for a zero `f`
-pub fn bls12_381_fq12_inverse<O: HintOracle>(
+pub fn bls12_381_fq12_inverse<O: MemoryOracle>(
     oracle: &mut O,
     f: &crate::bls12_381::Fq12,
 ) -> Option<crate::bls12_381::Fq12> {
@@ -151,7 +153,7 @@ const _: () = assert!(<crate::bn254::Fq as PrimeField>::MODULUS.0[0] & 3 == 3);
 
 /// A square root of `a` in the bls12-381 base field from a hint, `None` if `a` is not a
 /// square. Which of the two roots is returned is up to the oracle.
-pub fn bls12_381_fq_sqrt<O: HintOracle>(
+pub fn bls12_381_fq_sqrt<O: MemoryOracle>(
     oracle: &mut O,
     a: &crate::bls12_381::Fq,
 ) -> Option<crate::bls12_381::Fq> {
@@ -182,30 +184,30 @@ pub fn bls12_381_fq_sqrt<O: HintOracle>(
 mod bls12_381_extension {
     use super::{bls12_381_fq_inverse, bls12_381_fq_sqrt};
     use crate::bls12_381::{Fq, Fq2};
-    use crate::hints::HintOracle;
+    use airbender_oracle::MemoryOracle;
     use ark_ff::{AdditiveGroup, Field, PrimeField, Zero};
     use core::mem::MaybeUninit;
 
     /// Inverse in Fq\[i\], where i² = -1. The norm vanishes only for the zero element,
     /// because -1 is not a square in the BLS12-381 base field.
-    pub fn bls12_381_fq2_inverse<O: HintOracle>(oracle: &mut O, value: &Fq2) -> Option<Fq2> {
+    pub fn bls12_381_fq2_inverse<O: MemoryOracle>(oracle: &mut O, value: &Fq2) -> Option<Fq2> {
         let norm = value.c0.square() + value.c1.square();
         let inverse = bls12_381_fq_inverse(oracle, &norm)?;
         Some(Fq2::new(value.c0 * inverse, -(value.c1 * inverse)))
     }
 
     /// Extension-field division with a checked hint for the inverse of the denominator's norm.
-    pub struct Bls12381Fq2Divider<'a, O: HintOracle> {
+    pub struct Bls12381Fq2Divider<'a, O: MemoryOracle> {
         oracle: &'a mut O,
     }
 
-    impl<'a, O: HintOracle> Bls12381Fq2Divider<'a, O> {
+    impl<'a, O: MemoryOracle> Bls12381Fq2Divider<'a, O> {
         pub fn new(oracle: &'a mut O) -> Self {
             Self { oracle }
         }
     }
 
-    impl<O: HintOracle> crate::affine_glv::Divider<Fq2> for Bls12381Fq2Divider<'_, O> {
+    impl<O: MemoryOracle> crate::affine_glv::Divider<Fq2> for Bls12381Fq2Divider<'_, O> {
         fn divide<'q>(
             &mut self,
             fraction: &mut [Fq2; 2],
@@ -220,7 +222,7 @@ mod bls12_381_extension {
 
     /// A square root in Fq2, `None` if there is none (both checked by the base-field hints).
     /// The root's sign is unspecified.
-    pub fn bls12_381_fq2_sqrt<O: HintOracle>(oracle: &mut O, value: &Fq2) -> Option<Fq2> {
+    pub fn bls12_381_fq2_sqrt<O: MemoryOracle>(oracle: &mut O, value: &Fq2) -> Option<Fq2> {
         if value.c1.is_zero() {
             // Every base-field element has a square root in Fq2. If a is a nonsquare
             // in Fq, -a is a square, and (sqrt(-a) * i)² = a.

@@ -7,12 +7,12 @@ use crate::ark_ff::PrimeField;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use crate::ark_ff::Zero;
 use crate::bls12_381::*;
-use crate::hints::HintOracle;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use crate::hints::{
     bls12_381_fq2_inverse, bls12_381_fq2_sqrt, bls12_381_fq_inverse, bls12_381_fq_sqrt,
     Bls12381Fq2Divider, Bls12381FqDivider,
 };
+use airbender_oracle::MemoryOracle;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use core::cell::RefCell;
 
@@ -108,7 +108,7 @@ fn parse_g2_with_subgroup_check(
 /// Parses and checks subgroup membership; with an oracle, by an affine chain with checked hinted
 /// divisions. On RV32 without `bigint_ops` the divider panics (see `unavailable`).
 #[cfg(any(feature = "alloc", test))]
-fn parse_g1_with_subgroup_check_with_oracle<O: HintOracle>(
+fn parse_g1_with_subgroup_check_with_oracle<O: MemoryOracle>(
     input: &[u8; G1_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
 ) -> Result<G1Affine, Bls12Error> {
@@ -126,7 +126,7 @@ fn parse_g1_with_subgroup_check_with_oracle<O: HintOracle>(
 }
 
 #[cfg(any(feature = "alloc", test))]
-fn parse_g2_with_subgroup_check_with_oracle<O: HintOracle>(
+fn parse_g2_with_subgroup_check_with_oracle<O: MemoryOracle>(
     input: &[u8; G2_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
 ) -> Result<G2Affine, Bls12Error> {
@@ -145,7 +145,7 @@ fn parse_g2_with_subgroup_check_with_oracle<O: HintOracle>(
 
 /// The sum of two G1 points (which need not be in the subgroup). With an oracle, adds in affine
 /// coordinates with a checked hinted slope division. The caller encodes the result.
-pub fn bls12_381_g1_add<O: HintOracle>(
+pub fn bls12_381_g1_add<O: MemoryOracle>(
     a: &[u8; G1_SERIALIZATION_LEN],
     b: &[u8; G1_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
@@ -165,7 +165,7 @@ pub fn bls12_381_g1_add<O: HintOracle>(
 }
 
 /// The sum of two G2 points (which need not be in the subgroup), as [`bls12_381_g1_add`]
-pub fn bls12_381_g2_add<O: HintOracle>(
+pub fn bls12_381_g2_add<O: MemoryOracle>(
     a: &[u8; G2_SERIALIZATION_LEN],
     b: &[u8; G2_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
@@ -187,7 +187,7 @@ pub fn bls12_381_g2_add<O: HintOracle>(
 /// The G1 point of a field element: the simplified SWU map, then cofactor clearing. With an
 /// oracle, the inversions, square roots and divisions are checked hints. The caller encodes the
 /// result.
-pub fn bls12_381_map_fp_to_g1<O: HintOracle>(
+pub fn bls12_381_map_fp_to_g1<O: MemoryOracle>(
     fp: &[u8; FIELD_ELEMENT_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
 ) -> Result<G1Affine, Bls12Error> {
@@ -231,7 +231,7 @@ pub fn bls12_381_map_fp_to_g1<O: HintOracle>(
 }
 
 /// The G2 point of an `Fp2` element, as [`bls12_381_map_fp_to_g1`]
-pub fn bls12_381_map_fp2_to_g2<O: HintOracle>(
+pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
     fp2: &[u8; FIELD_EXT_ELEMENT_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
 ) -> Result<G2Affine, Bls12Error> {

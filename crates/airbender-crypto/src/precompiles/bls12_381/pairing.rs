@@ -20,7 +20,7 @@ pub const BLS12_381_PAIR_LEN: usize = G1_SERIALIZATION_LEN + G2_SERIALIZATION_LE
 /// With an oracle, the subgroup checks take checked hinted divisions, and the final
 /// exponentiation is replaced by a residue witness check or a checked hinted inverse. A wrong
 /// hint panics. The pairs go into a vector of `allocator`.
-pub fn bls12_381_pairing_check<A: core::alloc::Allocator + Clone, O: HintOracle>(
+pub fn bls12_381_pairing_check<A: core::alloc::Allocator + Clone, O: MemoryOracle>(
     input: &[[u8; BLS12_381_PAIR_LEN]],
     allocator: A,
     mut oracle: Option<&mut O>,
@@ -47,7 +47,7 @@ pub fn bls12_381_pairing_check<A: core::alloc::Allocator + Clone, O: HintOracle>
 }
 
 /// The hint can save the final exponentiation, but cannot choose the result.
-fn pairing_product_is_identity<O: HintOracle>(
+fn pairing_product_is_identity<O: MemoryOracle>(
     pairs: &[Bls12381Pair],
     oracle: Option<&mut O>,
 ) -> bool {
@@ -108,7 +108,7 @@ mod tests {
             .collect()
     }
 
-    fn check<O: HintOracle>(pairs: &[(G1Affine, G2Affine)], oracle: Option<&mut O>) -> bool {
+    fn check<O: MemoryOracle>(pairs: &[(G1Affine, G2Affine)], oracle: Option<&mut O>) -> bool {
         let input = encode(pairs);
         bls12_381_pairing_check(input.as_chunks().0, Global, oracle).unwrap()
     }

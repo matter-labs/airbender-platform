@@ -3,7 +3,7 @@
 //! code path and panic at their first hint.
 
 use crate::affine_glv::Divider;
-use crate::hints::HintOracle;
+use airbender_oracle::MemoryOracle;
 use core::mem::MaybeUninit;
 
 pub(super) use crate::hints::{checked_inverse, PairingClaim};
@@ -16,7 +16,7 @@ impl Unavailable {
     /// The divider of the hints of `oracle` (as `Bls12381FqDivider::new`)
     // the value after the panic is for the type only
     #[allow(unreachable_code)]
-    pub(super) fn new<O: HintOracle>(_oracle: &mut O) -> Self {
+    pub(super) fn new<O: MemoryOracle>(_oracle: &mut O) -> Self {
         super::hints_unavailable();
         Self(())
     }
@@ -41,7 +41,7 @@ impl<F> Divider<F> for Unavailable {
 pub(super) type Bls12381FqDivider = Unavailable;
 
 /// `hints::bls12_381_fq_sqrt`
-pub(super) fn bls12_381_fq_sqrt<O: HintOracle>(
+pub(super) fn bls12_381_fq_sqrt<O: MemoryOracle>(
     _oracle: &mut O,
     _a: &crate::bls12_381::Fq,
 ) -> Option<crate::bls12_381::Fq> {
@@ -49,7 +49,7 @@ pub(super) fn bls12_381_fq_sqrt<O: HintOracle>(
 }
 
 /// `hints::bls12_381_kzg_residue_witness`
-pub(super) fn bls12_381_kzg_residue_witness<O: HintOracle>(
+pub(super) fn bls12_381_kzg_residue_witness<O: MemoryOracle>(
     _oracle: &mut O,
     _points: &[crate::bls12_381::G1Affine; 2],
 ) -> PairingClaim<crate::bls12_381::Fq12, crate::bls12_381::Fq6> {
@@ -80,7 +80,7 @@ impl Unavailable {
 
 /// `hints::bn254_g2_pairing_slopes`
 #[cfg(any(feature = "alloc", test))]
-pub(super) fn bn254_g2_pairing_slopes<O: HintOracle>(
+pub(super) fn bn254_g2_pairing_slopes<O: MemoryOracle>(
     _oracle: &mut O,
     _q: &crate::bn254::G2Affine,
 ) -> Unavailable {
@@ -89,7 +89,7 @@ pub(super) fn bn254_g2_pairing_slopes<O: HintOracle>(
 
 /// `hints::bn254_pairing_residue_witness`
 #[cfg(any(feature = "alloc", test))]
-pub(super) fn bn254_pairing_residue_witness<O: HintOracle>(
+pub(super) fn bn254_pairing_residue_witness<O: MemoryOracle>(
     _oracle: &mut O,
     _pairs: &[(crate::bn254::G1Affine, crate::bn254::G2Affine)],
 ) -> PairingClaim<crate::bn254::Fq12, crate::bn254::Fq6> {
@@ -98,7 +98,7 @@ pub(super) fn bn254_pairing_residue_witness<O: HintOracle>(
 
 /// `hints::bls12_381_fq_inverse`
 #[cfg(any(feature = "alloc", test))]
-pub(super) fn bls12_381_fq_inverse<O: HintOracle>(
+pub(super) fn bls12_381_fq_inverse<O: MemoryOracle>(
     _oracle: &mut O,
     _a: &crate::bls12_381::Fq,
 ) -> Option<crate::bls12_381::Fq> {
@@ -107,7 +107,7 @@ pub(super) fn bls12_381_fq_inverse<O: HintOracle>(
 
 /// `hints::bls12_381_fq2_inverse`
 #[cfg(any(feature = "alloc", test))]
-pub(super) fn bls12_381_fq2_inverse<O: HintOracle>(
+pub(super) fn bls12_381_fq2_inverse<O: MemoryOracle>(
     _oracle: &mut O,
     _value: &crate::bls12_381::Fq2,
 ) -> Option<crate::bls12_381::Fq2> {
@@ -116,7 +116,7 @@ pub(super) fn bls12_381_fq2_inverse<O: HintOracle>(
 
 /// `hints::bls12_381_pairing_residue_witness`
 #[cfg(any(feature = "alloc", test))]
-pub(super) fn bls12_381_pairing_residue_witness<O: HintOracle>(
+pub(super) fn bls12_381_pairing_residue_witness<O: MemoryOracle>(
     _oracle: &mut O,
     _pairs: &[crate::hints::Bls12381Pair],
 ) -> PairingClaim<crate::bls12_381::Fq12, crate::bls12_381::Fq6> {

@@ -1,9 +1,9 @@
 //! ecrecover: the public key of a secp256k1 signature.
 
 use super::WordAligned;
-use crate::hints::HintOracle;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use crate::hints::Secp256k1HooksWithOracle;
+use airbender_oracle::MemoryOracle;
 
 /// The public key (`x || y`, big-endian) that signed `digest` with `(r, s)`, for the signature
 /// point with `x = r` and the given `y` parity. Fails if `r` or `s` is not in `[1, order - 1]`,
@@ -11,7 +11,7 @@ use crate::hints::Secp256k1HooksWithOracle;
 /// checked hinted divisions, inverses and square root.
 // The caller maps every failure to an empty output
 #[allow(clippy::result_unit_err)]
-pub fn secp256k1_ecrecover<O: HintOracle>(
+pub fn secp256k1_ecrecover<O: MemoryOracle>(
     digest: &[u8; 32],
     r: &[u8; 32],
     s: &[u8; 32],

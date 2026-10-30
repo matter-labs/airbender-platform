@@ -5,7 +5,7 @@ use crate::ark_ec::{AffineRepr, CurveGroup};
 use crate::ark_ff::{Field, PrimeField};
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use crate::hints as curve_hints;
-use crate::hints::HintOracle;
+use airbender_oracle::MemoryOracle;
 
 #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
 use super::unavailable as curve_hints;
@@ -48,7 +48,7 @@ pub fn parse_g1_compressed(input: &[u8]) -> Result<crate::bls12_381::G1Affine, (
 /// check an affine chain with checked hinted divisions
 // The caller maps the failure to its own error
 #[allow(clippy::result_unit_err)]
-pub fn parse_g1_compressed_with_oracle<O: HintOracle>(
+pub fn parse_g1_compressed_with_oracle<O: MemoryOracle>(
     input: &[u8],
     oracle: Option<&mut O>,
 ) -> Result<crate::bls12_381::G1Affine, ()> {
@@ -76,7 +76,7 @@ pub fn parse_g1_compressed_with_oracle<O: HintOracle>(
 /// points must be in the subgroup and the scalars below the group order (or it panics). With an
 /// oracle, the curve arithmetic is affine with checked hinted divisions, and the final
 /// exponentiation is replaced by a residue witness check or a checked hinted inverse.
-pub fn verify_kzg_proof_with_oracle<O: HintOracle>(
+pub fn verify_kzg_proof_with_oracle<O: MemoryOracle>(
     commitment: crate::bls12_381::G1Affine,
     proof: crate::bls12_381::G1Affine,
     z: KzgScalar,
@@ -157,7 +157,7 @@ pub fn verify_kzg_proof_with_oracle<O: HintOracle>(
 /// `z` and `y`. Parses in order, failing at the first invalid input: the commitment and the
 /// proof (`InvalidPoint`), then `z` and `y` (`InvalidScalar`). With an oracle, decompression and
 /// verification take checked hints (see [`verify_kzg_proof_with_oracle`]); a wrong hint panics.
-pub fn kzg_verify_proof<O: HintOracle>(
+pub fn kzg_verify_proof<O: MemoryOracle>(
     commitment: &[u8; 48],
     proof: &[u8; 48],
     z: &[u8; 32],

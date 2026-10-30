@@ -5,7 +5,7 @@
 //! half, its high half and the divisor; the answer is the quotient's low and high halves, 8 words
 //! each.
 
-use super::{HintError, HintOracle, U256_WIDE_DIV_REM_ADVICE_QUERY_ID};
+use super::{MemoryOracle, U256_WIDE_DIV_REM_ADVICE_QUERY_ID};
 use crate::modexp::u256::U256;
 use core::mem::{align_of, size_of, MaybeUninit};
 
@@ -17,10 +17,10 @@ impl U256WideDivRemAdviceQuery {
 
     /// Runs the query on `(dividend_lo, dividend_hi, divisor)`
     #[inline(always)]
-    fn get<O: HintOracle>(
+    fn get<O: MemoryOracle>(
         oracle: &mut O,
         input: (&U256, &U256, &U256),
-    ) -> Result<(U256, U256), HintError> {
+    ) -> Result<(U256, U256), O::Error> {
         send_composite(oracle, Self::QUERY_ID, input)?;
         let output = receive_value(oracle);
         finish(oracle, output)
@@ -52,11 +52,11 @@ fn exposed_address(value: &U256) -> usize {
 
 /// Starts a query whose input word is the address of the array of the operands' addresses
 #[inline(always)]
-fn send_composite<O: HintOracle>(
+fn send_composite<O: MemoryOracle>(
     oracle: &mut O,
     query_id: u32,
     input: (&U256, &U256, &U256),
-) -> Result<(), HintError> {
+) -> Result<(), O::Error> {
     let addresses = [
         exposed_address(input.0),
         exposed_address(input.1),
@@ -74,7 +74,7 @@ fn send_composite<O: HintOracle>(
 
 /// Receives the two halves of the quotient in turn
 #[inline(always)]
-fn receive_value<O: HintOracle>(oracle: &mut O) -> Result<(U256, U256), HintError> {
+fn receive_value<O: MemoryOracle>(oracle: &mut O) -> Result<(U256, U256), O::Error> {
     let mut value = MaybeUninit::<(U256, U256)>::uninit();
     let this = value.as_mut_ptr();
     // SAFETY: the elements are disjoint places inside `value`
@@ -92,10 +92,10 @@ fn receive_value<O: HintOracle>(oracle: &mut O) -> Result<(U256, U256), HintErro
 
 /// Writes the next `U256` of the response to `dst`
 #[inline(always)]
-fn init<'a, O: HintOracle>(
+fn init<'a, O: MemoryOracle>(
     oracle: &mut O,
     dst: &'a mut MaybeUninit<U256>,
-) -> Result<&'a mut U256, HintError> {
+) -> Result<&'a mut U256, O::Error> {
     let this = dst.as_mut_ptr();
     // SAFETY: `dst` is a `U256`, `U256_WORDS` words aligned for `u32`
     unsafe { oracle.write_words(this.cast::<u32>(), U256_WORDS)? };
@@ -105,7 +105,7 @@ fn init<'a, O: HintOracle>(
 
 /// Ends the query, whether its output was received or rejected, so the oracle stays in step
 #[inline(always)]
-fn finish<O: HintOracle, T>(oracle: &mut O, output: Result<T, HintError>) -> Result<T, HintError> {
+fn finish<O: MemoryOracle, T>(oracle: &mut O, output: Result<T, O::Error>) -> Result<T, O::Error> {
     let finished = oracle.finish_query();
     let output = output?;
     finished?;
@@ -156,7 +156,7 @@ pub(crate) fn verify_wide_div_rem_hint(
 
 /// Asks the oracle for `(dividend_hi * 2^256 + dividend_lo) / divisor`, low half first
 #[inline(always)]
-pub(crate) fn query_wide_div_rem_hint<O: HintOracle>(
+pub(crate) fn query_wide_div_rem_hint<O: MemoryOracle>(
     dividend_lo: &U256,
     dividend_hi: &U256,
     divisor: &U256,

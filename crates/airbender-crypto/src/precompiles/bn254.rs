@@ -4,9 +4,9 @@
 use crate::ark_ec::CurveGroup;
 use crate::ark_ff::PrimeField;
 use crate::ark_serialize::Valid;
-use crate::hints::HintOracle;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use crate::hints::{bn254_fq_inverse, Bn254FqDivider};
+use airbender_oracle::MemoryOracle;
 
 #[cfg(any(feature = "alloc", test))]
 mod pairing_check;
@@ -19,7 +19,7 @@ pub use self::pairing_check::bn254_pairing_check;
 /// hinted slope division.
 // The caller maps every failure to its invalid-point error
 #[allow(clippy::result_unit_err)]
-pub fn bn254_g1_add<O: HintOracle>(
+pub fn bn254_g1_add<O: MemoryOracle>(
     coordinates: &[[u8; 64]; 2],
     oracle: Option<&mut O>,
 ) -> Result<[u8; 64], ()> {
@@ -57,7 +57,7 @@ pub fn bn254_g1_add<O: HintOracle>(
 /// an oracle, multiplies in affine coordinates with checked hinted divisions.
 // The caller maps every failure to its invalid-point error
 #[allow(clippy::result_unit_err)]
-pub fn bn254_g1_mul<O: HintOracle>(
+pub fn bn254_g1_mul<O: MemoryOracle>(
     x: &[u8; 32],
     y: &[u8; 32],
     scalar: &[u8; 32],
@@ -147,7 +147,7 @@ pub(crate) fn serialize_affine(point: &crate::bn254::G1Affine) -> [u8; 64] {
 }
 
 /// The EVM encoding of `point`. With an oracle, `1 / Z` is a checked hint.
-pub(crate) fn serialize_projective<O: HintOracle>(
+pub(crate) fn serialize_projective<O: MemoryOracle>(
     point: crate::bn254::G1Projective,
     oracle: Option<&mut O>,
 ) -> [u8; 64] {

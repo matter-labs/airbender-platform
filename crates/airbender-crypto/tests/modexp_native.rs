@@ -11,7 +11,7 @@ mod test_vectors;
 
 mod modexp {
     use super::test_vectors::MODEXP_VECTORS;
-    use airbender_crypto::hints::{record_hints, HintError, HintOracle, NoHints};
+    use airbender_crypto::hints::{record_hints, HintError, MemoryOracle, NoHints};
     use airbender_crypto::modexp::{advice, modexp, software, write_modexp_output};
     use std::alloc::Global;
     use std::collections::VecDeque;
@@ -32,7 +32,9 @@ mod modexp {
     /// The guest's oracle: every answer word is the next word of the tape
     struct Tape(VecDeque<u32>);
 
-    impl HintOracle for Tape {
+    impl MemoryOracle for Tape {
+        type Error = HintError;
+
         unsafe fn send_query(
             &mut self,
             _query_id: u32,

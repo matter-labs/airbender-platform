@@ -5,7 +5,7 @@ use crate::ark_ff::Zero;
 use crate::ark_serialize::Valid;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use crate::hints as curve_hints;
-use crate::hints::HintOracle;
+use airbender_oracle::MemoryOracle;
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 
@@ -25,7 +25,7 @@ use super::super::unavailable as curve_hints;
 /// into vectors of `allocator`.
 // The caller maps every failure to its invalid-point error
 #[allow(clippy::result_unit_err)]
-pub fn bn254_pairing_check<A: Allocator + Clone, O: HintOracle>(
+pub fn bn254_pairing_check<A: Allocator + Clone, O: MemoryOracle>(
     num_pairs: usize,
     src: &[u8],
     allocator: A,

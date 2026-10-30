@@ -8,8 +8,6 @@
 //! are not field limbs, then their words.
 
 mod answer;
-#[cfg(target_arch = "riscv32")]
-mod csr;
 mod encoding;
 // The bn254 and bls12-381 hints answer straight into the guest's delegated representation, so on
 // RV32 they need `bigint_ops` (which `proving` turns on).
@@ -30,8 +28,6 @@ pub(crate) mod test_support;
 pub(crate) mod wide_div;
 
 pub use self::answer::{read_hint_answer, HintAnswer, HintTarget};
-#[cfg(target_arch = "riscv32")]
-pub use self::csr::CsrHintOracle;
 pub use self::encoding::HintEncoding;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub use self::fields::{
@@ -44,7 +40,7 @@ pub use self::host::{
     answer_query, not_identity_claim, read_querier_u32_words, record_hints, NativeQuerierMemory,
     RecordingHintOracle,
 };
-pub use self::oracle::{HintError, HintOracle, NoHints};
+pub use self::oracle::{HintError, NoHints};
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub use self::pairing::{
     bls12_381_kzg_residue_witness, bls12_381_pairing_residue_witness, bn254_g2_pairing_slopes,
@@ -58,18 +54,12 @@ pub use self::request::{
 };
 pub use self::secp256k1::{Secp256k1Element, Secp256k1HooksWithOracle};
 
-/// Computational advice queries (e.g. division/modexp advice)
-pub const ADVICE_SUBSPACE_MASK: u32 = 0x4005_0000;
+pub use airbender_oracle::{MemoryOracle, OracleError};
 
-/// Field hints (see [`FieldHintOp`])
-pub const FIELD_OPS_ADVISE_QUERY_ID: u32 = ADVICE_SUBSPACE_MASK | 0x11;
-
-/// ModExp advice
-pub const MODEXP_ADVICE_QUERY_ID: u32 = ADVICE_SUBSPACE_MASK | 0x10;
-
-/// The quotient of a 512-bit dividend by a 256-bit divisor, sent by address; the guest derives
-/// the remainder and checks `0 <= r < divisor`.
-pub const U256_WIDE_DIV_REM_ADVICE_QUERY_ID: u32 = ADVICE_SUBSPACE_MASK | 0x31;
+pub use airbender_oracle::query_ids::{
+    ADVICE_SUBSPACE_MASK, FIELD_OPS_ADVISE_QUERY_ID, MODEXP_ADVICE_QUERY_ID,
+    U256_WIDE_DIV_REM_ADVICE_QUERY_ID,
+};
 
 #[cfg(test)]
 mod tests {
@@ -127,10 +117,10 @@ mod tests {
     struct Word(u32);
 
     impl HintAnswer for Word {
-        fn read<'a, O: HintOracle>(
+        fn read<'a, O: MemoryOracle>(
             oracle: &mut O,
             dst: &'a mut MaybeUninit<Self>,
-        ) -> Result<&'a mut Self, HintError> {
+        ) -> Result<&'a mut Self, O::Error> {
             // SAFETY: `Word` is one aligned `u32`
             unsafe { oracle.write_words(dst.as_mut_ptr().cast::<u32>(), 1)? };
             // SAFETY: just written

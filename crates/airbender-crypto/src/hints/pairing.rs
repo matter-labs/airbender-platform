@@ -10,9 +10,9 @@
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use super::answer::{read_hint_answer, HintAnswer};
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-use super::oracle::HintOracle;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use super::request::{send_field_hint_query, FieldHintOp};
+#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+use airbender_oracle::MemoryOracle;
 use ark_ff::Field;
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 use ark_ff::{One, Zero};
@@ -41,7 +41,7 @@ pub enum PairingClaim<F12, F6> {
 /// `crate::residue_witness::bn254::check` on the Miller loop started at `d`. `c d = 1` is checked
 /// here: the loop multiplies by `c` at negative digits, and the check is only sound for `c = d^-1`.
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-pub fn bn254_pairing_residue_witness<O: HintOracle>(
+pub fn bn254_pairing_residue_witness<O: MemoryOracle>(
     oracle: &mut O,
     pairs: &[(crate::bn254::G1Affine, crate::bn254::G2Affine)],
 ) -> PairingClaim<crate::bn254::Fq12, crate::bn254::Fq6> {
@@ -77,7 +77,7 @@ pub fn bn254_pairing_residue_witness<O: HintOracle>(
 /// checked against its fraction. The unread rest is skipped on drop and the query ended, so the
 /// oracle stays in step on every path.
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-pub struct G2SlopeHints<'a, O: HintOracle> {
+pub struct G2SlopeHints<'a, O: MemoryOracle> {
     oracle: &'a mut O,
     /// Words of the answer not received yet
     remaining_words: usize,
@@ -96,7 +96,7 @@ const G2_HINT_WORDS: usize = 2
 
 /// Asks for the slopes of the affine `G2` chains of `q` (on the twist, not at infinity)
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-pub fn bn254_g2_pairing_slopes<'a, O: HintOracle>(
+pub fn bn254_g2_pairing_slopes<'a, O: MemoryOracle>(
     oracle: &'a mut O,
     q: &crate::bn254::G2Affine,
 ) -> G2SlopeHints<'a, O> {
@@ -110,7 +110,7 @@ pub fn bn254_g2_pairing_slopes<'a, O: HintOracle>(
 }
 
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-impl<'a, O: HintOracle> G2SlopeHints<'a, O> {
+impl<'a, O: MemoryOracle> G2SlopeHints<'a, O> {
     /// The slopes of the membership test, `None` if the prover reports an exceptional chain
     pub fn subgroup_chain(&mut self) -> Option<HintedChain<'_, 'a, O>> {
         self.chain(crate::bn254::curves::g2_affine::SUBGROUP_DIVISIONS)
@@ -147,7 +147,7 @@ impl<'a, O: HintOracle> G2SlopeHints<'a, O> {
 }
 
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-impl<O: HintOracle> Drop for G2SlopeHints<'_, O> {
+impl<O: MemoryOracle> Drop for G2SlopeHints<'_, O> {
     fn drop(&mut self) {
         self.skip(self.remaining_words);
         self.oracle
@@ -158,13 +158,13 @@ impl<O: HintOracle> Drop for G2SlopeHints<'_, O> {
 
 /// The hints of one chain, in the chain's order
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-pub struct HintedChain<'c, 'a, O: HintOracle> {
+pub struct HintedChain<'c, 'a, O: MemoryOracle> {
     hints: &'c mut G2SlopeHints<'a, O>,
     remaining: usize,
 }
 
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-impl<O: HintOracle> crate::affine_glv::Divider<crate::bn254::Fq2> for HintedChain<'_, '_, O> {
+impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bn254::Fq2> for HintedChain<'_, '_, O> {
     #[inline(always)]
     fn divide<'q>(
         &mut self,
@@ -185,7 +185,7 @@ impl<O: HintOracle> crate::affine_glv::Divider<crate::bn254::Fq2> for HintedChai
 }
 
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-impl<O: HintOracle> Drop for HintedChain<'_, '_, O> {
+impl<O: MemoryOracle> Drop for HintedChain<'_, '_, O> {
     /// The rest of an abandoned chain is skipped
     fn drop(&mut self) {
         self.hints.skip(self.remaining * FQ2_HINT_WORDS);
@@ -195,7 +195,7 @@ impl<O: HintOracle> Drop for HintedChain<'_, '_, O> {
 /// The claim about `e(p1, G2) e(p2, tau G2)` for `points = [p1, p2]` (the KZG proof check), for
 /// `crate::residue_witness::bls12_381::check` on the Miller loop started at `d` (`c` is zero)
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-pub fn bls12_381_kzg_residue_witness<O: HintOracle>(
+pub fn bls12_381_kzg_residue_witness<O: MemoryOracle>(
     oracle: &mut O,
     points: &[crate::bls12_381::G1Affine; 2],
 ) -> PairingClaim<crate::bls12_381::Fq12, crate::bls12_381::Fq6> {
@@ -224,7 +224,7 @@ pub fn bls12_381_kzg_residue_witness<O: HintOracle>(
 
 /// The claim about the bls12-381 pairing product over validated `pairs` (`c` is zero)
 #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
-pub fn bls12_381_pairing_residue_witness<O: HintOracle>(
+pub fn bls12_381_pairing_residue_witness<O: MemoryOracle>(
     oracle: &mut O,
     pairs: &[Bls12381Pair],
 ) -> PairingClaim<crate::bls12_381::Fq12, crate::bls12_381::Fq6> {
@@ -442,7 +442,7 @@ mod tests {
     );
 
     /// Takes the slopes of `q` in the way `(subgroup, line)`, and checks the chains' results
-    fn take_slopes<O: HintOracle>(oracle: &mut O, q: &bn254::G2Affine, (subgroup, line): Way) {
+    fn take_slopes<O: MemoryOracle>(oracle: &mut O, q: &bn254::G2Affine, (subgroup, line): Way) {
         let mut hints = bn254_g2_pairing_slopes(oracle, q);
         if let Some(hinted) = subgroup {
             let chain = hints
