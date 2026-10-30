@@ -21,6 +21,26 @@ const MODINV32_INV256: [u8; 128] = [
     0xDF, 0x35, 0x13, 0x29, 0xA7, 0x3D, 0x1B, 0xF1, 0xEF, 0xC5, 0xA3, 0x39, 0xB7, 0xCD, 0xAB, 0x01,
 ];
 
+/// The product of a signed 32-bit value and a non-negative one (a limb below
+/// `2^30`): the unsigned product corrected by the sign of `a`, since
+/// `(a + 2^32 [a < 0]) b = a b + 2^32 b [a < 0]`. The proving target has no
+/// signed multiplication (`mulh`): the products here lower to `mul` and
+/// `mulhu` only.
+#[inline(always)]
+fn mul_su(a: i32, b: i32) -> i64 {
+    debug_assert!(b >= 0);
+    let p = (a as u32 as u64 * b as u32 as u64) as i64;
+    p.wrapping_sub((((a >> 31) & b) as i64) << 32)
+}
+
+/// The product of two signed 32-bit values, with both corrections
+#[inline(always)]
+fn mul_ss(a: i32, b: i32) -> i64 {
+    let p = (a as u32 as u64 * b as u32 as u64) as i64;
+    p.wrapping_sub((((a >> 31) & b) as i64) << 32)
+        .wrapping_sub((((b >> 31) & a) as i64) << 32)
+}
+
 /// Transition matrix
 /// Can hold 62 division steps
 #[derive(Debug)]
@@ -116,19 +136,18 @@ impl TransitionMatrix {
 
     fn update_fg30(&self, len: usize, f: &Signed30, g: &Signed30) -> (Signed30, Signed30) {
         const M30: i32 = (u32::MAX >> 2) as i32;
-        let u = self.u as i64;
-        let v = self.v as i64;
-        let q = self.q as i64;
-        let r = self.r as i64;
-
-        let mut fi = f.0[0] as i64;
-        let mut gi = g.0[0] as i64;
+        let (u, v, q, r) = (self.u, self.v, self.q, self.r);
 
         let mut f_out = Signed30::ZERO;
         let mut g_out = Signed30::ZERO;
 
-        let mut cf = u * fi + v * gi;
-        let mut cg = q * fi + r * gi;
+        // the limbs below the top one are non-negative, the top one is signed
+        let (mut fi, mut gi) = (f.0[0], g.0[0]);
+        let (mut cf, mut cg) = if len == 1 {
+            (mul_ss(u, fi) + mul_ss(v, gi), mul_ss(q, fi) + mul_ss(r, gi))
+        } else {
+            (mul_su(u, fi) + mul_su(v, gi), mul_su(q, fi) + mul_su(r, gi))
+        };
 
         debug_assert!(cf as i32 & M30 == 0);
         debug_assert!(cg as i32 & M30 == 0);
@@ -136,15 +155,29 @@ impl TransitionMatrix {
         cf >>= 30;
         cg >>= 30;
 
-        for i in 1..len {
-            fi = f.0[i] as i64;
-            gi = g.0[i] as i64;
+        for i in 1..len - 1 {
+            fi = f.0[i];
+            gi = g.0[i];
 
-            cf += u * fi + v * gi;
-            cg += q * fi + r * gi;
+            cf += mul_su(u, fi) + mul_su(v, gi);
+            cg += mul_su(q, fi) + mul_su(r, gi);
 
             f_out.0[i - 1] = cf as i32 & M30;
             g_out.0[i - 1] = cg as i32 & M30;
+
+            cf >>= 30;
+            cg >>= 30;
+        }
+
+        if len > 1 {
+            fi = f.0[len - 1];
+            gi = g.0[len - 1];
+
+            cf += mul_ss(u, fi) + mul_ss(v, gi);
+            cg += mul_ss(q, fi) + mul_ss(r, gi);
+
+            f_out.0[len - 2] = cf as i32 & M30;
+            g_out.0[len - 2] = cg as i32 & M30;
 
             cf >>= 30;
             cg >>= 30;
@@ -166,10 +199,7 @@ impl TransitionMatrix {
         let mut e_out = Signed30::ZERO;
 
         const M30: i32 = (u32::MAX >> 2) as i32;
-        let u = self.u as i64;
-        let v = self.v as i64;
-        let q = self.q as i64;
-        let r = self.r as i64;
+        let (u, v, q, r) = (self.u, self.v, self.q, self.r);
 
         let sd = d.0[8] >> 31;
         let se = e.0[8] >> 31;
@@ -177,16 +207,18 @@ impl TransitionMatrix {
         let mut md = (self.u & sd) + (self.v & se);
         let mut me = (self.q & sd) + (self.r & se);
 
-        let mut di = d.0[0] as i64;
-        let mut ei = e.0[0] as i64;
-        let mut cd = u * di + v * ei;
-        let mut ce = q * di + r * ei;
+        // the limbs below the top one are non-negative, the top one is
+        // signed; the modulus limbs and md, me are signed
+        let mut di = d.0[0];
+        let mut ei = e.0[0];
+        let mut cd = mul_su(u, di) + mul_su(v, ei);
+        let mut ce = mul_su(q, di) + mul_su(r, ei);
 
         md -= (mod_info.modulus_inv30.wrapping_mul(cd as u32) as i32).wrapping_add(md) & M30;
         me -= (mod_info.modulus_inv30.wrapping_mul(ce as u32) as i32).wrapping_add(me) & M30;
 
-        cd += mod_info.modulus.0[0] as i64 * md as i64;
-        ce += mod_info.modulus.0[0] as i64 * me as i64;
+        cd += mul_ss(mod_info.modulus.0[0], md);
+        ce += mul_ss(mod_info.modulus.0[0], me);
 
         debug_assert!(cd as i32 & M30 == 0);
         debug_assert!(ce as i32 & M30 == 0);
@@ -194,14 +226,14 @@ impl TransitionMatrix {
         cd >>= 30;
         ce >>= 30;
 
-        for i in 1..9 {
-            di = d.0[i] as i64;
-            ei = e.0[i] as i64;
+        for i in 1..8 {
+            di = d.0[i];
+            ei = e.0[i];
 
-            cd += u * di + v * ei;
-            ce += q * di + r * ei;
-            cd += mod_info.modulus.0[i] as i64 * md as i64;
-            ce += mod_info.modulus.0[i] as i64 * me as i64;
+            cd += mul_su(u, di) + mul_su(v, ei);
+            ce += mul_su(q, di) + mul_su(r, ei);
+            cd += mul_ss(mod_info.modulus.0[i], md);
+            ce += mul_ss(mod_info.modulus.0[i], me);
 
             d_out.0[i - 1] = cd as i32 & M30;
             e_out.0[i - 1] = ce as i32 & M30;
@@ -209,6 +241,20 @@ impl TransitionMatrix {
             cd >>= 30;
             ce >>= 30;
         }
+
+        di = d.0[8];
+        ei = e.0[8];
+
+        cd += mul_ss(u, di) + mul_ss(v, ei);
+        ce += mul_ss(q, di) + mul_ss(r, ei);
+        cd += mul_ss(mod_info.modulus.0[8], md);
+        ce += mul_ss(mod_info.modulus.0[8], me);
+
+        d_out.0[7] = cd as i32 & M30;
+        e_out.0[7] = ce as i32 & M30;
+
+        cd >>= 30;
+        ce >>= 30;
 
         d_out.0[8] = cd as i32;
         e_out.0[8] = ce as i32;
@@ -230,7 +276,9 @@ impl Signed30 {
     pub(super) fn modinv32(&self, mod_info: &ModInfo) -> Self {
         let mut d = Self::ZERO;
         let mut e = Self::ONE;
-        let mut f = mod_info.modulus;
+        // the canonical limbs: `update_fg30` relies on non-negative limbs
+        // below the top one
+        let mut f = mod_info.modulus_canonical;
         let mut g = *self;
         let mut eta = -1;
 
@@ -461,12 +509,12 @@ impl Mul<i32> for Signed30 {
         let mut c = 0i64;
         let mut r = Signed30::ZERO;
         for i in 0..8 {
-            c += self.0[i] as i64 * rhs as i64;
+            c += mul_ss(self.0[i], rhs);
             r.0[i] = (c as u32 & M30) as i32;
             c >>= 30;
         }
 
-        c += self.0[8] as i64 * rhs as i64;
+        c += mul_ss(self.0[8], rhs);
 
         debug_assert_eq!(c, c as i32 as i64);
 
@@ -485,14 +533,29 @@ impl Neg for Signed30 {
 }
 
 pub(super) struct ModInfo {
+    /// The modulus in the sparse signed limbs that make `update_de30` cheap
     modulus: Signed30,
+    /// The modulus with its limbs below the top one in `[0, 2^30)`
+    modulus_canonical: Signed30,
     modulus_inv30: u32,
 }
 
 impl ModInfo {
     pub(super) const fn new(modulus: [i32; 9], modulus_inv30: u32) -> Self {
+        const M30: u32 = u32::MAX >> 2;
+        let mut canonical = [0i32; 9];
+        let mut carry: i64 = 0;
+        let mut i = 0;
+        while i < 8 {
+            carry += modulus[i] as i64;
+            canonical[i] = (carry as u32 & M30) as i32;
+            carry >>= 30;
+            i += 1;
+        }
+        canonical[8] = (carry + modulus[8] as i64) as i32;
         Self {
             modulus: Signed30(modulus),
+            modulus_canonical: Signed30(canonical),
             modulus_inv30,
         }
     }
