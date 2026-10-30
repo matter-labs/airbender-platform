@@ -2,6 +2,7 @@
 members = [
     "crates/airbender-crypto",
     "crates/airbender-crypto-c",
+    "crates/airbender-oracle",
     "crates/airbender-core",
     "crates/airbender-build",
     "crates/airbender-codec",
