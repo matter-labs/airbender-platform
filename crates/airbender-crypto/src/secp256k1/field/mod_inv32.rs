@@ -53,7 +53,7 @@ struct TransitionMatrix {
 
 impl TransitionMatrix {
     fn det(&self) -> i64 {
-        self.u as i64 * self.r as i64 - self.v as i64 * self.q as i64
+        mul_ss(self.u, self.r) - mul_ss(self.v, self.q)
     }
 
     fn divsteps30(eta: &mut i32, f0: Wrapping<u32>, g0: Wrapping<u32>) -> Self {
