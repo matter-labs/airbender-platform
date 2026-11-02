@@ -90,6 +90,7 @@ name = "airbender-crypto"
 version = "0.3.0"
 dependencies = [
  "airbender-host",
+ "airbender-oracle",
  "ark-bls12-381",
  "ark-bn254",
  "ark-ec",
@@ -120,6 +121,15 @@ dependencies = [
  "sha2",
  "sha3 0.10.9",
  "zeroize",
+]
+
+[[package]]
+name = "airbender-crypto-c"
+version = "0.3.0"
+dependencies = [
+ "airbender-crypto",
+ "airbender-oracle",
+ "airbender-rt",
 ]
 
 [[package]]
@@ -158,6 +168,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "airbender-oracle"
+version = "0.3.0"
+dependencies = [
+ "riscv_common",
 ]
 
 [[package]]

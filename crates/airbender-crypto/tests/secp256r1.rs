@@ -38,7 +38,7 @@ fn get_input(msg: [u8; 100]) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32
         hasher.update(msg);
         let res = hasher.finalize();
         let mut hash_bytes = [0u8; 32];
-        hash_bytes.copy_from_slice(&res);
+        hash_bytes.copy_from_slice(res.as_ref());
         hash_bytes
     };
 
@@ -172,7 +172,7 @@ fn bad_message() {
                     hasher.update(bad_msg);
                     let res = hasher.finalize();
                     let mut hash_bytes = [0u8; 32];
-                    hash_bytes.copy_from_slice(&res);
+                    hash_bytes.copy_from_slice(res.as_ref());
                     hash_bytes
                 };
 
@@ -194,7 +194,7 @@ fn bad_signature() {
                 hasher.update(msg);
                 let res = hasher.finalize();
                 let mut hash_bytes = [0u8; 32];
-                hash_bytes.copy_from_slice(&res);
+                hash_bytes.copy_from_slice(res.as_ref());
                 hash_bytes
             };
 
@@ -225,7 +225,7 @@ fn bad_signing_key() {
                 hasher.update(msg);
                 let res = hasher.finalize();
                 let mut hash_bytes = [0u8; 32];
-                hash_bytes.copy_from_slice(&res);
+                hash_bytes.copy_from_slice(res.as_ref());
                 hash_bytes
             };
 

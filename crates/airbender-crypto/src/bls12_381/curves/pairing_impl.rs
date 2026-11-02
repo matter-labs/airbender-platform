@@ -1,4 +1,10 @@
 use super::*;
+#[cfg(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+))]
+use crate::ark_ff_delegation::MontFp;
 use crate::bls12_381::{Fq12, Fq2};
 use crate::extension_tower::*;
 use ark_ec::bls12::g2::EllCoeff;
@@ -9,6 +15,12 @@ use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ff::BitIteratorBE;
 use ark_ff::Field;
+#[cfg(not(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+)))]
+use ark_ff::MontFp;
 use ark_ff::One;
 use ark_serialize::CanonicalDeserialize;
 use ark_serialize::CanonicalSerialize;
@@ -432,8 +444,8 @@ impl From<G2Affine> for G2PreparedNoAlloc {
                 normalized: false,
             }
         } else {
-            use ark_ff::AdditiveGroup;
-            let two_inv = Fq::one().double().inverse().unwrap();
+            const TWO_INV: Fq = MontFp!("2001204777610833696708894912867952078278441409969503942666029068062015825245418932221343814564507832018947136279894");
+            let two_inv = TWO_INV;
             let mut i = 0;
             let mut ell_coeffs: [MaybeUninit<EllCoeff<Config>>; BLS12_381_NUM_ELL_COEFFS] =
                 [const { MaybeUninit::uninit() }; BLS12_381_NUM_ELL_COEFFS];

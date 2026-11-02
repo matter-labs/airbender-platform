@@ -263,7 +263,7 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
     }
 
     #[inline(always)]
-    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput) -> ()>(&mut self, closure: FN) {
+    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput)>(&mut self, closure: FN) {
         keccak_pad::<SHA3>(self.state.as_words_mut(), self.filled_bytes);
         keccak_f1600(&mut self.state);
         let output = unsafe {

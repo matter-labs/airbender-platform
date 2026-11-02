@@ -716,6 +716,8 @@ pub(crate) fn fp12_cyclotomic_inverse_in_place<P: Fp12Config>(a: &mut Fp12<P>) {
 }
 
 /// Squaring in the cyclotomic subgroup (Granger-Scott)
+// Out of line: once inlined into the BLS12-381 final exponentiation it costs ~50k more cycles there.
+#[inline(never)]
 pub(crate) fn fp12_cyclotomic_square_in_place<P: Fp12Config>(a: &mut Fp12<P>)
 where
     P::Fp6Config: MulByXi,

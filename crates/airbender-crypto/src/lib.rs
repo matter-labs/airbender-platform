@@ -3,13 +3,13 @@
 #![allow(static_mut_refs)]
 #![allow(clippy::uninit_assumed_init)]
 #![allow(clippy::new_without_default)]
-// Only `secp256k1::context::ECMultContext::new_in` needs it, and that is behind
-// `alloc`. Declaring it unconditionally trips `unused_features` on every build
-// without that feature.
-#![cfg_attr(feature = "alloc", feature(allocator_api))]
+// `ECMultContext::new_in` and the allocating precompile endpoints need it, behind `alloc` (or
+// `cfg(test)`). Declaring it unconditionally trips `unused_features` on builds without them.
+#![cfg_attr(any(feature = "alloc", test), feature(allocator_api))]
 // The crate is `no_std`, so `context.rs`'s `use alloc::boxed::Box` needs the
 // crate linked explicitly. Without this, `--features alloc` does not build at all.
-#[cfg(feature = "alloc")]
+// Tests use `alloc` too (the oracle side of `hints`).
+#[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
 // Compile-time checks of the memory layout of the extension field towers and of the affine points,
@@ -44,7 +44,7 @@ macro_rules! assert_affine_layout {
 }
 pub mod affine_glv;
 #[allow(clippy::all)]
-#[allow(unused_imports, dead_code)]
+#[allow(unused_imports)]
 #[cfg(any(
     all(target_arch = "riscv32", feature = "bigint_ops"),
     feature = "proving",
@@ -55,8 +55,12 @@ pub mod ark_ff_delegation;
 #[allow(clippy::all)]
 #[allow(unused_imports, dead_code)]
 mod bigint_delegation;
+pub mod blake2f;
 #[allow(unexpected_cfgs)]
 pub mod blake2s;
+// Used by the precompiles and ModExp on RV32 only
+#[cfg(any(target_arch = "riscv32", test))]
+mod byte_order;
 pub mod bytes32;
 #[cfg(test)]
 mod delegation_counts;
@@ -64,7 +68,12 @@ pub(crate) mod extension_tower;
 #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
 pub mod field_inverse;
 pub mod hinted_ops;
+pub mod hints;
 pub(crate) mod jacobian;
+// ModExp allocates its operands and digits
+#[cfg(any(feature = "alloc", test))]
+pub mod modexp;
+pub mod precompiles;
 pub mod residue_witness;
 pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
@@ -149,7 +158,7 @@ pub trait MiniDigest: Sized {
     // Allow to reorder and avoid copying in finalize - output - reset operations sequence if hasher supports
     // such case due to it's internal structure
     #[inline(always)]
-    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput) -> ()>(&mut self, closure: FN) {
+    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput)>(&mut self, closure: FN) {
         let t = self.finalize_reset();
         (closure)(&t);
     }
@@ -177,3 +186,6 @@ pub fn parse_u256_be<const N: usize>(input: &[u8; N]) -> BigInt<4> {
     }
     BigInt::new(repr)
 }
+
+#[cfg(test)]
+mod signature_tests;

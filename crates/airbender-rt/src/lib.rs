@@ -1,8 +1,12 @@
 #![doc = include_str!("../README.md")]
 #![no_std]
 #![cfg_attr(
-    target_arch = "riscv32",
-    feature(alloc_error_handler, allocator_api, str_from_raw_parts)
+    all(target_arch = "riscv32", not(feature = "std")),
+    feature(alloc_error_handler)
+)]
+#![cfg_attr(
+    all(target_arch = "riscv32", feature = "std"),
+    feature(allocator_api, str_from_raw_parts)
 )]
 
 extern crate alloc;
@@ -14,6 +18,7 @@ extern crate std;
 extern crate std;
 
 pub mod allocator;
+#[cfg(feature = "boot")]
 pub mod boot;
 pub mod getrandom;
 pub mod sys;
@@ -22,8 +27,9 @@ pub mod uart;
 #[cfg(all(feature = "std", target_arch = "riscv32"))]
 mod glue;
 
-#[cfg(not(feature = "allocator-custom"))]
+#[cfg(all(feature = "boot", not(feature = "allocator-custom")))]
 pub use boot::start;
+#[cfg(feature = "boot")]
 pub use boot::start_with_allocator_init;
 
 #[cfg(all(not(feature = "std"), target_arch = "riscv32"))]

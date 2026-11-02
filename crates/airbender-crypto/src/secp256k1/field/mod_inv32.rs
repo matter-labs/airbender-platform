@@ -53,7 +53,7 @@ struct TransitionMatrix {
 
 impl TransitionMatrix {
     fn det(&self) -> i64 {
-        self.u as i64 * self.r as i64 - self.v as i64 * self.q as i64
+        mul_ss(self.u, self.r) - mul_ss(self.v, self.q)
     }
 
     fn divsteps30(eta: &mut i32, f0: Wrapping<u32>, g0: Wrapping<u32>) -> Self {
@@ -563,9 +563,30 @@ impl ModInfo {
 
 #[cfg(test)]
 mod tests {
+    use proptest::{prop_assert_eq, proptest};
+
     use super::{ModInfo, Signed30};
 
     const MOD_INFO: ModInfo = ModInfo::new([-0x3D1, -4, 0, 0, 0, 0, 0, 0, 65536], 0x2DDACACF);
+
+    /// `mul_su` and `mul_ss` match the native signed product, `mul_su` for a limb in `[0, 2^30)`
+    #[test]
+    fn signed_widening_matches_native_product() {
+        const LIMB_MAX: i32 = (1 << 30) - 1;
+        const EDGES: [i32; 7] = [i32::MIN, -(1 << 30), -1, 0, 1, LIMB_MAX, i32::MAX];
+        for a in EDGES {
+            for b in EDGES {
+                assert_eq!(super::mul_ss(a, b), i64::from(a) * i64::from(b));
+            }
+            for b in [0, 1, LIMB_MAX] {
+                assert_eq!(super::mul_su(a, b), i64::from(a) * i64::from(b));
+            }
+        }
+        proptest!(|(a: i32, b: i32, limb in 0..=LIMB_MAX)| {
+            prop_assert_eq!(super::mul_ss(a, b), i64::from(a) * i64::from(b));
+            prop_assert_eq!(super::mul_su(a, limb), i64::from(a) * i64::from(limb));
+        });
+    }
 
     #[allow(clippy::erasing_op)] // multiplication by 0 is intentional
     #[test]

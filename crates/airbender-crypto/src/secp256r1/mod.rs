@@ -48,3 +48,24 @@ impl Display for Secp256r1Err {
         }
     }
 }
+
+/// Verify a prehashed signature from canonical signature/public-key byte encodings.
+/// Valid but incorrect signatures return Some(false); malformed inputs return None.
+pub fn verify_prehash(msg: &[u8; 32], sig: &[u8; 64], pubkey: &[u8; 64]) -> Option<bool> {
+    if *pubkey == [0; 64] {
+        return None;
+    }
+    match verify(
+        msg,
+        sig[..32].try_into().unwrap(),
+        sig[32..].try_into().unwrap(),
+        pubkey[..32].try_into().unwrap(),
+        pubkey[32..].try_into().unwrap(),
+    ) {
+        Ok(valid) => Some(valid),
+        // Inputs have passed parsing here; the verification sum being infinity
+        // is a false equation, not malformed input.
+        Err(Secp256r1Err::RecoveredInfinity) => Some(false),
+        Err(_) => None,
+    }
+}
