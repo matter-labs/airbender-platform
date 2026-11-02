@@ -13,21 +13,96 @@ use super::exponent::{exponentiate, ModMul};
 use crate::hints::{MemoryOracle, MODEXP_ADVICE_QUERY_ID};
 use crate::modexp::strip_leading_zeroes;
 use crate::modexp::u256::U256 as HintU256;
-use crate::modexp::ModExpAdviceParamsGeneric;
+use crate::modexp::{ModExpAdviceParamsGeneric, ModExpOutput, MAX_DIGITS};
 use crate::{bigint_op_delegation_raw, bigint_op_delegation_with_carry_bit_raw, BigIntOps};
-use alloc::vec::Vec;
-use core::alloc::Allocator;
 use core::fmt::Debug;
 use core::mem::MaybeUninit;
 use ruint::aliases::U256;
 
-/// A little-endian big integer: the first `digits` digits of `backing`, whose capacity is kept
-pub(crate) struct BigintRepr<A: Allocator + Clone> {
-    pub(crate) backing: Vec<DelegatedU256, A>,
+/// The digits a `BigintRepr` can hold: a product of two operands of the most digits
+pub(crate) const BIGINT_CAPACITY: usize = 2 * MAX_DIGITS;
+
+/// The digits of a `BigintRepr` on the stack: `len` initialized slots, aligned for the
+/// delegation, and the spare capacity after them
+pub(crate) struct DigitBuffer {
+    slots: [MaybeUninit<DelegatedU256>; BIGINT_CAPACITY],
+    len: usize,
+}
+
+impl DigitBuffer {
+    pub(crate) fn new() -> Self {
+        Self {
+            slots: [const { MaybeUninit::uninit() }; BIGINT_CAPACITY],
+            len: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_ptr(&self) -> *const DelegatedU256 {
+        self.slots.as_ptr().cast()
+    }
+
+    /// The initialized digits
+    #[inline(always)]
+    pub(crate) fn as_slice(&self) -> &[DelegatedU256] {
+        // SAFETY: the first `len` slots are initialized (the invariant of `set_len`)
+        unsafe { core::slice::from_raw_parts(self.as_ptr(), self.len) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [DelegatedU256] {
+        // SAFETY: as for `as_slice`
+        unsafe { core::slice::from_raw_parts_mut(self.slots.as_mut_ptr().cast(), self.len) }
+    }
+
+    /// The slots after the initialized digits
+    #[inline(always)]
+    pub(crate) fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<DelegatedU256>] {
+        &mut self.slots[self.len..]
+    }
+
+    /// # Safety
+    ///
+    /// The first `len` slots must be initialized, and `len` at most the capacity.
+    #[inline(always)]
+    pub(crate) unsafe fn set_len(&mut self, len: usize) {
+        debug_assert!(len <= BIGINT_CAPACITY);
+        self.len = len;
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.len = len;
+        }
+    }
+
+    pub(crate) fn push(&mut self, digit: DelegatedU256) {
+        assert!(self.len < BIGINT_CAPACITY, "the digit buffer is full");
+        self.slots[self.len].write(digit);
+        self.len += 1;
+    }
+}
+
+impl core::ops::Index<usize> for DigitBuffer {
+    type Output = DelegatedU256;
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &DelegatedU256 {
+        &self.as_slice()[index]
+    }
+}
+
+/// A little-endian big integer: the first `digits` digits of `backing`
+pub(crate) struct BigintRepr {
+    pub(crate) backing: DigitBuffer,
     pub(crate) digits: usize,
 }
 
-impl<A: Allocator + Clone> Debug for BigintRepr<A> {
+impl Debug for BigintRepr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "0x")?;
         for digit in self.u64_digits_ref().iter().rev() {
@@ -39,16 +114,18 @@ impl<A: Allocator + Clone> Debug for BigintRepr<A> {
 }
 
 #[allow(clippy::bool_comparison)]
-impl<A: Allocator + Clone> BigintRepr<A> {
-    pub(crate) fn with_capacity_in(capacity: usize, allocator: A) -> Self {
-        let backing = Vec::with_capacity_in(capacity, allocator);
-
-        Self { backing, digits: 0 }
+impl BigintRepr {
+    /// Zero, with no digits
+    pub(crate) fn new() -> Self {
+        Self {
+            backing: DigitBuffer::new(),
+            digits: 0,
+        }
     }
 
-    pub(crate) fn duplicate_with_capacity(&self, capacity: usize, allocator: A) -> Self {
+    pub(crate) fn duplicate(&self) -> Self {
         unsafe {
-            let mut backing = Vec::with_capacity_in(capacity, allocator);
+            let mut backing = DigitBuffer::new();
             for (dst, src) in backing.spare_capacity_mut()[..self.digits_ref().len()]
                 .iter_mut()
                 .zip(self.digits_ref().iter())
@@ -65,11 +142,11 @@ impl<A: Allocator + Clone> BigintRepr<A> {
     }
 
     pub(crate) fn digits_ref(&self) -> &[DelegatedU256] {
-        &self.backing[..self.digits]
+        &self.backing.as_slice()[..self.digits]
     }
 
     pub(crate) fn digits_mut(&mut self) -> &mut [DelegatedU256] {
-        &mut self.backing[..self.digits]
+        &mut self.backing.as_mut_slice()[..self.digits]
     }
 
     pub(crate) fn u64_digits_ref(&self) -> &[u64] {
@@ -90,34 +167,31 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         self.digits = digits;
     }
 
-    pub(crate) fn capacity(&self) -> usize {
-        self.backing.capacity()
-    }
-
-    pub(crate) fn from_big_endian_with_double_capacity(bytes: &[u8], allocator: A) -> Self {
+    /// The integer of at most `MAX_DIGITS` significant digits (EIP-7823; longer ones panic)
+    pub(crate) fn from_big_endian(bytes: &[u8]) -> Self {
+        let bytes = strip_leading_zeroes(bytes);
         if bytes.is_empty() {
-            let backing = Vec::new_in(allocator);
-            return Self { backing, digits: 0 };
+            return Self::new();
         }
         let (remainder, digits_bytes) = bytes.as_rchunks::<32>();
-        let mut capacity = digits_bytes.len();
+        let mut max_digits = digits_bytes.len();
         if remainder.is_empty() == false {
-            capacity += 1;
+            max_digits += 1;
         }
-        let max_digits = capacity;
-        capacity *= 2;
+        assert!(
+            max_digits <= MAX_DIGITS,
+            "a ModExp operand is longer than EIP-7823 allows"
+        );
 
-        Self::from_big_endian(remainder, digits_bytes, max_digits, capacity, allocator)
+        Self::from_big_endian_digits(remainder, digits_bytes, max_digits)
     }
 
-    fn from_big_endian(
+    fn from_big_endian_digits(
         remainder: &[u8],
         digits_bytes: &[[u8; 32]],
         max_digits: usize,
-        capacity: usize,
-        allocator: A,
     ) -> Self {
-        let mut backing = Vec::with_capacity_in(capacity, allocator);
+        let mut backing = DigitBuffer::new();
         for (dst, digit) in backing.spare_capacity_mut()[..digits_bytes.len()]
             .iter_mut()
             .zip(digits_bytes.iter().rev())
@@ -139,7 +213,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         }
 
         let mut meaningful_digits = max_digits;
-        for digit in backing.iter().rev() {
+        for digit in backing.as_slice().iter().rev() {
             if digit.is_zero() {
                 meaningful_digits -= 1;
             } else {
@@ -154,51 +228,26 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         }
     }
 
-    pub(crate) fn from_big_endian_with_double_capacity_or_min_capacity(
-        bytes: &[u8],
-        min_capacity: usize,
-        allocator: A,
-    ) -> Self {
-        if bytes.is_empty() {
-            let backing = Vec::with_capacity_in(min_capacity, allocator);
-            return Self { backing, digits: 0 };
-        }
-        let (remainder, digits_bytes) = bytes.as_rchunks::<32>();
-        let mut capacity = digits_bytes.len();
-        if remainder.is_empty() == false {
-            capacity += 1;
-        }
-        let max_digits = capacity;
-        capacity *= 2;
-        capacity = core::cmp::max(min_capacity, capacity);
-
-        Self::from_big_endian(remainder, digits_bytes, max_digits, capacity, allocator)
-    }
-
     pub(crate) fn modpow(
         self,
         exp: &[u8],
         modulus: Self,
         advisor: &mut impl ModexpAdvisor,
-        allocator: A,
     ) -> Self {
         assert!(modulus.digits > 0);
         let n = modulus.digits;
         let mut current = self;
 
-        // sized for products of two reduced values and for the initial reduction of a long base
+        // every buffer holds a product of two operands, and so the initial reduction of a long
+        // base
         let mut arithmetic = BigintModMul {
             modulus: &modulus,
-            product: Self::with_capacity_in(2 * n, allocator.clone()),
-            quotient: Self::with_capacity_in(
-                core::cmp::max(n + 1, current.digits + 1 - n.min(current.digits)),
-                allocator.clone(),
-            ),
-            remainder: Self::with_capacity_in(n, allocator.clone()),
-            check: Self::with_capacity_in(core::cmp::max(2 * n, current.digits), allocator.clone()),
+            product: Self::new(),
+            quotient: Self::new(),
+            remainder: Self::new(),
+            check: Self::new(),
             scratch: ProductScratch::new(),
             advisor,
-            allocator: allocator.clone(),
         };
 
         // Reduce a base of `n` or more digits (the cost model assumes this gate). Afterwards every
@@ -217,12 +266,10 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         let exp = strip_leading_zeroes(exp);
         if exp.is_empty() {
             // x^0 = 1
-            let mut result = Vec::with_capacity_in(1, allocator);
-            result.push(DelegatedU256::ONE);
-            return Self {
-                backing: result,
-                digits: 1,
-            };
+            let mut result = Self::new();
+            result.backing.push(DelegatedU256::ONE);
+            result.digits = 1;
+            return result;
         }
 
         // 0^exp mod m = 0 for exp > 0
@@ -231,7 +278,6 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         }
 
         let result = exponentiate(&mut arithmetic, &current, exp);
-        drop(arithmetic);
 
         // the result must be below m
         result.assert_fully_reduced(modulus);
@@ -429,8 +475,8 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         assert!(borrow > 0);
     }
 
-    pub fn to_big_endian<B: Allocator>(&self, allocator: B) -> Vec<u8, B> {
-        let mut result = Vec::with_capacity_in(self.digits * 32, allocator);
+    pub fn to_big_endian(&self) -> ModExpOutput {
+        let mut result = ModExpOutput::new();
         let mut found_non_zero = false;
         for digit in self.digits_ref().iter().rev() {
             if digit.is_zero() == false {
@@ -439,8 +485,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
 
             // skip the zero top digits
             if found_non_zero {
-                let be_bytes = digit.to_be_bytes();
-                result.extend(be_bytes);
+                result.extend_from_slice(&digit.to_be_bytes());
             }
         }
 
@@ -486,28 +531,27 @@ impl ProductScratch {
 
 /// Modular multiplication of multi-digit values: the product, an advised quotient and
 /// remainder, and the check `q * m + r == product`. The remainder becomes the new value by
-/// swapping buffers (every value buffer has capacity for `n` digits).
-struct BigintModMul<'a, A: Allocator + Clone, Adv: ModexpAdvisor> {
-    modulus: &'a BigintRepr<A>,
-    product: BigintRepr<A>,
-    quotient: BigintRepr<A>,
-    remainder: BigintRepr<A>,
-    check: BigintRepr<A>,
+/// swapping buffers (every buffer has the same capacity).
+struct BigintModMul<'a, Adv: ModexpAdvisor> {
+    modulus: &'a BigintRepr,
+    product: BigintRepr,
+    quotient: BigintRepr,
+    remainder: BigintRepr,
+    check: BigintRepr,
     scratch: ProductScratch,
     advisor: &'a mut Adv,
-    allocator: A,
 }
 
-impl<A: Allocator + Clone, Adv: ModexpAdvisor> BigintModMul<'_, A, Adv> {
+impl<Adv: ModexpAdvisor> BigintModMul<'_, Adv> {
     /// `x = value mod m` for the `value` in `x` (at least as many digits as the modulus)
-    fn reduce_initially(&mut self, x: &mut BigintRepr<A>) {
+    fn reduce_initially(&mut self, x: &mut BigintRepr) {
         assert!(x.digits >= self.modulus.digits);
         core::mem::swap(x, &mut self.product);
         self.reduce_product_into(x);
     }
 
     /// `x = product mod m`: the advised remainder, after the check of the advice
-    fn reduce_product_into(&mut self, x: &mut BigintRepr<A>) {
+    fn reduce_product_into(&mut self, x: &mut BigintRepr) {
         let n = self.modulus.digits;
         assert!(self.product.digits > 0);
         self.advisor.get_reduction_op_advice(
@@ -516,9 +560,7 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> BigintModMul<'_, A, Adv> {
             &mut self.quotient,
             &mut self.remainder,
         );
-        assert!(
-            self.quotient.digits <= BigintRepr::<A>::max_quotient_digits(self.product.digits, n)
-        );
+        assert!(self.quotient.digits <= BigintRepr::max_quotient_digits(self.product.digits, n));
         assert!(self.remainder.digits <= n);
         self.check.fma_into(
             &self.quotient,
@@ -528,30 +570,26 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> BigintModMul<'_, A, Adv> {
             &mut self.scratch,
         );
         BigintRepr::assert_eq(&self.product, &self.check);
-        assert!(self.remainder.capacity() >= n && x.capacity() >= n);
         core::mem::swap(x, &mut self.remainder);
     }
 }
 
-impl<A: Allocator + Clone, Adv: ModexpAdvisor> ModMul for BigintModMul<'_, A, Adv> {
-    type Elem = BigintRepr<A>;
+impl<Adv: ModexpAdvisor> ModMul for BigintModMul<'_, Adv> {
+    type Elem = BigintRepr;
 
-    fn placeholder(&mut self) -> BigintRepr<A> {
-        BigintRepr {
-            backing: Vec::new_in(self.allocator.clone()),
-            digits: 0,
-        }
+    fn placeholder(&mut self) -> BigintRepr {
+        BigintRepr::new()
     }
 
-    fn clone_elem(&mut self, x: &BigintRepr<A>) -> BigintRepr<A> {
-        x.duplicate_with_capacity(self.modulus.digits, self.allocator.clone())
+    fn clone_elem(&mut self, x: &BigintRepr) -> BigintRepr {
+        x.duplicate()
     }
 
-    fn is_zero(&self, x: &BigintRepr<A>) -> bool {
+    fn is_zero(&self, x: &BigintRepr) -> bool {
         x.digits == 0
     }
 
-    fn square_assign(&mut self, x: &mut BigintRepr<A>) {
+    fn square_assign(&mut self, x: &mut BigintRepr) {
         if x.digits == 0 {
             return;
         }
@@ -559,7 +597,7 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> ModMul for BigintModMul<'_, A, Ad
         self.reduce_product_into(x);
     }
 
-    fn mul_assign(&mut self, x: &mut BigintRepr<A>, y: &BigintRepr<A>) {
+    fn mul_assign(&mut self, x: &mut BigintRepr, y: &BigintRepr) {
         if x.digits == 0 {
             return;
         }
@@ -575,12 +613,12 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> ModMul for BigintModMul<'_, A, Ad
 /// The source of the hints of the advice path
 pub(crate) trait ModexpAdvisor {
     /// The quotient and remainder of `a / m`
-    fn get_reduction_op_advice<A: Allocator + Clone>(
+    fn get_reduction_op_advice(
         &mut self,
-        a: &BigintRepr<A>,
-        m: &BigintRepr<A>,
-        quotient_dst: &mut BigintRepr<A>,
-        remainder_dst: &mut BigintRepr<A>,
+        a: &BigintRepr,
+        m: &BigintRepr,
+        quotient_dst: &mut BigintRepr,
+        remainder_dst: &mut BigintRepr,
     );
 
     /// The quotient `(hi * 2^256 + lo) / modulus` as `(q_lo, q_hi)`, for the single-digit
@@ -614,12 +652,10 @@ pub(crate) fn naive_wide_quotient(
 
 #[cfg(any(test, feature = "testing"))]
 pub(crate) mod naive_advisor {
-    use alloc::alloc::Global;
-
     use super::*;
     use num_bigint::BigUint;
 
-    fn write_bigint(src: BigUint, dst: &mut BigintRepr<impl Allocator + Clone>) {
+    fn write_bigint(src: BigUint, dst: &mut BigintRepr) {
         unsafe {
             let mut src = src.iter_u64_digits();
             let dst_capacity = dst.clear_as_capacity_mut();
@@ -650,18 +686,18 @@ pub(crate) mod naive_advisor {
     pub(crate) struct NaiveAdvisor;
 
     impl ModexpAdvisor for NaiveAdvisor {
-        fn get_reduction_op_advice<A: Allocator + Clone>(
+        fn get_reduction_op_advice(
             &mut self,
-            a: &BigintRepr<A>,
-            m: &BigintRepr<A>,
-            quotient_dst: &mut BigintRepr<A>,
-            remainder_dst: &mut BigintRepr<A>,
+            a: &BigintRepr,
+            m: &BigintRepr,
+            quotient_dst: &mut BigintRepr,
+            remainder_dst: &mut BigintRepr,
         ) {
-            let a = a.to_big_endian(Global);
+            let a = a.to_big_endian();
             let a = BigUint::from_bytes_be(&a);
 
             assert!(m.digits > 0);
-            let m = m.to_big_endian(Global);
+            let m = m.to_big_endian();
             let m = BigUint::from_bytes_be(&m);
 
             use num_traits::ops::euclid::Euclid;
@@ -690,11 +726,7 @@ const BIGINT_DIGIT_WORDS: usize = U256::BYTES / core::mem::size_of::<u32>();
 
 /// Receives the next `num_words` words of the hint straight into the digits of `dst`, whole digits
 /// at a time (the last digit zero-padded)
-fn write_bigint<O: MemoryOracle>(
-    oracle: &mut O,
-    num_words: usize,
-    dst: &mut BigintRepr<impl Allocator + Clone>,
-) {
+fn write_bigint<O: MemoryOracle>(oracle: &mut O, num_words: usize, dst: &mut BigintRepr) {
     let num_digits = num_words.div_ceil(BIGINT_DIGIT_WORDS);
     let dst_capacity = dst.clear_as_capacity_mut();
     assert!(dst_capacity.len() >= num_digits, "the hint is too long");
@@ -713,12 +745,12 @@ fn write_bigint<O: MemoryOracle>(
 }
 
 impl<'a, O: MemoryOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
-    fn get_reduction_op_advice<A: Allocator + Clone>(
+    fn get_reduction_op_advice(
         &mut self,
-        a: &BigintRepr<A>,
-        m: &BigintRepr<A>,
-        quotient_dst: &mut BigintRepr<A>,
-        remainder_dst: &mut BigintRepr<A>,
+        a: &BigintRepr,
+        m: &BigintRepr,
+        quotient_dst: &mut BigintRepr,
+        remainder_dst: &mut BigintRepr,
     ) {
         assert!(m.digits > 0);
         // the oracle reads the request and the digits while it receives the query: their addresses
@@ -779,18 +811,18 @@ impl<'a, O: MemoryOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
 
 #[cfg(test)]
 mod tests {
-    use std::alloc::Global;
-
     use super::*;
     use crate::hints::test_support::InProcessMemoryOracle;
     use crate::hints::QuerierMemory;
+    use std::vec;
+    use std::vec::Vec;
 
     /// The quotient and remainder read from an oracle that answers with `response`
-    fn advice(response: Vec<u32>) -> (BigintRepr<Global>, BigintRepr<Global>) {
-        let dividend = BigintRepr::from_big_endian_with_double_capacity(&[0xA5; 96], Global);
-        let modulus = BigintRepr::from_big_endian_with_double_capacity(&[0x5A; 64], Global);
-        let mut quotient = BigintRepr::with_capacity_in(4, Global);
-        let mut remainder = BigintRepr::with_capacity_in(4, Global);
+    fn advice(response: Vec<u32>) -> (BigintRepr, BigintRepr) {
+        let dividend = BigintRepr::from_big_endian(&[0xA5; 96]);
+        let modulus = BigintRepr::from_big_endian(&[0x5A; 64]);
+        let mut quotient = BigintRepr::new();
+        let mut remainder = BigintRepr::new();
         let mut response = Some(response);
         let mut oracle = InProcessMemoryOracle::new(move |query_id, _, _: &dyn QuerierMemory| {
             assert_eq!(query_id, MODEXP_ADVICE_QUERY_ID);

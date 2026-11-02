@@ -1,13 +1,13 @@
 //! The BLS12-381 pairing check (EIP-2537).
 
 use super::*;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints as curve_hints;
 use crate::hints::{Bls12381Pair, PairingClaim};
 use crate::{ark_ec::pairing::Pairing, ark_ff::One, bls12_381::curves::Bls12_381};
 use alloc::vec::Vec;
 
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 use super::super::unavailable as curve_hints;
 
 /// The size of the EIP-2537 encoding of a pair of the pairing check: a G1 point and a G2 point
@@ -66,7 +66,7 @@ fn pairing_product_is_identity<O: MemoryOracle>(
         PairingClaim::Identity { d, s, .. } => {
             let l = Bls12_381::multi_miller_loop_with_initial_owned(&d, g1(), g2());
             assert!(
-                crate::residue_witness::bls12_381::check(&l, &d, &s),
+                crate::oracle_common::residue_witness::bls12_381::check(&l, &d, &s),
                 "the residue witness of the pairing claimed to be the identity is wrong"
             );
             true
@@ -74,7 +74,7 @@ fn pairing_product_is_identity<O: MemoryOracle>(
         PairingClaim::NotIdentity { f_inverse } => {
             let f = Bls12_381::multi_miller_loop(g1(), g2()).0;
             Bls12_381::final_exponentiation_with_inverse(&f, |f| {
-                curve_hints::checked_inverse(f, f_inverse)
+                Some(curve_hints::checked_inverse(f, f_inverse))
             })
             .expect("the Miller loop output is invertible")
             .is_one()
@@ -82,7 +82,7 @@ fn pairing_product_is_identity<O: MemoryOracle>(
     }
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::super::tests as bls_tests;

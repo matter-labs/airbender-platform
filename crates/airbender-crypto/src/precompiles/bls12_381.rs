@@ -4,23 +4,22 @@
 use crate::ark_ec::{AffineRepr, CurveGroup};
 #[cfg(any(feature = "alloc", test))]
 use crate::ark_ff::PrimeField;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::ark_ff::Zero;
 use crate::bls12_381::*;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints::{
     bls12_381_fq2_inverse, bls12_381_fq2_sqrt, bls12_381_fq_inverse, bls12_381_fq_sqrt,
     Bls12381Fq2Divider, Bls12381FqDivider,
 };
 use airbender_oracle::MemoryOracle;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use core::cell::RefCell;
 
 // the dividers of the subgroup checks of the MSMs and the pairing check
 #[cfg(all(
     any(feature = "alloc", test),
-    target_arch = "riscv32",
-    not(feature = "bigint_ops")
+    not(any(feature = "hinted_operations", test))
 ))]
 use super::unavailable::{Bls12381Fq2Divider, Bls12381FqDivider};
 
@@ -154,9 +153,9 @@ pub fn bls12_381_g1_add<O: MemoryOracle>(
     let p1 = parse_g1(b)?;
 
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => g1::add_affine_with_divider(&p0, &p1, &mut Bls12381FqDivider::new(oracle)),
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => (p0 + p1).into_affine(),
     };
@@ -174,9 +173,9 @@ pub fn bls12_381_g2_add<O: MemoryOracle>(
     let p1 = parse_g2(b)?;
 
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => g2::add_affine_with_divider(&p0, &p1, &mut Bls12381Fq2Divider::new(oracle)),
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => (p0 + p1).into_affine(),
     };
@@ -195,7 +194,7 @@ pub fn bls12_381_map_fp_to_g1<O: MemoryOracle>(
         crate::bls12_381::eip2537::parse_fq_bytes(fp).ok_or(Bls12Error::InvalidFieldElement)?;
     let invalid_field = || Bls12Error::InvalidFieldElement;
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => {
             // The callbacks run sequentially; both need access to the same oracle.
             let oracle = RefCell::new(oracle);
@@ -220,7 +219,7 @@ pub fn bls12_381_map_fp_to_g1<O: MemoryOracle>(
                 &mut Bls12381FqDivider::new(oracle.into_inner()),
             )
         }
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => crate::bls12_381::eip2537::map_fp_to_g1(field_element)
             .map_err(|_| invalid_field())?
@@ -240,7 +239,7 @@ pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
 
     let invalid_field = || Bls12Error::InvalidFieldElement;
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => {
             // The callbacks run sequentially; both need access to the same oracle.
             let oracle = RefCell::new(oracle);
@@ -265,7 +264,7 @@ pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
                 &mut Bls12381Fq2Divider::new(oracle.into_inner()),
             )
         }
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => crate::bls12_381::eip2537::map_fp2_to_g2(field_element)
             .map_err(|_| invalid_field())?
@@ -275,7 +274,7 @@ pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
     Ok(result)
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

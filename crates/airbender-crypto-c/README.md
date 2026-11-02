@@ -23,10 +23,11 @@ the `precompiles` endpoints, `modexp`, `blake2f` or a checked hinted operation.
   0 to 3, not Ethereum's `v`, and recovery returns x || y without the `0x04` prefix. ECDSA
   verification accepts both s forms.
 - An empty BN254 pairing is true; an empty BLS12-381 MSM or pairing fails (EIP-2537).
-- `zkvm_modexp` writes exactly `mod_len` bytes, left-padded; there is no size limit.
+- `zkvm_modexp` writes exactly `mod_len` bytes, left-padded. Each operand may have up to 1024
+  significant bytes (EIP-7823); longer ones abort.
 - `zkvm_blake2f` takes `rounds` as a number (decode EVM's big-endian bytes first) and `f` as
   0 or 1.
-- The pairing checks, MSMs and ModExp allocate; the other exports don't.
+- The pairing checks and MSMs allocate; the other exports, ModExp included, don't.
 
 ## Hints
 
@@ -39,7 +40,8 @@ or is ignored, and never changes a result.
   guest's calls, with the same inputs and in the same order, between
   `airbender_crypto_record_begin()` and `airbender_crypto_record_end(words, capacity)`, and
   places the words in the guest's input where the guest makes the calls. Rust hosts use
-  `airbender_crypto::hints::record_hints`.
+  `airbender_crypto::hints::record_hints`. The tape is in the representation of the delegated
+  fields, for a guest built with `delegation`.
 - Recording is per thread. Recordings on several threads are independent only if nothing in
   the build enables `airbender-crypto/proving`, whose emulated delegated fields share one
   scratch space.
@@ -47,10 +49,12 @@ or is ignored, and never changes a result.
 
 ## Features
 
-All RV32 only; `delegation` is a compile error natively.
+All RV32 only; `delegation` is a compile error natively. Native builds always have the hinted
+operations and their oracle side (`airbender-crypto/oracle_implementations`), for recording.
 
 - `delegation`: delegated big-integer arithmetic (`airbender-crypto/proving`).
-- `csr-oracle` (requires `delegation`): hints through the CSR.
+- `csr-oracle`: hints through the CSR (`airbender-crypto/hinted_operations`), with or without
+  `delegation`.
 - `c-runtime`: airbender-rt's allocator and panic handler for C guests. The guest calls
   `airbender_crypto_init_heap(start, end)` once before anything allocates. Leave it off in
   Rust guests that start through airbender-rt.
@@ -60,7 +64,8 @@ All RV32 only; `delegation` is a compile error natively.
 ```sh
 # Native static library; `-- --print native-static-libs` lists the platform libraries
 cargo rustc -p airbender-crypto-c --release --crate-type staticlib
-# RV32, with c-runtime. FEATURES: 'delegation' (default), 'csr-oracle delegation' or ''
+# RV32, with c-runtime. FEATURES: 'delegation' (default), 'csr-oracle delegation', 'csr-oracle'
+# or ''
 sh crates/airbender-crypto-c/build-rv32.sh
 ```
 

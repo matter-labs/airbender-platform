@@ -68,9 +68,24 @@ rand_chacha = { workspace = true }
 [features]
 # forward = ["blake2"]
 forward = []
-proving = ["single_round_with_control", "bigint_ops", "secp256k1-static-context", "keccak_special5"]
-default = ["forward", "secp256k1-static-context"]
+proving = [
+    "single_round_with_control",
+    "bigint_ops",
+    "hinted_operations",
+    "secp256k1-static-context",
+    "keccak_special5",
+]
+default = ["forward", "secp256k1-static-context", "hinted_operations"]
+# The hinted paths of the primitives: the oracle witnesses (`hints`) in the recovery, the pairing
+# checks, the MSMs, KZG and ModExp. Independent of `bigint_ops`: the answers are read in the
+# representation of the fields of the build.
+hinted_operations = []
+# The oracle side on a native host: the implementations that compute the witnesses
+# (`*/oracle_implementations`, `oracle_common`), which allocate, and the recorder of the hint
+# tape.
+oracle_implementations = ["hinted_operations", "alloc"]
 # bigint_ops = ["zeroize", "num-bigint", "num-traits", "num-integer"]
+# The bigint delegation of the RV32 guest for the field arithmetic
 bigint_ops = []
 keccak_special5 = []
 single_round_with_control = ["blake2s_u32/blake2_with_compression"]
@@ -79,6 +94,7 @@ secp256k1-static-context = []
 # Experimental: evmone-like structure of the ecrecover's multi-scalar multiplication (fixed windows for G,
 # joint NAF for the recovered point). Applies to the delegation-based field (`bigint_ops`) only.
 secp256k1-shamir-msm = []
+# The allocating endpoints (the pairing checks and the MSMs) and `ECMultContext::new_in`
 alloc = []
 sha3_tests = []
 testing = []

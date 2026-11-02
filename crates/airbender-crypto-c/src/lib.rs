@@ -10,21 +10,15 @@
 //! An export takes airbender-crypto's hinted path when there is an oracle (`with_active_oracle`)
 //! and the plain path otherwise. On RV32 with `csr-oracle` the oracle is the non-determinism CSR;
 //! natively it is the recorder of an active recording on the calling thread. A wrong or missing
-//! hint aborts execution or is ignored; it never changes a result.
+//! hint aborts execution or is ignored; it never changes a result. A tape recorded natively is
+//! in the representation of the delegated fields (`delegation`); a guest without `delegation`
+//! reads the hints in the native representation (see `airbender_crypto::hints::HintTarget`).
 #![cfg_attr(target_arch = "riscv32", no_std)]
 #![feature(allocator_api)]
 
 // Native builds record the hints of the guest's delegated arithmetic without delegating.
 #[cfg(all(feature = "delegation", not(target_arch = "riscv32")))]
 compile_error!("`delegation` is RV32 only: native builds record hints without it");
-
-// The hint answers are written in the layout of the delegated fields.
-#[cfg(all(
-    feature = "csr-oracle",
-    target_arch = "riscv32",
-    not(feature = "delegation")
-))]
-compile_error!("`csr-oracle` requires `delegation`");
 
 extern crate alloc;
 use airbender_crypto as crypto;
@@ -37,14 +31,14 @@ use crypto::ark_ff::{AdditiveGroup, Field, PrimeField};
 use crypto::hints::{HintError, MemoryOracle};
 
 /// `$hinted` with the oracle of the call (`$oracle: &mut ActiveOracle`), else `$plain`. The hinted
-/// operations exist natively and on RV32 with `delegation`. At most once per export.
+/// operations exist natively and on RV32 with `csr-oracle`. At most once per export.
 macro_rules! hinted {
     (|$oracle:ident| $hinted:expr, $plain:expr $(,)?) => {
         $crate::with_active_oracle(|oracle| match oracle {
-            #[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
+            #[cfg(any(not(target_arch = "riscv32"), feature = "csr-oracle"))]
             Some($oracle) => $hinted,
-            #[cfg(all(target_arch = "riscv32", not(feature = "delegation")))]
-            Some(_) => unreachable!("no oracle without delegation"),
+            #[cfg(all(target_arch = "riscv32", not(feature = "csr-oracle")))]
+            Some(_) => unreachable!("no oracle without csr-oracle"),
             None => $plain,
         })
     };
@@ -365,7 +359,8 @@ impl crypto::modexp::TryExtend<u8> for ModExpOutput<'_> {
 }
 
 #[no_mangle]
-/// Arbitrary-length big-endian ModExp; the output is exactly `mod_len` bytes.
+/// Big-endian ModExp of operands of up to 1024 significant bytes each (EIP-7823; longer ones
+/// abort); the output is exactly `mod_len` bytes. Nothing is allocated.
 /// # Safety
 /// See the crate-level contract. Output may overlap any input.
 pub unsafe extern "C" fn zkvm_modexp(
@@ -382,15 +377,13 @@ pub unsafe extern "C" fn zkvm_modexp(
     let base = input(base, base_len);
     let exp = input(exp, exp_len);
     let modulus = input(modulus, mod_len);
-    let result = with_active_oracle(|oracle| {
-        crypto::modexp::modexp(base, exp, modulus, alloc::alloc::Global, oracle)
-    });
+    let result = with_active_oracle(|oracle| crypto::modexp::modexp(base, exp, modulus, oracle));
     // The result is owned, so the output may overlap the operands.
     let mut output = ModExpOutput {
         bytes: slice::from_raw_parts_mut(output, mod_len),
         written: 0,
     };
-    crypto::modexp::write_modexp_output(result, mod_len, &mut output)
+    crypto::modexp::write_modexp_output(&result, mod_len, &mut output)
         .expect("the output holds mod_len bytes");
     debug_assert_eq!(output.written, mod_len);
     EOK

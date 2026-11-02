@@ -1,5 +1,5 @@
-//! The exports that take no allocator use no heap, without a recording. The pairing checks, MSMs
-//! and ModExp allocate their working vectors.
+//! The exports that take no allocator use no heap, without a recording. The pairing checks and
+//! MSMs allocate their working vectors.
 mod common;
 
 use airbender_crypto as crypto;

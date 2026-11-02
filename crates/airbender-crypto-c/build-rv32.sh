@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the RV32 static library, with `c-runtime`. FEATURES defaults to `delegation`;
-# 'csr-oracle delegation' adds hints, '' selects software arithmetic.
+# 'csr-oracle delegation' adds hints, 'csr-oracle' hints on software arithmetic, '' selects
+# software arithmetic.
 # RUSTFLAGS must reach every crate: lower-atomic only on this one leaves atomic libcalls.
 set -eu
 cd "$(dirname "$0")/../.."

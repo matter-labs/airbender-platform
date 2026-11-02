@@ -9,7 +9,7 @@ use crypto::ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use crypto::ark_ec::{AffineRepr, CurveGroup};
 use crypto::precompiles;
 use crypto::{bls12_381 as bls, bn254 as bn};
-#[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
+#[cfg(any(not(target_arch = "riscv32"), feature = "csr-oracle"))]
 use crypto::{
     hinted_ops,
     hints::{self, Bls12381Fq2Divider, Bls12381FqDivider},

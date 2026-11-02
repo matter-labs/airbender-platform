@@ -5,7 +5,7 @@ use core::mem::MaybeUninit;
 use crypto::ark_ff::{Field, Zero};
 use crypto::secp256k1::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
 use crypto::secp256k1::{field::FieldElement, scalars::Scalar};
-#[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
+#[cfg(any(not(target_arch = "riscv32"), feature = "csr-oracle"))]
 use crypto::{
     affine_glv::Divider,
     hints::{self, MemoryOracle, Secp256k1HooksWithOracle},
@@ -19,7 +19,7 @@ fn encode<F: Field, const N: usize>(value: F) -> Bytes<N> {
 }
 
 /// `a / b` from a hinted divider, for a non-zero `b`
-#[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
+#[cfg(any(not(target_arch = "riscv32"), feature = "csr-oracle"))]
 fn quotient<F: Copy, D: Divider<F>>(mut divider: D, a: F, b: F) -> F {
     let mut fraction = [a, b];
     let mut quotient = MaybeUninit::uninit();
@@ -28,7 +28,7 @@ fn quotient<F: Copy, D: Divider<F>>(mut divider: D, a: F, b: F) -> F {
 
 /// The inverse in bn254 `Fq2 = Fq[u] / (u² + 1)` from one checked inverse hint of the norm
 /// `c0² + c1²`, which is non-zero for a non-zero element as -1 is not a square in Fq.
-#[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
+#[cfg(any(not(target_arch = "riscv32"), feature = "csr-oracle"))]
 fn bn254_fq2_inverse<O: MemoryOracle>(oracle: &mut O, value: &bn::Fq2) -> Option<bn::Fq2> {
     let norm = value.c0.square() + value.c1.square();
     let inverse = hints::bn254_fq_inverse(oracle, &norm)?;

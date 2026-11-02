@@ -1,6 +1,7 @@
-use alloc::vec::Vec;
+//! ModExp with hints: a modulus of up to 32 bytes on the single-digit path (`single_digit`), a
+//! longer one on the multi-digit path (`bigint`), both walking the exponent as `exponent` does.
+
 use bigint::ModexpAdvisor;
-use core::alloc::Allocator;
 
 mod bigint;
 mod digit;
@@ -8,43 +9,45 @@ mod exponent;
 mod single_digit;
 
 use self::bigint::BigintRepr;
-use crate::modexp::strip_leading_zeroes;
+use crate::modexp::{checked_operand, ModExpOutput};
 use airbender_oracle::MemoryOracle;
 
 /// `base^exp mod modulus` for big-endian operands, with hints from `oracle`. Every hint is checked
 /// and a wrong one panics. A zero result (also for a modulus of 0 or 1) has no bytes;
-/// [`write_modexp_output`](super::write_modexp_output) pads it.
-pub fn modexp<O: MemoryOracle, A: Allocator + Clone>(
+/// [`write_modexp_output`](super::write_modexp_output) pads it. The base and the modulus must
+/// have at most [`MAX_OPERAND_BYTES`](super::MAX_OPERAND_BYTES) significant bytes.
+pub fn modexp<O: MemoryOracle>(
     base: &[u8],
     exp: &[u8],
     modulus: &[u8],
     oracle: &mut O,
-    allocator: A,
-) -> Vec<u8, A> {
+) -> ModExpOutput {
     let mut advisor = self::bigint::OracleAdvisor { inner: oracle };
 
-    modexp_inner::<A>(base, exp, modulus, &mut advisor, allocator)
+    modexp_inner(base, exp, modulus, &mut advisor)
 }
 
 /// [`modexp`] with hints computed natively instead of by an oracle, for fuzzing.
 #[cfg(feature = "testing")]
-pub fn delegated_modexp_with_naive_advisor(base: &[u8], exp: &[u8], modulus: &[u8]) -> Vec<u8> {
-    use alloc::alloc::Global;
+pub fn delegated_modexp_with_naive_advisor(
+    base: &[u8],
+    exp: &[u8],
+    modulus: &[u8],
+) -> ModExpOutput {
     let mut advisor = bigint::naive_advisor::NaiveAdvisor;
-    modexp_inner::<Global>(base, exp, modulus, &mut advisor, Global)
+    modexp_inner(base, exp, modulus, &mut advisor)
 }
 
-#[allow(clippy::needless_borrow)]
-fn modexp_inner<A: Allocator + Clone>(
+fn modexp_inner(
     base: &[u8],
     exp: &[u8],
     modulus: &[u8],
     advisor: &mut impl ModexpAdvisor,
-    allocator: A,
-) -> Vec<u8, A> {
-    let modulus_digits = strip_leading_zeroes(modulus);
+) -> ModExpOutput {
+    let modulus_digits = checked_operand(modulus);
+    let base = checked_operand(base);
     if modulus_digits.is_empty() {
-        return Vec::new_in(allocator);
+        return ModExpOutput::new();
     }
     if modulus_digits.len() <= 32 {
         // one digit: the U256 path
@@ -53,45 +56,37 @@ fn modexp_inner<A: Allocator + Clone>(
         let m = crate::modexp::u256::U256::from_be_bytes(&padded);
         if m.is_one() {
             // x^e mod 1 = 0
-            return Vec::new_in(allocator);
+            return ModExpOutput::new();
         }
-        return single_digit::modexp(base, exp, &m, advisor, allocator);
+        return single_digit::modexp(base, exp, &m, advisor);
     }
 
-    let m = BigintRepr::from_big_endian_with_double_capacity(&modulus, allocator.clone());
+    let m = BigintRepr::from_big_endian(modulus_digits);
     debug_assert!(m.digits > 1);
-    {
-        let min_capacity = m.capacity();
-        let x = BigintRepr::from_big_endian_with_double_capacity_or_min_capacity(
-            &base,
-            min_capacity,
-            allocator.clone(),
-        );
-        let x = x.modpow(&exp, m, advisor, allocator.clone());
-        x.to_big_endian(allocator)
-    }
+    let x = BigintRepr::from_big_endian(base);
+    let x = x.modpow(exp, m, advisor);
+    x.to_big_endian()
 }
 
 #[cfg(test)]
 mod test {
-    use std::alloc::Global;
-
     use super::bigint::naive_advisor::NaiveAdvisor;
     use super::*;
     use crate::modexp::u256::U256;
     use num_bigint::BigUint;
     use num_traits::Zero;
+    use std::vec;
 
     fn modexp_with_advisor(
         base: &[u8],
         exp: &[u8],
         modulus: &[u8],
         advisor: &mut impl ModexpAdvisor,
-    ) -> Vec<u8> {
-        super::modexp_inner(base, exp, modulus, advisor, Global)
+    ) -> ModExpOutput {
+        super::modexp_inner(base, exp, modulus, advisor)
     }
 
-    fn modexp_honest(base: &[u8], exp: &[u8], modulus: &[u8]) -> Vec<u8> {
+    fn modexp_honest(base: &[u8], exp: &[u8], modulus: &[u8]) -> ModExpOutput {
         modexp_with_advisor(base, exp, modulus, &mut NaiveAdvisor)
     }
 
@@ -237,10 +232,7 @@ mod test {
         next_response: usize,
     }
 
-    fn write_bigint_digits<A: core::alloc::Allocator + Clone>(
-        digits: &[u64],
-        dst: &mut BigintRepr<A>,
-    ) {
+    fn write_bigint_digits(digits: &[u64], dst: &mut BigintRepr) {
         unsafe {
             let dst_capacity = dst.clear_as_capacity_mut();
             for (dst_digit, src_digit) in dst_capacity.iter_mut().zip(digits.iter()) {
@@ -255,12 +247,12 @@ mod test {
     }
 
     impl ModexpAdvisor for MaliciousReductionAdvisor {
-        fn get_reduction_op_advice<A: core::alloc::Allocator + Clone>(
+        fn get_reduction_op_advice(
             &mut self,
-            _a: &BigintRepr<A>,
-            _m: &BigintRepr<A>,
-            quotient_dst: &mut BigintRepr<A>,
-            remainder_dst: &mut BigintRepr<A>,
+            _a: &BigintRepr,
+            _m: &BigintRepr,
+            quotient_dst: &mut BigintRepr,
+            remainder_dst: &mut BigintRepr,
         ) {
             let (quotient, remainder) = &self.responses[self.next_response];
             self.next_response += 1;

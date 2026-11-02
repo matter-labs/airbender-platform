@@ -1,7 +1,7 @@
 //! ecrecover: the public key of a secp256k1 signature.
 
 use super::WordAligned;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints::Secp256k1HooksWithOracle;
 use airbender_oracle::MemoryOracle;
 
@@ -21,7 +21,7 @@ pub fn secp256k1_ecrecover<O: MemoryOracle>(
     use crate::secp256k1::{hooks::DefaultSecp256k1Hooks, recover_from_bytes_with_hooks};
 
     let public_key = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => recover_from_bytes_with_hooks(
             digest,
             r,
@@ -29,7 +29,7 @@ pub fn secp256k1_ecrecover<O: MemoryOracle>(
             y_is_odd,
             &mut Secp256k1HooksWithOracle::new(oracle),
         ),
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => recover_from_bytes_with_hooks(digest, r, s, y_is_odd, &mut DefaultSecp256k1Hooks),
     }
@@ -44,7 +44,7 @@ pub fn secp256k1_ecrecover<O: MemoryOracle>(
     Ok(encoded)
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

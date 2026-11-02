@@ -1,32 +1,60 @@
 //! Arbitrary-length modular exponentiation for the ModExp precompile (`0x05`).
 //!
 //! [`modexp`] runs the hinted path ([`advice::modexp`]) when given an oracle, and the software
-//! path ([`software::modexp`]) otherwise. Both agree after [`write_modexp_output`].
+//! path ([`software::modexp`]) otherwise. Both agree after [`write_modexp_output`]. The operands
+//! are bounded by EIP-7823 ([`MAX_OPERAND_BYTES`]), so every working value lives on the stack
+//! ([`FixedVec`]): nothing is allocated.
 
 pub mod advice;
+pub mod fixed_vec;
+#[cfg(all(
+    any(feature = "oracle_implementations", test),
+    target_pointer_width = "64"
+))]
+pub mod oracle_implementations;
 pub mod software;
 pub(crate) mod u256;
 
 #[cfg(all(test, target_pointer_width = "64"))]
 mod test_vectors;
 
+pub use self::fixed_vec::FixedVec;
 use crate::hints::{read_querier_word, HintError, MemoryOracle, QuerierMemory};
-use alloc::vec::Vec;
-use core::alloc::Allocator;
+
+/// The most bytes of a base, an exponent or a modulus (EIP-7823); longer operands are rejected by
+/// the caller, and panic here.
+pub const MAX_OPERAND_BYTES: usize = 1024;
+
+/// The most 256-bit digits of an operand
+pub(crate) const MAX_DIGITS: usize = MAX_OPERAND_BYTES / 32;
+
+/// The result of [`modexp`]: at most [`MAX_OPERAND_BYTES`] big-endian bytes, without leading
+/// zeroes on the advice path (see [`write_modexp_output`])
+pub type ModExpOutput = FixedVec<u8, MAX_OPERAND_BYTES>;
 
 /// `base^exp mod modulus` for big-endian operands: the advice path with an oracle, the software
-/// path without one.
-pub fn modexp<O: MemoryOracle, A: Allocator + Clone>(
+/// path without one. The base and the modulus must have at most [`MAX_OPERAND_BYTES`]
+/// significant bytes.
+pub fn modexp<O: MemoryOracle>(
     base: &[u8],
     exp: &[u8],
     modulus: &[u8],
-    allocator: A,
     oracle: Option<&mut O>,
-) -> Vec<u8, A> {
+) -> ModExpOutput {
     match oracle {
-        Some(oracle) => advice::modexp(base, exp, modulus, oracle, allocator),
-        None => software::modexp(base, exp, modulus, allocator),
+        Some(oracle) => advice::modexp(base, exp, modulus, oracle),
+        None => software::modexp(base, exp, modulus),
     }
+}
+
+/// The significant bytes of an operand, checked against the EIP-7823 bound
+pub(crate) fn checked_operand(bytes: &[u8]) -> &[u8] {
+    let significant = strip_leading_zeroes(bytes);
+    assert!(
+        significant.len() <= MAX_OPERAND_BYTES,
+        "a ModExp operand is longer than EIP-7823 allows"
+    );
+    significant
 }
 
 /// Fallible `Extend`: the destination of [`write_modexp_output`].
@@ -38,7 +66,8 @@ pub trait TryExtend<T> {
         I: IntoIterator<Item = T>;
 }
 
-impl<A: Allocator, T> TryExtend<T> for Vec<T, A> {
+#[cfg(any(feature = "alloc", test))]
+impl<A: core::alloc::Allocator, T> TryExtend<T> for alloc::vec::Vec<T, A> {
     type Error = ();
 
     fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
@@ -52,15 +81,17 @@ impl<A: Allocator, T> TryExtend<T> for Vec<T, A> {
 
 /// Writes a [`modexp`] result to `dst` as `mod_len` big-endian bytes, truncated to its low bytes
 /// or left-padded with zeroes.
-pub fn write_modexp_output<D: ?Sized + TryExtend<u8>, A: Allocator>(
-    output: Vec<u8, A>,
+pub fn write_modexp_output<D: ?Sized + TryExtend<u8>>(
+    output: &[u8],
     mod_len: usize,
     dst: &mut D,
 ) -> Result<(), D::Error> {
     if output.len() >= mod_len {
         dst.try_extend(output[(output.len() - mod_len)..].iter().copied())
     } else {
-        dst.try_extend(core::iter::repeat_n(0, mod_len - output.len()).chain(output))
+        dst.try_extend(
+            core::iter::repeat_n(0, mod_len - output.len()).chain(output.iter().copied()),
+        )
     }
 }
 
@@ -104,7 +135,7 @@ pub fn read_modexp_advice_params<M: QuerierMemory + ?Sized>(
             .checked_mul(word_size)
             .and_then(|offset| address.checked_add(offset))
             .ok_or(HintError("querier address overflows"))?;
-        read_querier_word(memory, field_address)
+        read_querier_word(memory, field_address).map_err(HintError::from)
     };
     Ok(ModExpAdviceParamsGeneric {
         op: field(0)?,
@@ -156,8 +187,8 @@ mod tests {
     use crate::bigint_delegation::delegation::DELEGATION_CALLS;
     use crate::hints::test_support::TapeOracle;
     use crate::hints::{record_hints, NoHints, RecordingHintOracle};
-    use std::alloc::Global;
     use std::vec;
+    use std::vec::Vec;
 
     /// Splits a precompile input (three 32-byte lengths, then the operands, zero-padded if short)
     /// into base, exponent, modulus and the modulus length.
@@ -185,7 +216,7 @@ mod tests {
         (base, exp, modulus, mod_len)
     }
 
-    fn padded(output: Vec<u8, Global>, mod_len: usize) -> Vec<u8> {
+    fn padded(output: &[u8], mod_len: usize) -> Vec<u8> {
         let mut dst = Vec::new();
         write_modexp_output(output, mod_len, &mut dst).unwrap();
         dst
@@ -215,23 +246,23 @@ mod tests {
             let (base, exp, modulus, mod_len) = parse_input(&hex::decode(input).unwrap());
             let expected = hex::decode(expected).unwrap();
 
-            let software = software::modexp(&base, &exp, &modulus, Global);
-            assert_eq!(padded(software.clone(), mod_len), expected, "{name}");
+            let software = software::modexp(&base, &exp, &modulus);
+            assert_eq!(padded(&software, mod_len), expected, "{name}");
 
             let (advice, tape) =
-                record_hints(|oracle| advice::modexp(&base, &exp, &modulus, oracle, Global));
-            assert_eq!(padded(advice.clone(), mod_len), expected, "{name}: advice");
+                record_hints(|oracle| advice::modexp(&base, &exp, &modulus, oracle));
+            assert_eq!(padded(&advice, mod_len), expected, "{name}: advice");
             hinted += usize::from(!tape.is_empty());
             digest_tape(&mut digest, &tape);
             let mut guest = TapeOracle::new(tape.iter().copied().chain([NEXT_ANSWER]));
-            let replayed = advice::modexp(&base, &exp, &modulus, &mut guest, Global);
+            let replayed = advice::modexp(&base, &exp, &modulus, &mut guest);
             assert_eq!(replayed, advice, "{name}: replay");
             assert_eq!(guest.words, [NEXT_ANSWER], "{name}: replay leaves words");
 
-            let without_oracle = modexp(&base, &exp, &modulus, Global, None::<&mut NoHints>);
+            let without_oracle = modexp(&base, &exp, &modulus, None::<&mut NoHints>);
             assert_eq!(without_oracle, software, "{name}: dispatch without oracle");
             let (with_oracle, dispatch_tape) =
-                record_hints(|oracle| modexp(&base, &exp, &modulus, Global, Some(oracle)));
+                record_hints(|oracle| modexp(&base, &exp, &modulus, Some(oracle)));
             assert_eq!(with_oracle, advice, "{name}: dispatch with oracle");
             assert_eq!(dispatch_tape, tape, "{name}: dispatch tape");
         }
@@ -242,16 +273,11 @@ mod tests {
 
     #[test]
     fn output_is_padded_or_truncated_to_the_modulus_length() {
-        let output = |bytes: &[u8]| {
-            let mut vec = Vec::new_in(Global);
-            vec.extend_from_slice(bytes);
-            vec
-        };
-        assert_eq!(padded(output(&[1, 2]), 4), [0, 0, 1, 2]);
-        assert_eq!(padded(output(&[1, 2]), 2), [1, 2]);
-        assert_eq!(padded(output(&[1, 2, 3]), 2), [2, 3]);
-        assert_eq!(padded(output(&[]), 3), [0, 0, 0]);
-        assert_eq!(padded(output(&[0]), 0), [0u8; 0]);
+        assert_eq!(padded(&[1, 2], 4), [0, 0, 1, 2]);
+        assert_eq!(padded(&[1, 2], 2), [1, 2]);
+        assert_eq!(padded(&[1, 2, 3], 2), [2, 3]);
+        assert_eq!(padded(&[], 3), [0, 0, 0]);
+        assert_eq!(padded(&[0], 0), [0u8; 0]);
 
         struct Full;
 
@@ -266,18 +292,43 @@ mod tests {
             }
         }
 
-        assert_eq!(write_modexp_output(output(&[1]), 1, &mut Full), Err("full"));
-        assert_eq!(write_modexp_output(output(&[1]), 3, &mut Full), Err("full"));
+        assert_eq!(write_modexp_output(&[1], 1, &mut Full), Err("full"));
+        assert_eq!(write_modexp_output(&[1], 3, &mut Full), Err("full"));
+    }
+
+    /// The longest operands EIP-7823 allows, zero-padded beyond that, through both paths; a
+    /// longer significant operand panics
+    #[test]
+    fn operands_at_the_eip_7823_bound() {
+        let mut modulus = vec![0u8; 8];
+        modulus.extend(pseudo_random(7, MAX_OPERAND_BYTES));
+        modulus[8] |= 0x80;
+        let base = pseudo_random(11, MAX_OPERAND_BYTES);
+        let exp = pseudo_random(13, 40);
+        let software = software::modexp(&base, &exp, &modulus);
+        let (advice, tape) = record_hints(|oracle| advice::modexp(&base, &exp, &modulus, oracle));
+        assert!(!tape.is_empty());
+        assert_eq!(
+            padded(&software, MAX_OPERAND_BYTES),
+            padded(&advice, MAX_OPERAND_BYTES)
+        );
+        let too_long = pseudo_random(17, MAX_OPERAND_BYTES + 1);
+        for (base, modulus) in [(&too_long, &modulus), (&base, &too_long)] {
+            let software = std::panic::catch_unwind(|| software::modexp(base, &exp, modulus));
+            assert!(software.is_err());
+            let advice = std::panic::catch_unwind(|| {
+                record_hints(|oracle| advice::modexp(base, &exp, modulus, oracle))
+            });
+            assert!(advice.is_err());
+        }
     }
 
     /// Bigint delegations of one advice-path call with honest hints.
     fn delegations(base: &[u8], exp: &[u8], modulus: &[u8]) -> u64 {
         let mut oracle = RecordingHintOracle::new();
         DELEGATION_CALLS.with(|calls| calls.set(0));
-        let output = advice::modexp(base, exp, modulus, &mut oracle, Global);
-        let calls = DELEGATION_CALLS.with(|calls| calls.get());
-        drop(output);
-        calls
+        let _ = advice::modexp(base, exp, modulus, &mut oracle);
+        DELEGATION_CALLS.with(|calls| calls.get())
     }
 
     /// Delegations the single-digit path's `debug_assert!`s add (2, then 6 per product); the

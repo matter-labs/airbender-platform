@@ -13,17 +13,27 @@
 //! non-determinism CSR. The encodings of values on top of it are the querier's (ZKsync OS's
 //! `zk_ee::oracle::memory_io`, the hints of `airbender-crypto`).
 //!
+//! The oracle side reads the inputs of a query from the memory of the querier through
+//! [`QuerierMemory`] ([`NativeQuerierMemory`] for a querier in this process). With the
+//! `oracle_processor` feature (`std`), [`processor`] has the oracle of the host:
+//! [`ZkEENonDeterminismSource`](processor::ZkEENonDeterminismSource) dispatches queries to
+//! [`OracleQueryProcessor`](processor::OracleQueryProcessor)s, serves a querier in this process
+//! as a [`MemoryOracle`] and the RISC-V guest of the simulator as its non-determinism CSR source.
+//!
 //! # Security
 //!
 //! Everything the oracle sends is untrusted: the querier validates the encoding of a response,
 //! and checks that the value is correct, before it uses it.
 
-#![no_std]
+#![cfg_attr(not(feature = "oracle_processor"), no_std)]
 
 #[cfg(target_arch = "riscv32")]
 mod csr;
 mod error;
 mod oracle;
+#[cfg(feature = "oracle_processor")]
+pub mod processor;
+mod querier_memory;
 pub mod query_ids;
 mod word_channel;
 
@@ -34,4 +44,8 @@ mod tests;
 pub use self::csr::{CsrChannel, CsrOracle};
 pub use self::error::OracleError;
 pub use self::oracle::MemoryOracle;
+pub use self::querier_memory::{
+    offset_address, read_querier_u32_words_into, read_querier_word, NativeQuerierMemory,
+    QuerierMemory, QuerierMemoryError,
+};
 pub use self::word_channel::{WordChannel, WordChannelOracle};

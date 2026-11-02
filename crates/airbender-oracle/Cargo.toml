@@ -10,5 +10,15 @@ keywords.workspace = true
 categories.workspace = true
 description = "The oracle protocol of Airbender guests: query IDs and the querier side of the memory-based protocol"
 
+[dependencies]
+# The simulator's CSR source trait, for the oracle side on the host (`oracle_processor`)
+riscv_transpiler = { workspace = true, optional = true }
+
 [target.'cfg(target_arch = "riscv32")'.dependencies]
 riscv_common = { workspace = true }
+
+[features]
+default = []
+# The oracle side on the host (`std`): `ZkEENonDeterminismSource`, which dispatches queries to
+# `OracleQueryProcessor`s, serves a querier in this process and the RISC-V guest of the simulator
+oracle_processor = ["dep:riscv_transpiler"]

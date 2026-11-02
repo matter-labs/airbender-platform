@@ -3,11 +3,11 @@
 use super::*;
 use crate::ark_ec::CurveGroup;
 use crate::ark_ff::AdditiveGroup;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints as curve_hints;
 use alloc::vec::Vec;
 
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 use super::super::unavailable as curve_hints;
 
 /// The size of the EIP-2537 encoding of a pair of the G1 MSM: a G1 point and a scalar
@@ -230,7 +230,7 @@ pub fn bls12_381_g2_msm<O: MemoryOracle, A: core::alloc::Allocator + Clone>(
     Ok(result)
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::super::tests as bls_tests;

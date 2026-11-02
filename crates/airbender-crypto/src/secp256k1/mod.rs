@@ -4,6 +4,11 @@
 mod context;
 pub mod field;
 pub mod hooks;
+#[cfg(all(
+    any(feature = "oracle_implementations", test),
+    target_pointer_width = "64"
+))]
+pub mod oracle_implementations;
 mod points;
 mod recover;
 mod recover_affine;
@@ -11,8 +16,6 @@ mod recover_affine;
 mod recover_shamir;
 mod recover_witnessed;
 pub mod scalars;
-#[cfg(all(not(target_arch = "riscv32"), feature = "secp256k1-static-context"))]
-pub mod witness_host;
 
 #[cfg(test)]
 mod test_vectors;

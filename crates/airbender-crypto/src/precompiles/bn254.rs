@@ -4,7 +4,7 @@
 use crate::ark_ec::CurveGroup;
 use crate::ark_ff::PrimeField;
 use crate::ark_serialize::Valid;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints::{bn254_fq_inverse, Bn254FqDivider};
 use airbender_oracle::MemoryOracle;
 
@@ -37,13 +37,13 @@ pub fn bn254_g1_add<O: MemoryOracle>(
 
     let [a, b] = &points;
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => serialize_affine(&crate::bn254::g1::add_affine_with_divider(
             a,
             b,
             &mut Bn254FqDivider::new(oracle),
         )),
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         // in place: arkworks' `Projective + Affine` copies every field element
         None => serialize_projective::<O>(crate::bn254::g1::add_affine(a, b), None),
@@ -73,13 +73,13 @@ pub fn bn254_g1_mul<O: MemoryOracle>(
     let scalar = bigint_from_be(scalar);
 
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => serialize_affine(&crate::bn254::g1::mul_affine_with_divider(
             &affine_point,
             &scalar.0,
             &mut Bn254FqDivider::new(oracle),
         )),
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => serialize_projective::<O>(affine_point.mul_bigint(&scalar), None),
     };
@@ -156,11 +156,11 @@ pub(crate) fn serialize_projective<O: MemoryOracle>(
         [0u8; 64]
     } else {
         let result = match oracle {
-            #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+            #[cfg(any(feature = "hinted_operations", test))]
             Some(oracle) => {
                 crate::hinted_ops::to_affine_with_inverse(&point, |z| bn254_fq_inverse(oracle, z))
             }
-            #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+            #[cfg(not(any(feature = "hinted_operations", test)))]
             Some(_) => super::hints_unavailable(),
             None => point.into_affine(),
         };
@@ -174,7 +174,7 @@ pub(crate) fn serialize_projective<O: MemoryOracle>(
     }
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

@@ -1,6 +1,6 @@
 //! The secp256k1 hints: the elements in the answers, and the hooks of the recovery that use them.
 
-#[cfg(any(feature = "alloc", test))]
+#[cfg(any(feature = "oracle_implementations", test))]
 use super::answer::HintTarget;
 use super::answer::{read_hint_answer, HintAnswer};
 use super::request::{send_field_hint_query, FieldHintOp};
@@ -9,7 +9,7 @@ use crate::secp256k1::scalars::Scalar;
 use crate::secp256k1::{Affine, RecoveryWitness};
 use crate::{bigint_op_delegation_raw, BigIntOps};
 use airbender_oracle::{MemoryOracle, OracleError};
-#[cfg(any(feature = "alloc", test))]
+#[cfg(any(feature = "oracle_implementations", test))]
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
@@ -75,10 +75,11 @@ fn words_of_be_bytes(bytes: &[u8; 32]) -> [u32; 8] {
 
 /// A secp256k1 `FieldElement` (modulo `p`) or `Scalar` (modulo `n`) in the hints. Operands are
 /// read in place; answers are 8 little-endian `u32` words in the querier's representation:
-/// - on the guest, the Montgomery form `x 2^256 mod m`, which is both types' memory layout there
-///   (checked at compile time). Operands may be any 256-bit representative; answers are written
-///   straight into the destination and checked to be below the modulus.
-/// - natively, the canonical integer, through the types' API.
+/// - on the guest with `bigint_ops`, the Montgomery form `x 2^256 mod m`, which is both types'
+///   memory layout there (checked at compile time). Operands may be any 256-bit representative;
+///   answers are written straight into the destination and checked to be below the modulus.
+/// - otherwise (natively, and on the guest without `bigint_ops`), the canonical integer, through
+///   the types' API.
 pub trait Secp256k1Element: Copy {
     /// The modulus, in little-endian words
     const MODULUS: [u32; 8];
@@ -258,7 +259,7 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: MemoryOracle>(
     oracle: &mut O,
     dst: &'a mut MaybeUninit<T>,
 ) -> Result<&'a mut T, O::Error> {
-    #[cfg(target_arch = "riscv32")]
+    #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
     {
         // `validate` relies on the element being its Montgomery words, 32-byte aligned
         const { assert!(T::IS_MONTGOMERY_WORDS && core::mem::align_of::<T>() >= 32) };
@@ -270,7 +271,7 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: MemoryOracle>(
             Ok(dst.assume_init_mut())
         }
     }
-    #[cfg(not(target_arch = "riscv32"))]
+    #[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
     {
         let mut words = [0u32; 8];
         // SAFETY: the buffer holds 8 words
@@ -289,7 +290,7 @@ fn read_secp256k1_quotient<'a, O: MemoryOracle>(
     oracle: &mut O,
     dst: &'a mut MaybeUninit<FieldElement>,
 ) -> Result<&'a mut FieldElement, O::Error> {
-    #[cfg(target_arch = "riscv32")]
+    #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
     {
         const {
             assert!(
@@ -303,7 +304,7 @@ fn read_secp256k1_quotient<'a, O: MemoryOracle>(
             Ok(dst.assume_init_mut())
         }
     }
-    #[cfg(not(target_arch = "riscv32"))]
+    #[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
     {
         read_secp256k1_element(oracle, dst)
     }
@@ -320,7 +321,7 @@ macro_rules! impl_hint_answer_for_secp256k1_element {
                 read_secp256k1_element(oracle, dst)
             }
 
-            #[cfg(any(feature = "alloc", test))]
+            #[cfg(any(feature = "oracle_implementations", test))]
             fn write(&self, target: HintTarget, response: &mut Vec<u32>) {
                 response.extend_from_slice(&match target {
                     HintTarget::Native => self.to_canonical_words(),
@@ -400,7 +401,7 @@ impl HintAnswer for RecoveryWitness {
         }))
     }
 
-    #[cfg(any(feature = "alloc", test))]
+    #[cfg(any(feature = "oracle_implementations", test))]
     fn write(&self, _target: HintTarget, response: &mut Vec<u32>) {
         response.extend_from_slice(&words_of_be_bytes(&self.key_x));
         response.extend_from_slice(&words_of_be_bytes(&self.key_y));
@@ -579,9 +580,9 @@ impl<'a, O: MemoryOracle> Secp256k1HooksWithOracle<'a, O> {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
-    use crate::hints::host::RecordingHintOracle;
     use crate::hints::test_support::{lying_oracle, lying_oracle_last_word, TapeOracle};
     use crate::hints::{HintError, QuerierMemory};
+    use crate::oracle_common::RecordingHintOracle;
     use crate::secp256k1::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
     use proptest::{prop_assert, prop_assert_eq, proptest};
 
@@ -822,7 +823,7 @@ mod tests {
         unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), O::Error> {
             assert_eq!(query_id, crate::hints::FIELD_OPS_ADVISE_QUERY_ID);
             // SAFETY: the request is live during the query (the caller's contract)
-            let memory = unsafe { crate::hints::host::NativeQuerierMemory::new() };
+            let memory = unsafe { crate::oracle_common::NativeQuerierMemory::new() };
             let (op, _, _) = crate::hints::read_field_hint_request(&memory, input_word).unwrap();
             self.ops.push(FieldHintOp::parse_u32(op).unwrap());
             // SAFETY: the caller's contract
@@ -893,8 +894,8 @@ mod tests {
 
     #[test]
     fn recovery_without_a_witness_computes_the_key() {
-        use crate::hints::host::answer_query;
         use crate::hints::test_support::InProcessMemoryOracle;
+        use crate::oracle_common::answer_query;
         use crate::secp256k1::recover_from_bytes_with_hooks;
 
         let (digest, r, s, odd) = sign(&[5; 32], &[9; 32]).unwrap();

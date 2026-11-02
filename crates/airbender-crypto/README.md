@@ -19,9 +19,11 @@
 
 ## Features
 
-- `proving`: enables delegation-oriented features used on `riscv32` Airbender guests. It implies `bigint_ops`, which the bn254 and bls12-381 hints need on `riscv32`.
-- `alloc`: the allocating endpoints (pairing checks, MSMs, `modexp`) and hint recording on 64-bit hosts.
-- Default features keep host usage available and enable the secp256k1 static context.
+- `proving`: enables delegation-oriented features used on `riscv32` Airbender guests. It implies `bigint_ops` (the bigint delegation of the fields) and `hinted_operations`.
+- `hinted_operations`: the hinted paths of the primitives, which take oracle witnesses (`hints`). Independent of `bigint_ops`: the answers are read in the representation of the fields of the build.
+- `oracle_implementations`: the oracle side on a native host, which computes the witnesses (`*/oracle_implementations`, `oracle_common`) and records the hint tape; it allocates.
+- `alloc`: the allocating endpoints (pairing checks, MSMs).
+- Default features keep host usage available and enable the secp256k1 static context and the hinted operations.
 
 ## Usage
 
@@ -41,11 +43,19 @@ never changes a result.
 
 Every endpoint (the `precompiles` functions and `modexp::modexp`) takes `Option<&mut O>` with
 `O: MemoryOracle` (from `airbender-oracle`, whose `Error` type is the caller's). `Some(oracle)` runs
-the hinted path, which asks the same queries in the same order as zksync-os; `None::<&mut NoHints>`
-runs the plain path. Both give the same result (for `modexp`,
-after `modexp::write_modexp_output` pads it). On `riscv32` the hints need `bigint_ops`; without it
-the endpoints panic when given an oracle. `precompiles` covers ecrecover, bn254 (EIP-196/197),
-BLS12-381 (EIP-2537) and KZG point evaluation (EIP-4844); `airbender-crypto-c` exposes them to C.
+the hinted path, which asks the same queries as zksync-os (in the same order, except that the bn254
+pairing check asks its residue witness before the hints of the pairs, which it then takes a chunk
+of pairs at a time); `None::<&mut NoHints>` runs the plain path. Both give the same result (for
+`modexp`, after `modexp::write_modexp_output` pads it). The hinted paths need `hinted_operations`;
+without it the endpoints panic when given an oracle. `precompiles` covers ecrecover, bn254
+(EIP-196/197), BLS12-381 (EIP-2537) and KZG point evaluation (EIP-4844); `airbender-crypto-c`
+exposes them to C. ModExp allocates nothing: its operands are bounded by EIP-7823.
+
+The oracle side of every hint lives in the `oracle_implementations` module of its primitive
+(`secp256k1`, `bn254`, `bls12_381`, `modexp`), behind the `oracle_implementations` feature; what
+they share (the residue witnesses, the operands read from the querier's memory, the recorder) is
+in `oracle_common`. The answers are in the representation of the querier's target
+(`hints::HintTarget`): a querier in this process, or the RISC-V guest with `bigint_ops`.
 
 A query is two words written to the non-determinism CSR: the query ID, then the address of a
 request in guest memory. The answer is raw `u32` words, one CSR read each, with no framing. The
@@ -64,7 +74,7 @@ endpoints check this when decoding, and the MSMs and pairing checks also check t
 
 ### Recording hints
 
-With `alloc` on a 64-bit host, `record_hints` returns the tape the guest will read:
+With `oracle_implementations` on a 64-bit host, `record_hints` returns the tape the guest will read:
 
 ```text
 let (sum, tape) = record_hints(|oracle| bn254_g1_add(&points, Some(oracle)));
@@ -79,10 +89,11 @@ Recorders on different threads are independent, unless `proving` is enabled on a
 
 Unit tests run on the delegated fields of the test build, which have the guest's representation.
 The integration tests in `tests/` cover the arkworks fields of a normal build, and the ones for
-hints, precompiles and ModExp only compile with `--features alloc`:
+hints, precompiles and ModExp only compile with the oracle side (and `alloc` for the allocating
+endpoints):
 
 ```sh
-cargo test -p airbender-crypto --features alloc
+cargo test -p airbender-crypto --features alloc,oracle_implementations
 ```
 
 Debug builds run fewer property-test cases for the hint-heavy endpoints; `--release` runs them all.

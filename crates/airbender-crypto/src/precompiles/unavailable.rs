@@ -1,4 +1,4 @@
-//! Panicking stand-ins for the hints on RV32 without `bigint_ops`, with the names and signatures
+//! Panicking stand-ins for the hints without `hinted_operations`, with the names and signatures
 //! of the real ones. The pairing checks, MSMs and KZG ask hints in many places, so they keep one
 //! code path and panic at their first hint.
 
@@ -66,7 +66,7 @@ pub(super) type Bls12381Fq2Divider = Unavailable;
 #[cfg(any(feature = "alloc", test))]
 pub(super) type Bn254FqDivider = Unavailable;
 
-/// `hints::G2SlopeHints`
+/// `hints::G2SlopeHints`, whose chains (`hints::HintedChain`) are stand-in dividers too
 #[cfg(any(feature = "alloc", test))]
 impl Unavailable {
     pub(super) fn subgroup_chain(&mut self) -> Option<Self> {

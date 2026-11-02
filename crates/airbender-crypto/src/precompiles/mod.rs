@@ -2,9 +2,10 @@
 //! and output encoding stay with the caller.
 //!
 //! Every endpoint takes `Option<&mut O>` (see [`crate::hints`]): `Some` runs the hinted path,
-//! `None::<&mut NoHints>` the plain one, with the same result. On RV32 the hints need
-//! `bigint_ops`; without it the endpoints panic when given an oracle. `secp256k1_ecrecover`
-//! needs `secp256k1-static-context`, and the allocating endpoints need `alloc`.
+//! `None::<&mut NoHints>` the plain one, with the same result. The hinted paths need
+//! `hinted_operations`; without it the endpoints panic when given an oracle.
+//! `secp256k1_ecrecover` needs `secp256k1-static-context`, and the allocating endpoints need
+//! `alloc`.
 
 /// Records the hints of `$call`, replays the tape through a tape reader as the guest does, and
 /// checks the same result and that exactly the whole tape is read; evaluates to the result
@@ -57,7 +58,7 @@ mod bn254;
 #[cfg(feature = "secp256k1-static-context")]
 mod ecrecover;
 mod kzg;
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 mod unavailable;
 
 pub use self::bls12_381::{
@@ -84,10 +85,10 @@ pub use self::kzg::{
 #[repr(C, align(4))]
 pub struct WordAligned<const N: usize>(pub [u8; N]);
 
-/// The hinted path of an endpoint on RV32 without `bigint_ops`
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+/// The hinted path of an endpoint without `hinted_operations`
+#[cfg(not(any(feature = "hinted_operations", test)))]
 #[cold]
 #[inline(never)]
 fn hints_unavailable() -> ! {
-    panic!("the hints need `bigint_ops` on RV32")
+    panic!("the hints need the `hinted_operations` feature")
 }

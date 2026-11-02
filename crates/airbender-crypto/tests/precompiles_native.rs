@@ -1,9 +1,17 @@
 //! Smoke tests of the hinted precompile endpoints in a build without `cfg(test)`, whose fields
 //! are the arkworks ones (unless `proving` is on), not the guest representation of the unit tests.
-#![cfg(all(feature = "alloc", target_pointer_width = "64"))]
+#![cfg(all(
+    feature = "alloc",
+    feature = "oracle_implementations",
+    target_pointer_width = "64"
+))]
 // `std::alloc::Global`, the allocator of the endpoints that allocate
 #![cfg_attr(
-    all(feature = "alloc", target_pointer_width = "64"),
+    all(
+        feature = "alloc",
+        feature = "oracle_implementations",
+        target_pointer_width = "64"
+    ),
     feature(allocator_api)
 )]
 

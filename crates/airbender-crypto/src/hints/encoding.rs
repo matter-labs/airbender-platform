@@ -2,14 +2,14 @@
 //! and their encoding in answers (the `HintAnswer` impls).
 
 use super::answer::HintAnswer;
-#[cfg(any(feature = "alloc", test))]
+#[cfg(any(feature = "oracle_implementations", test))]
 use super::answer::HintTarget;
 use airbender_oracle::MemoryOracle;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use airbender_oracle::OracleError;
-#[cfg(any(feature = "alloc", test))]
+#[cfg(any(feature = "oracle_implementations", test))]
 use alloc::vec::Vec;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use ark_ff::{BigInteger, PrimeField};
 use ark_ff::{CubicExtConfig, CubicExtField, Field, QuadExtConfig, QuadExtField};
 use core::mem::MaybeUninit;
@@ -18,8 +18,8 @@ use core::mem::MaybeUninit;
 /// recursively), for guest operands and for answers on every target. Not the arkworks
 /// `to_base_prime_field_elements` order, which the delegated and native towers disagree on.
 pub trait HintEncoding: Field {
-    /// 64-bit limbs of a base field element on the guest with `bigint_ops`: 4 for bn254, 8 for
-    /// bls12-381 (381 bits in 512)
+    /// 64-bit limbs of a base field element on the guest with `bigint_ops` (the delegated
+    /// representation): 4 for bn254, 8 for bls12-381 (381 bits in 512)
     const LIMBS: usize;
     /// Base prime field components of an element
     const COMPONENTS: usize;
@@ -99,7 +99,7 @@ fp12_encoding!(
 );
 
 /// Whether the little-endian `value` is below the little-endian `modulus`
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 fn is_below(value: &[u64], modulus: &[u64]) -> bool {
     let (low, high) = value.split_at(value.len().min(modulus.len()));
     if high.iter().any(|limb| *limb != 0) {
@@ -120,7 +120,7 @@ fn is_below(value: &[u64], modulus: &[u64]) -> bool {
 /// # Safety
 ///
 /// `limbs` must point to the limbs of an `F`, all of its bytes, valid for writes.
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 #[inline(always)]
 unsafe fn read_prime_field<F: PrimeField, O: MemoryOracle>(
     oracle: &mut O,
@@ -144,10 +144,7 @@ unsafe fn read_prime_field<F: PrimeField, O: MemoryOracle>(
 
 /// Oracle side of `read_prime_field`: `limbs` are `element`'s limbs in this build, `guest_limbs`
 /// the limb count on the guest
-#[cfg(all(
-    any(feature = "alloc", test),
-    any(not(target_arch = "riscv32"), feature = "bigint_ops")
-))]
+#[cfg(any(feature = "oracle_implementations", test))]
 fn write_prime_field<F: PrimeField>(
     element: &F,
     limbs: &[u64],
@@ -178,7 +175,7 @@ fn write_prime_field<F: PrimeField>(
 }
 
 /// `$wire_limbs`: the width of the modulus; `$guest_limbs`: the limbs on the guest
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 macro_rules! prime_field_answer {
     ($field:ty, $wire_limbs:expr, $guest_limbs:expr) => {
         const _: () = {
@@ -208,7 +205,7 @@ macro_rules! prime_field_answer {
                 }
             }
 
-            #[cfg(any(feature = "alloc", test))]
+            #[cfg(any(feature = "oracle_implementations", test))]
             fn write(&self, target: HintTarget, response: &mut Vec<u32>) {
                 write_prime_field(
                     self,
@@ -223,10 +220,10 @@ macro_rules! prime_field_answer {
     };
 }
 
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 prime_field_answer!(crate::bn254::Fq, 4, 4);
 // 8 limbs on the guest (the delegation works on 256-bit limbs), 6 natively
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 prime_field_answer!(crate::bls12_381::Fq, 6, 8);
 
 /// The components in order, as in `HintEncoding` (`c0` before `c1`, recursively).
@@ -248,7 +245,7 @@ where
         }
     }
 
-    #[cfg(any(feature = "alloc", test))]
+    #[cfg(any(feature = "oracle_implementations", test))]
     fn write(&self, target: HintTarget, response: &mut Vec<u32>) {
         self.c0.write(target, response);
         self.c1.write(target, response);
@@ -275,7 +272,7 @@ where
         }
     }
 
-    #[cfg(any(feature = "alloc", test))]
+    #[cfg(any(feature = "oracle_implementations", test))]
     fn write(&self, target: HintTarget, response: &mut Vec<u32>) {
         self.c0.write(target, response);
         self.c1.write(target, response);
