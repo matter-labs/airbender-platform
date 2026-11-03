@@ -71,11 +71,6 @@ impl ScalarInner {
         unsafe { Self(core::mem::transmute(s)) }
     }
 
-    #[cfg(test)]
-    pub(super) const fn from_u128(n: u128) -> Self {
-        Self(U256::from_u128(n))
-    }
-
     pub(super) const fn from_be_hex(hex: &str) -> Self {
         Self(U256::from_be_hex(hex))
     }
@@ -89,6 +84,10 @@ impl ScalarInner {
         debug_assert!((offset + count - 1) >> 6 == offset >> 6);
         let limbs = self.0.as_words();
         ((limbs[offset >> 6] >> (offset & 0x3F)) & ((1 << count) - 1)) as u32
+    }
+
+    pub(super) fn limbs(&self) -> [u64; 4] {
+        *self.0.as_words()
     }
 
     pub(super) fn bits_var(&self, offset: usize, count: usize) -> u32 {

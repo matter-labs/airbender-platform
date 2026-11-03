@@ -18,6 +18,9 @@ pub use self::{
     pairing_impl::BLS12_381_NUM_ELL_COEFFS,
 };
 
+assert_affine_layout!(G1Affine, Fq);
+assert_affine_layout!(G2Affine, crate::bls12_381::Fq2);
+
 // pub type Bls12_381 = Bls12<Config>;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

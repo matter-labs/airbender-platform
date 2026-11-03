@@ -28,8 +28,32 @@ use zeroize::Zeroize;
 pub mod arithmetic;
 
 #[repr(align(32))]
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Zeroize)]
+#[derive(Copy, Clone, Eq, Hash, Zeroize)]
 pub struct BigInt<const N: usize>(pub [u64; N]);
+
+// Instead of the derived byte comparison (a `memcmp` call): one bigint delegation for the
+// 256-bit width on the proving target, a word comparison otherwise
+impl<const N: usize> PartialEq for BigInt<N> {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+        if N == 4 {
+            // SAFETY: `N == 4`, so both are `BigInt<4>` (same layout, 32-byte aligned)
+            let (a, b) = unsafe {
+                (
+                    &*(self as *const Self as *const BigInt<4>),
+                    &*(other as *const Self as *const BigInt<4>),
+                )
+            };
+            return crate::bigint_delegation::u256::eq(a, b);
+        }
+        let mut diff = 0u64;
+        for i in 0..N {
+            diff |= self.0[i] ^ other.0[i];
+        }
+        diff == 0
+    }
+}
 
 impl<const N: usize> Default for BigInt<N> {
     fn default() -> Self {

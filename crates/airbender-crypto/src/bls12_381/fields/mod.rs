@@ -51,3 +51,5 @@ pub use self::fq6::*;
 
 pub mod fq12;
 pub use self::fq12::*;
+
+assert_tower_layout!(Fq, Fq2, Fq6, Fq12);

@@ -7,7 +7,7 @@ use ark_ec::{
     short_weierstrass::{Affine, SWCurveConfig},
     AffineRepr, PrimeGroup,
 };
-use ark_ff::{AdditiveGroup, One, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, Field, One, PrimeField, Zero};
 use ruint::aliases::U512;
 
 #[cfg(any(
@@ -39,6 +39,38 @@ use crate::{
 
 pub type G1Affine = bls12::G1Affine<crate::bls12_381::curves::Config>;
 pub type G1Projective = bls12::G1Projective<crate::bls12_381::curves::Config>;
+
+/// Normalize a projective point using a checked inverse; infinity and z = 1 consume no hint.
+pub fn into_affine_with_inverse(
+    p: &G1Projective,
+    inverse: impl FnOnce(&Fq) -> Option<Fq>,
+) -> G1Affine {
+    if p.is_zero() {
+        return G1Affine::identity();
+    }
+    // A point with z = 1 is already affine, on the host and the guest alike, so it takes no hint
+    if p.z.is_one() {
+        return G1Affine::new_unchecked(p.x, p.y);
+    }
+    let z_inv = inverse(&p.z).expect("nonzero projective coordinate has an inverse");
+    assert_eq!(p.z * z_inv, Fq::ONE, "invalid inverse hint");
+    let z_inv_squared = z_inv.square();
+    G1Affine::new_unchecked(p.x * z_inv_squared, p.y * z_inv_squared * z_inv)
+}
+
+/// Clear the effective cofactor without scalar reduction or subgroup assumptions.
+pub fn clear_cofactor_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    p: &G1Affine,
+    divider: &mut D,
+) -> G1Affine {
+    const _: () = assert!(crate::bls12_381::curves::Config::X.len() == 1);
+    // The BLS seed is negative, so the effective cofactor 1 - x fits in u64.
+    crate::affine_glv::mul_u64_affine::<Config, D>(
+        p,
+        crate::bls12_381::curves::Config::X[0] + 1,
+        divider,
+    )
+}
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Config;
@@ -73,7 +105,7 @@ impl SWCurveConfig for Config {
 
     #[inline]
     fn mul_projective(p: &G1Projective, scalar: &[u64]) -> G1Projective {
-        let s = Self::ScalarField::from_sign_and_limbs(true, scalar);
+        let s = scalar_from_limbs(scalar);
         GLVConfig::glv_mul_projective(*p, s)
     }
 
@@ -174,6 +206,74 @@ impl SWCurveConfig for Config {
     }
 }
 
+#[inline(always)]
+/// `k P + l Q` with the doublings shared between the two GLV multiplications
+pub fn mul_two(p: &G1Projective, k: Fr, q: &G1Projective, l: Fr) -> G1Projective {
+    crate::glv_decomposition::glv_mul_two_projective_jsf::<Config>(*p, k, *q, l)
+}
+
+/// `k P + l Q` in affine coordinates, with the field divisions of `divider` (see
+/// `crate::affine_glv`)
+pub fn mul_two_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    p: &G1Affine,
+    k: Fr,
+    q: &G1Affine,
+    l: Fr,
+    divider: &mut D,
+) -> G1Affine {
+    crate::affine_glv::glv_mul_two_affine::<Config, D>(p, k, q, l, divider)
+}
+
+/// `a + b` in affine coordinates, with the field division of `divider`
+pub fn add_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    a: &G1Affine,
+    b: &G1Affine,
+    divider: &mut D,
+) -> G1Affine {
+    crate::affine_glv::add_affine::<Config, D>(a, b, divider)
+}
+
+/// The subgroup membership test of `is_in_correct_subgroup_assuming_on_curve` in affine
+/// coordinates, with the field divisions of `divider`: `[x]P` and `[x²]P` by double-and-add on
+/// the 64-bit seed
+pub fn is_in_subgroup_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    p: &G1Affine,
+    divider: &mut D,
+) -> bool {
+    const _: () = assert!(crate::bls12_381::curves::Config::X.len() == 1);
+    let x = crate::bls12_381::curves::Config::X[0];
+    // Algorithm from Section 6 of https://eprint.iacr.org/2021/1130: `σ(P) == -[x²]P`, with the
+    // early out `[x]P == P` (for `P` not the point at infinity) of that section
+    let x_times_p = crate::affine_glv::mul_u64_affine::<Config, D>(p, x, divider);
+    if !p.infinity && x_times_p == *p {
+        return false;
+    }
+    let x_squared_times_p = crate::affine_glv::mul_u64_affine::<Config, D>(&x_times_p, x, divider);
+    endomorphism(p) == -x_squared_times_p
+}
+
+/// The scalar (little-endian limbs, any value below 2^256) as a field element, fully reduced
+/// modulo the group order `r`. On the delegated field this is one Montgomery multiplication by
+/// `R²` (`x R^-1 R² = x R`, the Montgomery form of `x`, with the reduction of the
+/// multiplication: `x R² < 2^256 r`, so the product is below `2r` and one conditional
+/// subtraction makes it canonical), where `from_sign_and_limbs` would run arkworks' software
+/// multiplication. Longer inputs take `from_sign_and_limbs`.
+pub fn scalar_from_limbs(scalar: &[u64]) -> Fr {
+    #[cfg(any(
+        all(target_arch = "riscv32", feature = "bigint_ops"),
+        test,
+        feature = "proving"
+    ))]
+    if scalar.len() <= 4 {
+        let mut repr = <Fr as PrimeField>::BigInt::default();
+        repr.as_mut()[..scalar.len()].copy_from_slice(scalar);
+        let mut s = Fr::new_unchecked(repr);
+        s *= &Fr::new_unchecked(Fr::R2);
+        return s;
+    }
+    Fr::from_sign_and_limbs(true, scalar)
+}
+
 impl GLVConfig for Config {
     const ENDO_COEFFS: &'static[Self::BaseField] = &[
         MontFp!("793479390729215512621379701633421447060886740281060493010456487427281649075476305620758731620350")
@@ -193,6 +293,10 @@ impl GLVConfig for Config {
         let mut res = (*p).clone();
         res.x *= Self::ENDO_COEFFS[0];
         res
+    }
+
+    fn glv_mul_projective(p: G1Projective, k: Self::ScalarField) -> G1Projective {
+        crate::glv_decomposition::glv_mul_projective_jsf::<Self>(p, k)
     }
 
     fn endomorphism_affine(p: &Affine<Self>) -> Affine<Self> {
@@ -275,11 +379,126 @@ pub fn endomorphism(p: &Affine<Config>) -> Affine<Config> {
 }
 
 #[cfg(test)]
+mod mul_tests {
+    use super::*;
+    use ark_ec::CurveGroup;
+    use ark_ff::{BigInteger, UniformRand};
+    type RefFq = ark_bls12_381::Fq;
+    type RefAffine = ark_bls12_381::G1Affine;
+
+    fn to_ref(p: G1Affine) -> RefAffine {
+        let conv = |x: Fq| {
+            let mut limbs = [0u64; 6];
+            limbs.copy_from_slice(&x.into_bigint().0[..6]);
+            RefFq::from_bigint(ark_ff::BigInt(limbs)).unwrap()
+        };
+        if p.infinity {
+            RefAffine::identity()
+        } else {
+            RefAffine::new_unchecked(conv(p.x), conv(p.y))
+        }
+    }
+
+    #[test]
+    fn scalar_multiplication_matches_the_reference() {
+        use ark_std::test_rng;
+        let mut rng = test_rng();
+        let r = ark_bls12_381::Fr::MODULUS;
+        let mut r_minus_1 = r;
+        r_minus_1.sub_with_borrow(&ark_ff::BigInt::from(1u64));
+        let mut r_plus_1 = r;
+        r_plus_1.add_with_carry(&ark_ff::BigInt::from(1u64));
+        let mut scalars: Vec<[u64; 4]> = vec![
+            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+            [2, 0, 0, 0],
+            [3, 0, 0, 0],
+            r_minus_1.0,
+            r.0,
+            r_plus_1.0,
+            [u64::MAX; 4],
+        ];
+        for _ in 0..20 {
+            scalars.push(ark_bls12_381::Fr::rand(&mut rng).into_bigint().0);
+        }
+        let mut points = vec![G1Affine::identity(), G1Affine::generator()];
+        for _ in 0..5 {
+            let k = ark_bls12_381::Fr::rand(&mut rng).into_bigint();
+            points.push(G1Affine::generator().mul_bigint(k).into_affine());
+        }
+        for p in &points {
+            let reference = to_ref(*p);
+            for scalar in &scalars {
+                let expected =
+                    ark_bls12_381::g1::Config::mul_affine(&reference, scalar).into_affine();
+                let ours = Config::mul_affine(p, scalar).into_affine();
+                assert_eq!(to_ref(ours), expected);
+            }
+        }
+        // the two-point multiplication agrees with two single ones
+        for (i, p) in points.iter().enumerate() {
+            let q = points[(i + 3) % points.len()];
+            for pair in scalars.windows(2) {
+                let scalar =
+                    |limbs: [u64; 4]| Fr::from_bigint(<Fr as PrimeField>::BigInt::new(limbs));
+                let (Some(k), Some(l)) = (scalar(pair[0]), scalar(pair[1])) else {
+                    continue;
+                };
+                let expected = p.into_group() * k + q.into_group() * l;
+                let ours = super::mul_two(&p.into_group(), k, &q.into_group(), l);
+                assert_eq!(ours.into_affine(), expected.into_affine());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::GLVConfigNoAllocator;
     use super::{Config, CurveConfig, GLVConfig, PrimeField};
     use proptest::{prop_assert_eq, proptest};
     type ScalarField = <Config as CurveConfig>::ScalarField;
+
+    /// `scalar_from_limbs` reduces every 256-bit integer fully modulo `r`, to the canonical
+    /// representation (the limbs of `Fr` are compared as they are), as the arkworks reference
+    /// does: at `0, 1, r - 1, r, r + 1, 2r + 1, 2^256 - 1` and at random integers
+    #[test]
+    fn scalar_from_limbs_reduces_every_256_bit_integer() {
+        use super::{scalar_from_limbs, Fr};
+        use num_bigint::BigUint;
+        let check = |limbs: [u64; 4]| {
+            let ours = scalar_from_limbs(&limbs);
+            let bytes: Vec<u8> = limbs.iter().flat_map(|limb| limb.to_le_bytes()).collect();
+            let reference = ark_bls12_381::Fr::from_le_bytes_mod_order(&bytes)
+                .into_bigint()
+                .0;
+            assert!(!ours.is_geq_modulus(), "{limbs:x?}");
+            assert_eq!(
+                ours,
+                Fr::from_bigint(crate::BigInt(reference)).unwrap(),
+                "{limbs:x?}"
+            );
+            assert_eq!(ours.into_bigint().0, reference, "{limbs:x?}");
+        };
+        let r = BigUint::from(<Fr as PrimeField>::MODULUS);
+        let one = BigUint::from(1u32);
+        for n in [
+            BigUint::from(0u32),
+            one.clone(),
+            &r - 1u32,
+            r.clone(),
+            &r + 1u32,
+            &r * 2u32 + 1u32,
+            (&one << 256u32) - 1u32,
+        ] {
+            let mut limbs = [0u64; 4];
+            for (limb, digit) in limbs.iter_mut().zip(n.iter_u64_digits()) {
+                *limb = digit;
+            }
+            check(limbs);
+        }
+        proptest!(|(limbs: [u64; 4])| check(limbs));
+    }
 
     #[test]
     fn compare_scalar_decomposition() {
@@ -329,5 +548,49 @@ mod tests {
         let data = BigUint::from_bytes_be(&Config::BETA_2.1.to_be_bytes::<{ U512::BYTES }>());
         let beta_2 = BigInt::from_biguint(sign, data);
         assert_eq!(beta_2, beta_2_ref);
+    }
+
+    /// The affine test with divisions agrees with the projective one: on points of the
+    /// subgroup, on points of the curve outside it, and on the point at infinity
+    #[test]
+    fn subgroup_test_with_divider_matches() {
+        use super::{is_in_subgroup_with_divider, Config, Fq, G1Affine};
+        use crate::affine_glv::InvertingDivider;
+        use ark_ec::short_weierstrass::SWCurveConfig;
+        use ark_ec::AffineRepr;
+        use ark_ff::{PrimeField, UniformRand};
+        // random values through the reference field: `Fq::rand` of the 512-bit representation
+        // rejects almost every sample
+        let from_ref = |x: ark_bls12_381::Fq| {
+            let mut limbs = [0u64; 8];
+            limbs[..6].copy_from_slice(&x.into_bigint().0);
+            Fq::from_bigint(crate::BigInt(limbs)).unwrap()
+        };
+        let mut rng = ark_std::test_rng();
+        let mut checked_outside = 0;
+        for i in 0..12 {
+            let p = if i < 3 {
+                let p = ark_bls12_381::G1Affine::rand(&mut rng);
+                G1Affine::new_unchecked(from_ref(p.x), from_ref(p.y))
+            } else {
+                // a point of the curve from a random x, in the subgroup with probability 1/h
+                let x = from_ref(ark_bls12_381::Fq::rand(&mut rng));
+                match G1Affine::get_point_from_x_unchecked(x, i % 2 == 0) {
+                    Some(p) => p,
+                    None => continue,
+                }
+            };
+            let expected = Config::is_in_correct_subgroup_assuming_on_curve(&p);
+            checked_outside += usize::from(!expected);
+            assert_eq!(
+                is_in_subgroup_with_divider(&p, &mut InvertingDivider),
+                expected
+            );
+        }
+        assert!(checked_outside > 0);
+        assert!(is_in_subgroup_with_divider(
+            &G1Affine::identity(),
+            &mut InvertingDivider
+        ));
     }
 }

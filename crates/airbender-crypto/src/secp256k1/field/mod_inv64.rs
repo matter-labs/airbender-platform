@@ -214,7 +214,7 @@ impl TransitionMatrix {
 
         if mod_info.modulus.0[1] != 0 {
             cd += mod_info.modulus.0[1] as i128 * md as i128;
-            ce += mod_info.modulus.0[1] as i128 * md as i128;
+            ce += mod_info.modulus.0[1] as i128 * me as i128;
         }
 
         d_out.0[0] = (cd as u64 & m62) as i64;
@@ -228,7 +228,7 @@ impl TransitionMatrix {
 
         if mod_info.modulus.0[2] != 0 {
             cd += mod_info.modulus.0[2] as i128 * md as i128;
-            ce += mod_info.modulus.0[2] as i128 * md as i128;
+            ce += mod_info.modulus.0[2] as i128 * me as i128;
         }
 
         d_out.0[1] = (cd as u64 & m62) as i64;
@@ -240,9 +240,9 @@ impl TransitionMatrix {
         cd += u * d3 + v * e3;
         ce += q * d3 + r * e3;
 
-        if mod_info.modulus.0[2] != 0 {
+        if mod_info.modulus.0[3] != 0 {
             cd += mod_info.modulus.0[3] as i128 * md as i128;
-            ce += mod_info.modulus.0[3] as i128 * md as i128;
+            ce += mod_info.modulus.0[3] as i128 * me as i128;
         }
 
         d_out.0[2] = (cd as u64 & m62) as i64;
@@ -272,14 +272,14 @@ impl TransitionMatrix {
 
 /// Signed 62-bit limb integer representation
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Signed62(pub(super) [i64; 5]);
+pub(crate) struct Signed62(pub(crate) [i64; 5]);
 
 impl Signed62 {
     const ZERO: Self = Self([0; 5]);
     const ONE: Self = Self([1, 0, 0, 0, 0]);
 
     /// Computes the modular inverse of `self`
-    pub(super) fn modinv64(&self, mod_info: &ModInfo) -> Self {
+    pub(crate) fn modinv64(&self, mod_info: &ModInfo) -> Self {
         let mut f = mod_info.modulus;
         let mut g = *self;
         let mut eta = -1;
@@ -514,7 +514,7 @@ impl Neg for Signed62 {
 }
 
 #[derive(Debug)]
-pub(super) struct ModInfo {
+pub(crate) struct ModInfo {
     /// the modulus. Must be odd and in [3, 2^256]
     modulus: Signed62,
     /// `1/modulus mod 2^62`
@@ -522,7 +522,7 @@ pub(super) struct ModInfo {
 }
 
 impl ModInfo {
-    pub(super) const fn new(modulus: [i64; 5], modulus_inv62: u64) -> Self {
+    pub(crate) const fn new(modulus: [i64; 5], modulus_inv62: u64) -> Self {
         Self {
             modulus: Signed62(modulus),
             modulus_inv62,

@@ -11,6 +11,38 @@
 // crate linked explicitly. Without this, `--features alloc` does not build at all.
 #[cfg(feature = "alloc")]
 extern crate alloc;
+
+// Compile-time checks of the memory layout of the extension field towers and of the affine points,
+// which are not `repr(C)`: oracles read these values where they are in the memory of the RISC-V
+// guest. The components of an extension field element are back to back, `c0` first, without
+// padding, recursively, and an affine point is `x`, then `y`, then the flag of the point at
+// infinity.
+macro_rules! assert_tower_layout {
+    ($fq:ty, $fq2:ty, $fq6:ty, $fq12:ty) => {
+        const _: () = {
+            use core::mem::{offset_of, size_of};
+            assert!(offset_of!($fq2, c0) == 0 && offset_of!($fq2, c1) == size_of::<$fq>());
+            assert!(size_of::<$fq2>() == 2 * size_of::<$fq>());
+            assert!(offset_of!($fq6, c0) == 0 && offset_of!($fq6, c1) == size_of::<$fq2>());
+            assert!(offset_of!($fq6, c2) == 2 * size_of::<$fq2>());
+            assert!(size_of::<$fq6>() == 3 * size_of::<$fq2>());
+            assert!(offset_of!($fq12, c0) == 0 && offset_of!($fq12, c1) == size_of::<$fq6>());
+            assert!(size_of::<$fq12>() == 2 * size_of::<$fq6>());
+        };
+    };
+}
+
+macro_rules! assert_affine_layout {
+    ($point:ty, $coordinate:ty) => {
+        const _: () = {
+            use core::mem::{offset_of, size_of};
+            assert!(offset_of!($point, x) == 0);
+            assert!(offset_of!($point, y) == size_of::<$coordinate>());
+            assert!(offset_of!($point, infinity) == 2 * size_of::<$coordinate>());
+        };
+    };
+}
+pub mod affine_glv;
 #[allow(clippy::all)]
 #[allow(unused_imports, dead_code)]
 #[cfg(any(
@@ -25,6 +57,16 @@ pub mod ark_ff_delegation;
 mod bigint_delegation;
 #[allow(unexpected_cfgs)]
 pub mod blake2s;
+pub mod bytes32;
+#[cfg(test)]
+mod delegation_counts;
+pub(crate) mod extension_tower;
+#[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
+pub mod field_inverse;
+pub mod hinted_ops;
+pub(crate) mod jacobian;
+pub mod residue_witness;
+pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
 pub mod bls12_381;
 #[allow(clippy::all)]
@@ -84,6 +126,7 @@ pub use self::raw_delegation_interface::{
 // explicit initialization requirements.
 pub fn init_lib() {}
 
+#[derive(Clone, Copy)]
 pub enum BigIntOps {
     Add = 0,
     Sub = 1,
@@ -102,6 +145,14 @@ pub trait MiniDigest: Sized {
     fn update(&mut self, input: impl AsRef<[u8]>);
     fn finalize(self) -> Self::HashOutput;
     fn finalize_reset(&mut self) -> Self::HashOutput;
+
+    // Allow to reorder and avoid copying in finalize - output - reset operations sequence if hasher supports
+    // such case due to it's internal structure
+    #[inline(always)]
+    fn finalize_reset_with_closure<FN: FnOnce(&Self::HashOutput) -> ()>(&mut self, closure: FN) {
+        let t = self.finalize_reset();
+        (closure)(&t);
+    }
 }
 
 ///

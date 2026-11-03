@@ -19,8 +19,11 @@ use crate::bn254::fields::{Fq, Fq12Config, Fq2, Fq2Config, Fq6Config};
 
 pub mod g1;
 pub mod g2;
+pub mod g2_affine;
+pub(crate) mod g2_subgroup;
 
 mod pairing_impl;
+pub use self::pairing_impl::{G1Evaluation, G2PreparedNoAlloc, BN254_NUM_ELL_COEFFS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config;
@@ -61,3 +64,6 @@ pub type G1Affine = bn::G1Affine<Config>;
 pub type G1Projective = bn::G1Projective<Config>;
 pub type G2Affine = bn::G2Affine<Config>;
 pub type G2Projective = bn::G2Projective<Config>;
+
+assert_affine_layout!(G1Affine, crate::bn254::Fq);
+assert_affine_layout!(G2Affine, crate::bn254::Fq2);

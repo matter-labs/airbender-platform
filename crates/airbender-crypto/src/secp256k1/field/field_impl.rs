@@ -110,6 +110,16 @@ impl FieldElementImpl {
         self.normalized = false;
     }
 
+    /// As `sub_in_place`: the magnitude is not used by this representation (debug builds)
+    pub(super) fn sub_in_place_magnitude(&mut self, rhs: &Self, _magnitude: u32) {
+        self.sub_in_place(rhs);
+    }
+
+    /// The full normalization (debug builds)
+    pub(super) fn normalize_weak_in_place(&mut self) {
+        self.normalize_in_place();
+    }
+
     pub(super) fn add_int_in_place(&mut self, rhs: u32) {
         self.magnitude += rhs;
         debug_assert!(self.magnitude <= Self::max_magnitude());

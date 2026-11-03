@@ -6,10 +6,13 @@ const _: () = const {
 };
 
 static MODULUS: BigInt<4> = ScalarInner::ORDER.0;
+/// One and minus one in Montgomery form, for the comparisons with them
+static ONE: BigInt<4> = ScalarInner::ONE.0;
+static MINUS_ONE: BigInt<4> = ScalarInner::MINUS_ONE.0;
 static REDUCTION_CONST: BigInt<4> = ScalarInner::REDUCTION_CONST.0;
 
 #[derive(Debug, Default)]
-pub(super) struct ScalarParams;
+pub struct ScalarParams;
 
 impl DelegatedModParams<4> for ScalarParams {
     const MODULUS_BITSIZE: usize = 256;
@@ -26,11 +29,18 @@ impl DelegatedMontParams<4> for ScalarParams {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ScalarInner(BigInt<4>);
+pub struct ScalarInner(BigInt<4>);
 
 impl ScalarInner {
     pub(super) const ZERO: Self = Self(BigInt::zero());
     pub(super) const ONE: Self = Self::from_words([4624529908474429119, 4994812053365940164, 1, 0]);
+    // ORDER - ONE
+    const MINUS_ONE: Self = Self::from_words([
+        9197684256760693378,
+        8457119966977671287,
+        18446744073709551613,
+        18446744073709551615,
+    ]);
     const ONE_REPR: Self = Self(BigInt::one());
     const R2: Self = Self::from_words([
         9902555850136342848,
@@ -77,10 +87,20 @@ impl ScalarInner {
         Self(u256::from_bytes_unchecked(bytes))
     }
 
+    /// The scalar of a big-endian integer, reduced modulo the order: the Montgomery
+    /// multiplication by `R2` takes any 256-bit integer (the product with a factor below the
+    /// order reduces to below twice the order, and then to below the order)
     pub(super) fn from_be_bytes(bytes: &[u8; 32]) -> Self {
-        let t = Self::from_be_bytes_unchecked(bytes);
+        let t = Self(u256::from_be_bytes(bytes));
 
         t.to_representation()
+    }
+
+    /// The scalar of a big-endian integer, `None` if it is not below the order
+    pub(super) fn from_be_bytes_checked(bytes: &[u8; 32]) -> Option<Self> {
+        let t = Self(u256::from_be_bytes(bytes));
+
+        u256::lt(&t.0, &MODULUS).then(|| t.to_representation())
     }
 
     #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
@@ -152,6 +172,11 @@ impl ScalarInner {
         &self.0 .0
     }
     // This is only called on the results of decompose and decompose_128, so the input is already in integer form
+    #[inline(always)]
+    pub(super) fn limbs(&self) -> [u64; 4] {
+        self.0 .0
+    }
+
     #[inline(always)]
     #[allow(dead_code)] // TODO: to be fixed in `zksync-os/crypto` first
     pub(super) fn bits(&self, offset: usize, count: usize) -> u32 {
@@ -263,9 +288,26 @@ impl ScalarInner {
         }
     }
 
+    /// Zero is the only representative to compare with: the scalars are canonical (below the
+    /// order), as the modular operations of the non-redundant `ScalarParams` keep them, and
+    /// every scalar comes from one of them. The comparison runs only if the lowest word is zero.
     #[inline(always)]
     pub(super) fn is_zero(&self) -> bool {
-        unsafe { u256::is_zero_mod::<ScalarParams>(&self.0) }
+        debug_assert!(u256::lt(&self.0, &MODULUS));
+        u256::is_zero(&self.0)
+    }
+
+    /// One comparison: `ONE` is the only representative of one below `2^256` (`ONE + ORDER` is
+    /// `2^256`)
+    #[inline(always)]
+    pub(super) fn is_one(&self) -> bool {
+        u256::eq(&self.0, &ONE)
+    }
+
+    /// One comparison: `MINUS_ONE` is the only representative of minus one below `2^256`
+    #[inline(always)]
+    pub(super) fn is_minus_one(&self) -> bool {
+        u256::eq(&self.0, &MINUS_ONE)
     }
 }
 
@@ -340,7 +382,9 @@ mod tests {
         let one = ScalarInner::ONE;
 
         assert!(zero.is_zero());
-        assert!(order.is_zero());
+        assert!(!one.is_zero());
+        // the order is not a scalar: the scalars are canonical
+        assert!(!super::u256::lt(&order.0, &super::MODULUS));
 
         assert_ne!(zero, one);
     }

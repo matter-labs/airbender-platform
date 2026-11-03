@@ -6,12 +6,12 @@ use crate::k256::{
     Secp256k1,
 };
 
+use core::{cfg_select, mem::MaybeUninit};
+
 use super::{
-    context::{
-        ECMultContext, ECMULT_TABLE_SIZE_A, ECMULT_TABLE_SIZE_G, WINDOW_A, WINDOW_G, WNAF_BITS,
-    },
+    context::{ECMultContext, ECMULT_TABLE_SIZE_A, WINDOW_A, WINDOW_G, WNAF_BITS},
     field::FieldElement,
-    points::{Affine, AffineStorage, Jacobian},
+    points::{Affine, Jacobian},
     scalars::Scalar,
     Secp256k1Err,
 };
@@ -61,7 +61,7 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     context: &ECMultContext,
     hooks: &mut H,
 ) -> Result<Affine, Secp256k1Err> {
-    let (mut sigr, mut sigs) = Scalar::from_signature(signature);
+    let (sigr, sigs) = Scalar::from_signature(signature);
     let message = Scalar::from_k256_scalar(*message);
 
     // We go through bytes because it's mod GROUP_ORDER and later we need mod BASE FIELD
@@ -83,15 +83,82 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     let x =
         Affine::decompress_with_hooks(&brx, is_odd, hooks).ok_or(Secp256k1Err::InvalidParams)?;
 
-    let xj = x.to_jacobian();
+    recover_from_point(&x, sigr, sigs, message, context, hooks)
+}
 
+/// The recovery as the `ecrecover` of Ethereum takes it, from big-endian bytes: `r` and `s` must
+/// be in `[1, order - 1]`, the digest is reduced modulo the order, and the point of the
+/// signature is the one with the coordinate `x = r` (not `r + order`) and the `y` of the
+/// given parity. It is `recover_with_hooks` of
+/// `Signature::from_scalars(r, s)`, `RecoveryId::new(y_is_odd, false)` and the reduced digest,
+/// without the conversions through the types of `k256`.
+#[cfg(feature = "secp256k1-static-context")]
+pub fn recover_from_bytes_with_hooks<H: super::hooks::Secp256k1Hooks>(
+    digest: &[u8; 32],
+    r: &[u8; 32],
+    s: &[u8; 32],
+    y_is_odd: bool,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
+    use super::context::ECRECOVER_CONTEXT;
+
+    let sigr = Scalar::from_be_bytes_checked(r).ok_or(Secp256k1Err::InvalidParams)?;
+    let sigs = Scalar::from_be_bytes_checked(s).ok_or(Secp256k1Err::InvalidParams)?;
+    if sigr.is_zero() || sigs.is_zero() {
+        return Err(Secp256k1Err::InvalidParams);
+    }
+    let message = Scalar::from_be_bytes_reduced(digest);
+
+    // `r` is below the order, which is below the modulus of the base field
+    let x = FieldElement::from_bytes(r).ok_or(Secp256k1Err::InvalidParams)?;
+    let x = Affine::lift_x_with_hooks(&x, y_is_odd, hooks).ok_or(Secp256k1Err::InvalidParams)?;
+
+    recover_from_point(&x, sigr, sigs, message, &ECRECOVER_CONTEXT, hooks)
+}
+
+/// `(s / r) x - (message / r) g` for the point `x` of the signature: checked against the
+/// hook's witness when there is one (see `recover_witnessed`), computed otherwise
+#[inline(always)]
+fn recover_from_point<H: super::hooks::Secp256k1Hooks>(
+    x: &Affine,
+    sigr: Scalar,
+    sigs: Scalar,
+    message: Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
+    if H::FE_DIVIDE_IS_CHEAP {
+        if let Some(witness) = hooks.recovery_witness(x, &sigr, &sigs, &message) {
+            return super::recover_witnessed::verify_witnessed(
+                x, &sigr, &sigs, &message, &witness, context, hooks,
+            );
+        }
+    }
+    compute_from_point(x, sigr, sigs, message, context, hooks)
+}
+
+/// `(s / r) x - (message / r) g` for the point `x` of the signature, computed
+#[inline(always)]
+pub(super) fn compute_from_point<H: super::hooks::Secp256k1Hooks>(
+    x: &Affine,
+    mut sigr: Scalar,
+    mut sigs: Scalar,
+    message: Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Result<Affine, Secp256k1Err> {
     hooks.scalar_invert_and_assign(&mut sigr);
     sigs *= sigr;
 
     sigr *= message;
     sigr.negate_in_place();
 
-    let mut pk = ecmult(&xj, &sigs, &sigr, context).to_affine_with_hooks(hooks);
+    let mut pk = if H::FE_DIVIDE_IS_CHEAP {
+        super::recover_affine::ecmult_affine(x, &sigs, &sigr, context, hooks)
+    } else {
+        ecmult_with_hooks(&x.to_jacobian(), &sigs, &sigr, context, hooks)
+            .to_affine_with_hooks(hooks)
+    };
     pk.normalize_in_place();
 
     if pk.is_infinity() {
@@ -101,29 +168,89 @@ pub fn recover_with_context_and_hooks<H: super::hooks::Secp256k1Hooks>(
     Ok(pk)
 }
 
+/// Runs both flavours (with and without cheap inversions) and checks that they agree
+#[cfg(test)]
+pub(super) fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Jacobian {
+    use super::hooks::{DefaultSecp256k1Hooks, Secp256k1Hooks};
+
+    struct CheapInversionHooks;
+
+    impl Secp256k1Hooks for CheapInversionHooks {
+        const FE_INVERT_IS_CHEAP: bool = true;
+
+        fn fe_sqrt_and_assign(&mut self, fe: &mut FieldElement) -> bool {
+            DefaultSecp256k1Hooks.fe_sqrt_and_assign(fe)
+        }
+
+        fn fe_invert_and_assign(&mut self, fe: &mut FieldElement) {
+            DefaultSecp256k1Hooks.fe_invert_and_assign(fe)
+        }
+
+        fn scalar_invert_and_assign(&mut self, scalar: &mut Scalar) {
+            DefaultSecp256k1Hooks.scalar_invert_and_assign(scalar)
+        }
+    }
+
+    let ret = ecmult_with_hooks(a, na, ng, context, &mut DefaultSecp256k1Hooks);
+    let with_inversions = ecmult_with_hooks(a, na, ng, context, &mut CheapInversionHooks);
+    assert_eq!(ret.to_affine(), with_inversions.to_affine());
+
+    ret
+}
+
 /// Compute na*a+ng*g where g is the generator.
+fn ecmult_with_hooks<H: super::hooks::Secp256k1Hooks>(
+    a: &Jacobian,
+    na: &Scalar,
+    ng: &Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Jacobian {
+    #[cfg(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"))]
+    {
+        let _ = context;
+        super::recover_shamir::ecmult(a, na, ng, hooks)
+    }
+
+    #[cfg(not(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops")))]
+    ecmult_wnaf(a, na, ng, context, hooks)
+}
+
 /// Algorithm adapted from https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h#L237
-fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Jacobian {
+#[cfg_attr(
+    all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"),
+    allow(dead_code)
+)]
+fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
+    a: &Jacobian,
+    na: &Scalar,
+    ng: &Scalar,
+    context: &ECMultContext,
+    hooks: &mut H,
+) -> Jacobian {
+    // `z` is the denominator shared by the table of the multiples of `a`: those are handled as
+    // affine points, and it is applied to the result at the end. The generator's tables have to
+    // be brought to the same denominator on every use then. If inversion is cheap, the table
+    // is made affine instead and `z` stays 1.
     let mut z = FieldElement::ONE;
 
-    let mut prea: [Affine; ECMULT_TABLE_SIZE_A] = [Affine::DEFAULT; ECMULT_TABLE_SIZE_A];
+    // The odd multiples of `a`, and `beta * x` of each: written only when `a` contributes,
+    // and read only at a non-zero digit of `na`, which implies that
+    let mut prea: [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A] =
+        [const { MaybeUninit::uninit() }; ECMULT_TABLE_SIZE_A];
     let mut aux: [FieldElement; ECMULT_TABLE_SIZE_A] = [FieldElement::ZERO; ECMULT_TABLE_SIZE_A];
 
-    let mut bits_na_1 = 0;
-    let mut bits_na_lam = 0;
+    // The digits are zero above the bits of their scalars, so a digit is looked at only for
+    // being non-zero
+    let mut wnaf_na_1 = [0 as WnafDigit; WNAF_BITS];
+    let mut wnaf_na_lam = [0 as WnafDigit; WNAF_BITS];
 
-    let mut bits_ng_1 = 0;
-    let mut bits_ng_128 = 0;
-
-    let mut wnaf_na_1 = [0i32; WNAF_BITS];
-    let mut wnaf_na_lam = [0i32; WNAF_BITS];
-
-    let mut wnaf_ng_1 = [0i32; WNAF_BITS];
-    let mut wnaf_ng_128 = [0i32; WNAF_BITS];
+    let mut wnaf_ng_1 = [0 as WnafDigit; WNAF_BITS];
+    let mut wnaf_ng_128 = [0 as WnafDigit; WNAF_BITS];
 
     let mut bits = 0;
 
-    if !na.is_zero() && !a.is_infinity() {
+    let prea: &[Affine; ECMULT_TABLE_SIZE_A] = if !na.is_zero() && !a.is_infinity() {
         // split na into 129 bit scalars
         // where na_1 + na_lam * lambda = na
 
@@ -131,30 +258,39 @@ fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Ja
         let (na_1, na_lam) = na.decompose();
 
         // build wnaf representation
-        bits_na_1 = wnaf(&mut wnaf_na_1, &na_1, WINDOW_A);
-        bits_na_lam = wnaf(&mut wnaf_na_lam, &na_lam, WINDOW_A);
+        let bits_na_1 = wnaf(&mut wnaf_na_1, &na_1, WINDOW_A);
+        let bits_na_lam = wnaf(&mut wnaf_na_lam, &na_lam, WINDOW_A);
 
         debug_assert!(bits_na_1 <= WNAF_BITS as i32);
         debug_assert!(bits_na_lam <= WNAF_BITS as i32);
 
-        if bits_na_1 > bits_na_lam {
-            bits = bits_na_1;
-        } else {
-            bits = bits_na_lam;
-        }
+        bits = bits_na_1.max(bits_na_lam);
 
         // Calculate odd multiples of a.
         // All multiples are brought to the same `z` "denominator".
         // Due to secp256k1 we can pretend the z coordinate is 1 and use affine addition formulas,
         // and correct the result at the end
         odd_multiples_table_windowa(&mut prea, &mut aux, &mut z, a);
-        table_set_globalz_windowa(&mut prea, &aux);
+        // SAFETY: `odd_multiples_table_windowa` wrote every entry
+        let prea: &mut [Affine; ECMULT_TABLE_SIZE_A] =
+            unsafe { &mut *(&mut prea as *mut [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A]).cast() };
+        if H::FE_INVERT_IS_CHEAP {
+            table_set_affine_windowa(prea, &aux, &z, hooks);
+            z = FieldElement::ONE;
+        } else {
+            table_set_globalz_windowa(prea, &aux);
+        }
 
         for i in 0..ECMULT_TABLE_SIZE_A {
             aux[i] = FieldElement::BETA;
-            aux[i] *= prea[i].x;
+            aux[i] *= &prea[i].x;
         }
-    }
+        prea
+    } else {
+        // never read: every digit of `na` is zero
+        // SAFETY: as above
+        unsafe { &*(&prea as *const [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A]).cast() }
+    };
 
     if !ng.is_zero() {
         // TODO: use u128 instead
@@ -165,48 +301,93 @@ fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Ja
         let (ng_1, ng_128) = ng.decompose_128(); // NOTE: must return normal form
 
         // build wnaf representation
-        bits_ng_1 = wnaf(&mut wnaf_ng_1, &ng_1, WINDOW_G);
-        bits_ng_128 = wnaf(&mut wnaf_ng_128, &ng_128, WINDOW_G);
+        let bits_ng_1 = wnaf(&mut wnaf_ng_1, &ng_1, WINDOW_G);
+        let bits_ng_128 = wnaf(&mut wnaf_ng_128, &ng_128, WINDOW_G);
 
-        if bits_ng_1 > bits {
-            bits = bits_ng_1;
-        }
-        if bits_ng_128 > bits {
-            bits = bits_ng_128;
-        }
+        bits = bits.max(bits_ng_1).max(bits_ng_128);
     }
 
     let mut r = Jacobian::INFINITY;
 
-    for i in (0..bits).rev() {
+    for i in (0..bits as usize).rev() {
         r.double_in_place(None);
 
-        let n = wnaf_na_1[i as usize];
-        if i < bits_na_1 && n != 0 {
-            r.add_ge_in_place(table_get_ge(&prea, n, WINDOW_A), None);
+        let n = wnaf_na_1[i];
+        if n != 0 {
+            let (idx, negate) = table_index(n, WINDOW_A);
+            r.add_affine_in_place(&prea[idx].x, &prea[idx].y, negate, None);
         }
 
-        let n = wnaf_na_lam[i as usize];
-        if i < bits_na_lam && n != 0 {
-            r.add_ge_in_place(table_get_ge_lambda(&prea, &aux, n, WINDOW_A), None);
+        let n = wnaf_na_lam[i];
+        if n != 0 {
+            let (idx, negate) = table_index(n, WINDOW_A);
+            r.add_affine_in_place(&aux[idx], &prea[idx].y, negate, None);
         }
 
-        let n = wnaf_ng_1[i as usize];
-        if i < bits_ng_1 && n != 0 {
-            r.add_zinv_in_place(table_get_ge_storage(&context.pre_g, n, WINDOW_G), &z);
+        let n = wnaf_ng_1[i];
+        if n != 0 {
+            let (idx, negate) = table_index(n, WINDOW_G);
+            add_from_table(
+                &mut r,
+                &context.pre_g[idx],
+                negate,
+                &z,
+                H::FE_INVERT_IS_CHEAP,
+            );
         }
 
-        let n = wnaf_ng_128[i as usize];
-        if i < bits_ng_128 && n != 0 {
-            r.add_zinv_in_place(table_get_ge_storage(&context.pre_g_128, n, WINDOW_G), &z);
+        let n = wnaf_ng_128[i];
+        if n != 0 {
+            let (idx, negate) = table_index(n, WINDOW_G);
+            add_from_table(
+                &mut r,
+                &context.pre_g_128[idx],
+                negate,
+                &z,
+                H::FE_INVERT_IS_CHEAP,
+            );
         }
     }
 
-    if !r.is_infinity() {
-        r.z *= z
+    if !H::FE_INVERT_IS_CHEAP && !r.is_infinity() {
+        r.z *= &z
     }
 
     r
+}
+
+/// A digit of a wNAF representation: `|digit| < 2^(w - 1)` for the windows in use
+pub(super) type WnafDigit = i16;
+const _: () = assert!(WINDOW_A <= 16 && WINDOW_G <= 16);
+
+/// `r += (x, y)` or `r -= (x, y)` for the stored generator multiple, an affine point if `affine`,
+/// otherwise a point with the denominator `1 / z`
+#[inline(always)]
+fn add_from_table(
+    r: &mut Jacobian,
+    stored: &super::points::AffineStorage,
+    negate: bool,
+    z: &FieldElement,
+    affine: bool,
+) {
+    let add = |r: &mut Jacobian, x: &FieldElement, y: &FieldElement| {
+        if affine {
+            r.add_affine_in_place(x, y, negate, None);
+        } else {
+            r.add_affine_zinv_in_place(x, y, negate, z);
+        }
+    };
+    cfg_select! {
+        // with the delegated field the table is read in place
+        feature = "bigint_ops" => {
+            let (x, y) = stored.coordinates();
+            add(r, x, y);
+        }
+        _ => {
+            let g = stored.to_affine();
+            add(r, &g.x, &g.y);
+        }
+    }
 }
 
 /// Fill `pre_a` with odd multiples of a.
@@ -219,7 +400,7 @@ fn ecmult(a: &Jacobian, na: &Scalar, ng: &Scalar, context: &ECMultContext) -> Ja
 /// Lastly, `zr[0]` is set so that `a.z = pre_a[0].z / zr[0]`
 /// Based on https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h#L73
 fn odd_multiples_table_windowa(
-    pre_a: &mut [Affine; ECMULT_TABLE_SIZE_A],
+    pre_a: &mut [MaybeUninit<Affine>; ECMULT_TABLE_SIZE_A],
     zr: &mut [FieldElement; ECMULT_TABLE_SIZE_A],
     z: &mut FieldElement,
     a: &Jacobian,
@@ -237,17 +418,12 @@ fn odd_multiples_table_windowa(
     //      ai = phi(a) = (a.x*C^2, a.y*C^3, a.z)
     // This lets us use the faster add_ge_var
 
-    let d_ge = Affine {
-        x: d.x,
-        y: d.y,
-        infinity: false,
-    };
-
-    pre_a[0].set_gej_zinv(a, &d.z);
+    let first = pre_a[0].write(Affine::DEFAULT);
+    first.set_gej_zinv(a, &d.z);
 
     let mut ai = Jacobian {
-        x: pre_a[0].x,
-        y: pre_a[0].y,
+        x: first.x,
+        y: first.y,
         z: a.z,
     };
 
@@ -256,19 +432,20 @@ fn odd_multiples_table_windowa(
     zr[0] = d.z;
 
     for i in 1..ECMULT_TABLE_SIZE_A {
-        ai.add_ge_in_place(d_ge, Some(&mut zr[i]));
-        pre_a[i] = Affine {
+        // `d` as the affine point `(d.x, d.y)` of the isomorphic curve, read in place
+        ai.add_affine_in_place(&d.x, &d.y, false, Some(&mut zr[i]));
+        pre_a[i].write(Affine {
             x: ai.x,
             y: ai.y,
             infinity: false,
-        };
+        });
     }
 
     // Multiply the last z-coordinate by C to undo the isomorphism.
     // Since the z-coordinates of the pre_a values are implied by the zr array of z-coordinate ratios,
     // undoing the isomorphism here undoes the isomorphism for all pre_a values.
     *z = ai.z;
-    *z *= d.z;
+    *z *= &d.z;
 }
 
 fn table_set_globalz_windowa(
@@ -287,11 +464,35 @@ fn table_set_globalz_windowa(
     pre_a[i].set_ge_zinv(&ai, &zs);
 
     while i > 0 {
-        zs *= zr[i];
+        zs *= &zr[i];
         i -= 1;
 
         ai = pre_a[i];
         pre_a[i].set_ge_zinv(&ai, &zs);
+    }
+}
+
+/// Makes the table produced by `odd_multiples_table_windowa` affine by a single inversion:
+/// `pre_a[n-1].z = z`, and `1 / pre_a[i-1].z = zr[i] / pre_a[i].z`
+fn table_set_affine_windowa<H: super::hooks::Secp256k1Hooks>(
+    pre_a: &mut [Affine; ECMULT_TABLE_SIZE_A],
+    zr: &[FieldElement; ECMULT_TABLE_SIZE_A],
+    z: &FieldElement,
+    hooks: &mut H,
+) {
+    let mut zinv = *z;
+    hooks.fe_invert_and_assign(&mut zinv);
+
+    let mut i = ECMULT_TABLE_SIZE_A - 1;
+    loop {
+        let ai = pre_a[i];
+        pre_a[i].set_ge_zinv(&ai, &zinv);
+        if i == 0 {
+            break;
+        }
+
+        zinv *= &zr[i];
+        i -= 1;
     }
 }
 
@@ -302,9 +503,9 @@ fn table_set_globalz_windowa(
 ///     - the number of set values in wnaf is returned
 ///
 /// NOTE: the function assumes that `wnaf` is zeroed
-fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
-    debug_assert!(wnaf.len() <= 256);
-    debug_assert!((2..=31).contains(&w));
+pub(super) fn wnaf(wnaf: &mut [WnafDigit], s: &Scalar, w: usize) -> i32 {
+    debug_assert!(wnaf.len() <= 224);
+    debug_assert!((2..=16).contains(&w));
     debug_assert!(wnaf.iter().all(|&x| x == 0));
 
     let mut s = *s;
@@ -319,9 +520,12 @@ fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
         s.negate_in_place();
         sign = -1;
     }
+    // the scalar as 32-bit words: a bit test is then one shift on this target
+    let limbs = s.limbs();
+    let words: [u32; 8] = core::array::from_fn(|i| (limbs[i / 2] >> (32 * (i % 2))) as u32);
 
     while bit < wnaf.len() {
-        if s.bits(bit, 1) == carry as u32 {
+        if ((words[bit >> 5] >> (bit & 31)) & 1) as i32 == carry {
             bit += 1;
             continue;
         }
@@ -331,12 +535,14 @@ fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
             now = wnaf.len() - bit;
         }
 
-        let mut word = (s.bits_var(bit, now) as i32) + carry;
+        // the `now <= 16` bits from `bit` on, which may straddle two words
+        let pair = words[bit >> 5] as u64 | ((words[(bit >> 5) + 1] as u64) << 32);
+        let mut word = (((pair >> (bit & 31)) as u32) & ((1 << now) - 1)) as i32 + carry;
 
         carry = (word >> (w - 1)) & 1;
         word -= carry << w;
 
-        wnaf[bit] = sign * word;
+        wnaf[bit] = (sign * word) as WnafDigit;
         last_set_bit = bit as i32;
 
         bit += now;
@@ -354,48 +560,16 @@ fn wnaf(wnaf: &mut [i32], s: &Scalar, w: usize) -> i32 {
     last_set_bit + 1
 }
 
-fn table_get_ge(pre: &[Affine], n: i32, w: usize) -> Affine {
+/// Position of the odd multiple `|n|` in the table, and whether it has to be negated
+#[inline(always)]
+pub(super) fn table_index(n: WnafDigit, w: usize) -> (usize, bool) {
+    let n = n as i32;
     debug_assert!(table_verify(n, w));
 
     if n > 0 {
-        pre[(n - 1) as usize / 2]
+        ((n - 1) as usize / 2, false)
     } else {
-        let mut r = pre[(-n - 1) as usize / 2];
-        r.y.negate_in_place(1);
-        r
-    }
-}
-
-fn table_get_ge_lambda(pre: &[Affine], aux: &[FieldElement], n: i32, w: usize) -> Affine {
-    debug_assert!(table_verify(n, w));
-
-    if n > 0 {
-        Affine {
-            x: aux[(n - 1) as usize / 2],
-            y: pre[(n - 1) as usize / 2].y,
-            infinity: false,
-        }
-    } else {
-        let mut y = pre[(-n - 1) as usize / 2].y;
-        y.negate_in_place(1);
-
-        Affine {
-            x: aux[(-n - 1) as usize / 2],
-            y,
-            infinity: false,
-        }
-    }
-}
-
-fn table_get_ge_storage(pre: &[AffineStorage; ECMULT_TABLE_SIZE_G], n: i32, w: usize) -> Affine {
-    debug_assert!(table_verify(n, w));
-
-    if n > 0 {
-        pre[(n - 1) as usize / 2].to_affine()
-    } else {
-        let mut r = pre[(-n - 1) as usize / 2].to_affine();
-        r.y.negate_in_place(1);
-        r
+        ((-n - 1) as usize / 2, true)
     }
 }
 
@@ -726,5 +900,73 @@ mod tests {
         .unwrap();
 
         assert_eq!(without_hooks, with_hooks);
+    }
+
+    /// The recovery from bytes is the recovery through the types of `k256`, which also tells
+    /// the inputs to reject: for any bytes, for `r` and `s` at the bounds of their range, and
+    /// for signatures that recover a key
+    #[cfg(feature = "secp256k1-static-context")]
+    #[test]
+    fn recover_from_bytes_matches_recover() {
+        use crate::secp256k1::hooks::DefaultSecp256k1Hooks;
+        use k256::ecdsa::{RecoveryId, Signature, SigningKey};
+        use k256::elliptic_curve::ops::Reduce;
+
+        fn check(digest: [u8; 32], r: [u8; 32], s: [u8; 32], y_is_odd: bool) -> bool {
+            let expected = Signature::from_scalars(r, s).ok().and_then(|signature| {
+                let message = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&digest.into());
+                super::recover(&message, &signature, &RecoveryId::new(y_is_odd, false)).ok()
+            });
+            let recovered = super::recover_from_bytes_with_hooks(
+                &digest,
+                &r,
+                &s,
+                y_is_odd,
+                &mut DefaultSecp256k1Hooks,
+            )
+            .ok();
+            assert_eq!(recovered, expected);
+            if let Some(point) = recovered {
+                let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
+                point.write_coordinates(&mut x, &mut y);
+                let encoded = point.to_encoded_point(false);
+                assert_eq!(&encoded.as_bytes()[1..33], &x);
+                assert_eq!(&encoded.as_bytes()[33..], &y);
+            }
+            recovered.is_some()
+        }
+
+        let order: [u8; 32] = k256::elliptic_curve::bigint::Encoding::to_be_bytes(
+            &<k256::Secp256k1 as k256::elliptic_curve::Curve>::ORDER,
+        );
+        let mut below_order = order;
+        below_order[31] -= 1;
+        let mut above_order = order;
+        above_order[31] += 1;
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        let bounds = [[0; 32], one, below_order, order, above_order, [0xff; 32]];
+
+        for r in bounds {
+            for s in bounds {
+                for digest in bounds {
+                    for y_is_odd in [false, true] {
+                        check(digest, r, s, y_is_odd);
+                    }
+                }
+            }
+        }
+
+        proptest!(|(digest: [u8; 32], r: [u8; 32], s: [u8; 32], y_is_odd: bool, key: [u8; 32])| {
+            check(digest, r, s, y_is_odd);
+
+            if let Ok(key) = SigningKey::from_bytes(&key.into()) {
+                let (signature, recovery_id) = key.sign_prehash_recoverable(&digest).unwrap();
+                if !recovery_id.is_x_reduced() {
+                    let (r, s) = signature.split_bytes();
+                    assert!(check(digest, r.into(), s.into(), recovery_id.is_y_odd()));
+                }
+            }
+        });
     }
 }

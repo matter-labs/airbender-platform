@@ -4,7 +4,6 @@ compile_error!("feature `bigint_ops` must be activated for RISC-V target");
 pub type Fq = Fp256<MontBackend<FqConfig, 4>>;
 use crate::ark_ff_delegation::{BigInt, BigIntMacro, Fp, Fp256, MontBackend, MontConfig};
 use crate::bigint_delegation::{u256, DelegatedModParams, DelegatedMontParams};
-use ark_ff::ark_ff_macros::unroll_for_loops;
 use ark_ff::{AdditiveGroup, Zero};
 
 type B = BigInt<4>;
@@ -15,23 +14,34 @@ static MODULUS_CONSTANT: B =
 // it's - MODULUS^-1 mod 2^256
 static MONT_REDUCTION_CONSTANT: B =
     BigIntMacro!("111032442853175714102588374283752698368366046808579839647964533820976443843465");
+// 2 p, the reduction constant of the redundant representation
+static DOUBLE_MODULUS_CONSTANT: B =
+    BigIntMacro!("43776485743678550444492811490514550177392622314595647325378075789290452417166");
 
-// // a^-1 = a ^ (p - 2)
-// const INVERSION_POW: B = BigInt([
-//     4332616871279656263u64 - 2,
-//     10917124144477883021u64,
-//     13281191951274694749u64,
-//     3486998266802970665u64,
-// ]);
+// a^-1 = a ^ (p - 2)
+const INVERSION_POW: B = BigInt([
+    4332616871279656263u64 - 2,
+    10917124144477883021u64,
+    13281191951274694749u64,
+    3486998266802970665u64,
+]);
 
 #[derive(Default)]
 struct FqParams;
 
+// the redundant representation needs 4 modulus < 2^256 (the top limb below 2^62)
+const _: () = assert!(FqConfig::MODULUS.0[3] >> 62 == 0);
+
 impl DelegatedModParams<4> for FqParams {
     const MODULUS_BITSIZE: usize = 254;
+    const REDUNDANT: bool = true;
 
     fn modulus() -> &'static BigInt<4> {
         &MODULUS_CONSTANT
+    }
+
+    fn double_modulus() -> &'static BigInt<4> {
+        &DOUBLE_MODULUS_CONSTANT
     }
 }
 
@@ -112,40 +122,54 @@ impl MontConfig<4usize> for FqConfig {
     // We will override to also use 256-digit approach here
     #[inline(always)]
     fn into_bigint(mut a: Fp<MontBackend<Self, 4>, 4>) -> BigInt<4> {
-        // for now it's just a multiplication with 1 literal
+        // a multiplication by 1, whose result (below 2p in the redundant representation) is
+        // then made canonical
         unsafe {
             u256::mul_assign_montgomery::<FqParams>(&mut a.0, &BigInt::one());
+            u256::reduce_to_canonical::<FqParams>(&mut a.0);
         }
 
         a.0
     }
 
+    /// Modular: the redundant representation has two representatives of every element
     #[inline(always)]
-    fn inverse(a: &Fp<MontBackend<Self, 4>, 4>) -> Option<Fp<MontBackend<Self, 4>, 4>> {
-        return __gcd_inverse(a);
-
-        // use ark_ff::Field;
-        // if a.is_zero() {
-        //     return None;
-        // }
-
-        // let inverse = a.pow(INVERSION_POW);
-
-        // Some(inverse)
+    fn eq(a: &F, b: &F) -> bool {
+        unsafe { u256::eq_mod::<FqParams>(&a.0, &b.0) }
     }
 
-    // default impl
     #[inline(always)]
-    #[unroll_for_loops(8)]
+    fn is_zero(a: &F) -> bool {
+        unsafe { u256::is_zero_mod::<FqParams>(&a.0) }
+    }
+
+    /// Fermat: a^(p - 2). A few hundred delegated Montgomery operations, which is cheaper
+    /// than the binary GCD (`__gcd_inverse`) whose word-by-word halving runs in software.
+    #[inline(always)]
+    fn inverse(a: &Fp<MontBackend<Self, 4>, 4>) -> Option<Fp<MontBackend<Self, 4>, 4>> {
+        if a.is_zero() {
+            return None;
+        }
+        Some(crate::ark_ff_delegation::pow_window4(a, &INVERSION_POW.0))
+    }
+
+    /// In place, with delegated copies: no by-value moves of the operands
+    #[inline(always)]
     fn sum_of_products<const M: usize>(a: &[F; M], b: &[F; M]) -> F {
         let mut sum = F::ZERO;
-        for i in 0..a.len() {
-            sum += a[i] * &b[i];
+        let mut product = F::ZERO;
+        for i in 0..M {
+            u256::copy_assign(&mut product.0, &a[i].0);
+            unsafe {
+                u256::mul_assign_montgomery::<FqParams>(&mut product.0, &b[i].0);
+                u256::add_mod_assign::<FqParams>(&mut sum.0, &product.0);
+            }
         }
         sum
     }
 }
 
+#[cfg(test)]
 fn __gcd_inverse(a: &F) -> Option<F> {
     if a.is_zero() {
         return None;
@@ -286,6 +310,43 @@ mod test {
         }
     }
 
+    /// Products whose low limb is zero (the carry-only path of the reduction) and the
+    /// extreme residues, against the reference implementation
+    #[test]
+    fn test_mul_edge_cases() {
+        use ark_ff::{Field, One, PrimeField};
+        type RefFq = ark_bn254::Fq;
+        let from_ref = |r: RefFq| {
+            Fq::from_bigint(crate::ark_ff_delegation::BigInt(r.into_bigint().0)).unwrap()
+        };
+        let p_minus_1 = -RefFq::one();
+        let two_128 = RefFq::from(2u64).pow([128u64]);
+        // the Montgomery form of `2^256^-1` is 1: a zero low limb
+        let r_inv = RefFq::from(2u64).pow([256u64]).inverse().unwrap();
+        let values = [
+            RefFq::zero(),
+            RefFq::one(),
+            p_minus_1,
+            two_128,
+            r_inv,
+            RefFq::from(2u64),
+            two_128 * two_128,
+            p_minus_1 * r_inv,
+            two_128 * r_inv,
+        ];
+        for &ra in values.iter() {
+            for &rb in values.iter() {
+                let mut a = from_ref(ra);
+                let b = from_ref(rb);
+                a *= &b;
+                assert_eq!(a.into_bigint().0, (ra * rb).into_bigint().0, "{ra} * {rb}");
+                let mut sq = from_ref(ra);
+                sq.square_in_place();
+                assert_eq!(sq.into_bigint().0, ra.square().into_bigint().0);
+            }
+        }
+    }
+
     #[test]
     fn test_mul_correctness() {
         use std::str::FromStr;
@@ -362,6 +423,101 @@ mod test {
                 .0;
             let r = <Bn254 as Pairing>::ScalarField::MODULUS;
             assert!(gt.cyclotomic_exp(r).is_one());
+        }
+    }
+}
+
+#[cfg(test)]
+mod redundant_representation_tests {
+    use super::*;
+    use ark_ff::{Field, One, PrimeField, UniformRand};
+
+    fn to_ref(a: &F) -> ark_bn254::Fq {
+        ark_bn254::Fq::from_bigint(ark_ff::BigInt(a.into_bigint().0)).unwrap()
+    }
+
+    /// The other representative of `a`: its limbs plus the modulus (the arithmetic must
+    /// accept it and every observation must not tell it apart)
+    fn shifted(a: &F) -> F {
+        let mut limbs = a.0;
+        u256::add_assign(&mut limbs, FqParams::modulus());
+        F::new_unchecked(limbs)
+    }
+
+    #[test]
+    fn representatives_are_equal_and_reduce_the_same() {
+        let mut rng = ark_std::test_rng();
+        for _ in 0..50 {
+            let a = F::rand(&mut rng);
+            let b = F::rand(&mut rng);
+            let a2 = shifted(&a);
+            assert_ne!(a.0, a2.0);
+            assert_eq!(a, a2);
+            assert_eq!(a.into_bigint(), a2.into_bigint());
+            assert!(!a2.is_zero() || a.is_zero());
+            // every operation gives the same element from either representative
+            let ops: [fn(F, F) -> F; 4] = [|x, y| x + y, |x, y| x - y, |x, y| x * y, |x, y| y - x];
+            for op in ops {
+                let expected = op(a, b);
+                assert_eq!(op(a2, b), expected);
+                assert_eq!(op(a2, shifted(&b)), expected);
+                assert_eq!(to_ref(&op(a2, shifted(&b))), {
+                    let (ra, rb) = (to_ref(&a), to_ref(&b));
+                    match ops.iter().position(|f| *f as usize == op as usize).unwrap() {
+                        0 => ra + rb,
+                        1 => ra - rb,
+                        2 => ra * rb,
+                        _ => rb - ra,
+                    }
+                });
+            }
+            assert_eq!(-a2, -a);
+            assert_eq!(a2.double(), a.double());
+            assert_eq!(a2.square(), a.square());
+            assert_eq!(a2.inverse(), a.inverse());
+            assert_eq!(
+                to_ref(&a2.inverse().unwrap()),
+                to_ref(&a).inverse().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn zero_and_one_have_two_representatives() {
+        let zero_as_modulus = F::new_unchecked(*FqParams::modulus());
+        assert!(zero_as_modulus.is_zero());
+        assert_eq!(zero_as_modulus, F::ZERO);
+        assert_eq!(zero_as_modulus.into_bigint(), BigInt::zero());
+        assert!((-zero_as_modulus).is_zero());
+        let one2 = shifted(&F::ONE);
+        assert!(one2.is_one());
+        assert_eq!(one2 * F::from(7u64), F::from(7u64));
+        assert!(!shifted(&F::from(2u64)).is_one());
+        assert!(!shifted(&F::from(2u64)).is_zero());
+    }
+
+    #[test]
+    fn non_canonical_integers_are_rejected() {
+        assert!(F::from_bigint(*FqParams::modulus()).is_none());
+        let mut above = *FqParams::modulus();
+        u256::add_assign(&mut above, &BigInt::one());
+        assert!(F::from_bigint(above).is_none());
+        assert!(F::from_bigint(BigInt::zero()).unwrap().is_zero());
+        let mut below = *FqParams::modulus();
+        u256::sub_assign(&mut below, &BigInt::one());
+        assert_eq!(F::from_bigint(below).unwrap(), -F::ONE);
+    }
+
+    #[test]
+    fn results_stay_below_twice_the_modulus() {
+        let mut rng = ark_std::test_rng();
+        let below = |x: &F| u256::lt(&x.0, FqParams::double_modulus());
+        for _ in 0..50 {
+            let a = shifted(&F::rand(&mut rng));
+            let b = shifted(&F::rand(&mut rng));
+            for x in [a + b, a - b, a * b, -a, a.double(), a.square()] {
+                assert!(below(&x));
+            }
         }
     }
 }

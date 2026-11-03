@@ -4,9 +4,16 @@
 mod context;
 pub mod field;
 pub mod hooks;
+pub mod oracle;
 mod points;
 mod recover;
+mod recover_affine;
+#[cfg(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"))]
+mod recover_shamir;
+mod recover_witnessed;
 pub mod scalars;
+#[cfg(all(not(target_arch = "riscv32"), feature = "secp256k1-static-context"))]
+pub mod witness_host;
 
 #[cfg(test)]
 mod test_vectors;
@@ -15,17 +22,23 @@ use core::fmt::Debug;
 use core::fmt::Display;
 
 pub use context::ECMultContext;
+pub use hooks::RecoveryWitness;
+/// The affine point type, named by the hooks (`Secp256k1Hooks::recovery_witness`) and returned by the recovery
+pub use points::Affine;
 pub use recover::recover_with_context;
 pub use recover::recover_with_context_and_hooks;
+pub use recover_witnessed::WITNESS_COEFFICIENT_BITS;
 
 #[cfg(feature = "secp256k1-static-context")]
-pub use recover::{recover, recover_with_hooks};
+pub use recover::{recover, recover_from_bytes_with_hooks, recover_with_hooks};
 
 #[derive(Debug, PartialEq)]
 pub enum Secp256k1Err {
     OperationOverflow,
     InvalidParams,
     RecoveredInfinity,
+    /// The witness of the recovery (`hooks::RecoveryWitness`) does not check out
+    InvalidWitness,
 }
 
 /// The order of the secp256k1 curve, divided by two. Signatures that should be checked according
@@ -49,6 +62,7 @@ impl Display for Secp256k1Err {
                 "secp256k1: could not decompress signature to curve point"
             ),
             Self::RecoveredInfinity => write!(f, "secp256k1: recovered the point at infinity"),
+            Self::InvalidWitness => write!(f, "secp256k1: the witness of the recovery is wrong"),
         }
     }
 }
@@ -77,7 +91,7 @@ pub fn ecrecover_test() {
         hasher.update(message);
         let res = hasher.finalize();
         let mut hash_bytes = [0u8; 32];
-        hash_bytes.copy_from_slice(&res);
+        hash_bytes.copy_from_slice(res.as_ref());
         hash_bytes
     };
 

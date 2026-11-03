@@ -10,7 +10,7 @@ mod mod_inv32;
 #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
 mod field_5x52;
 #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
-mod mod_inv64;
+pub(crate) mod mod_inv64;
 
 #[cfg(any(
     all(target_arch = "riscv32", feature = "bigint_ops"),
@@ -26,8 +26,10 @@ cfg_if! {
     if #[cfg(all(debug_assertions, not(feature = "bigint_ops")))] {
         use field_impl::{FieldElementImpl as FieldElementImplConst, FieldElementImpl, FieldStorageImpl};
     } else if #[cfg(feature = "bigint_ops")] {
-        use field_10x26::{FieldElement10x26 as FieldElementImplConst, FieldStorage10x26 as FieldStorageImpl};
-        use field_8x32::FieldElement8x32 as FieldElementImpl;
+        // The stored form is the delegated element itself (Montgomery form, 32-byte aligned),
+        // so precomputed tables are used in place, without a conversion or a copy
+        use field_10x26::FieldElement10x26 as FieldElementImplConst;
+        use field_8x32::{FieldElement8x32 as FieldElementImpl, FieldElement8x32 as FieldStorageImpl};
     } else if #[cfg(target_pointer_width = "64")] {
         use field_5x52::{FieldElement5x52 as FieldElementImpl, FieldElement5x52 as FieldElementImplConst, FieldStorage5x52 as FieldStorageImpl};
     } else if #[cfg(target_pointer_width = "32")] {
@@ -95,11 +97,32 @@ impl FieldElementConst {
         Self(self.0.normalize())
     }
 
+    /// NOTE: `self` should be normalized
     pub(crate) const fn to_storage(self) -> FieldStorage {
+        // Storage is read into the runtime element as is, and the delegation-based one
+        // is in Montgomery form
+        #[cfg(feature = "bigint_ops")]
+        {
+            // 2^256 mod p
+            const R: FieldElementConst = FieldElementConst::from_bytes_unchecked(&[
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+                0, 0, 0x03, 0xd1,
+            ]);
+            FieldStorage(FieldStorageImpl::from_storage_10x26(
+                self.mul(&R).normalize().0.to_storage(),
+            ))
+        }
+
+        #[cfg(not(feature = "bigint_ops"))]
         FieldStorage(self.0.to_storage())
     }
 
     pub const fn normalizes_to_zero(&self) -> bool {
+        self.0.normalizes_to_zero()
+    }
+
+    /// Whether the element is zero
+    pub const fn is_zero(&self) -> bool {
         self.0.normalizes_to_zero()
     }
 
@@ -116,6 +139,7 @@ impl FieldElementConst {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub struct FieldElement(pub(crate) FieldElementImpl);
 
 impl FieldElement {
@@ -133,30 +157,93 @@ impl FieldElement {
         FieldElementImpl::from_bytes(bytes).map(Self)
     }
 
+    #[inline(always)]
     pub fn mul_in_place(&mut self, rhs: &Self) {
         self.0.mul_in_place(&rhs.0);
     }
 
+    #[inline(always)]
     pub fn mul_int_in_place(&mut self, rhs: u32) {
         self.0.mul_int_in_place(rhs);
     }
 
+    #[inline(always)]
     pub fn square_in_place(&mut self) {
         self.0.square_in_place();
     }
 
+    #[inline(always)]
     pub fn add_in_place(&mut self, rhs: &Self) {
         self.0.add_in_place(&rhs.0);
     }
 
+    #[inline(always)]
     pub fn double_in_place(&mut self) {
         self.0.double_in_place();
     }
 
+    #[inline(always)]
     pub fn sub_in_place(&mut self, rhs: &Self) {
         self.0.sub_in_place(&rhs.0);
     }
 
+    /// `self -= rhs` for a `rhs` of magnitude at most `magnitude` (1 for a product, a normalized
+    /// value or a decoded one; a sum adds the magnitudes of its terms, a negation one): the
+    /// representations with magnitudes skip the normalization of `rhs` that `sub_in_place` does,
+    /// and the result has the magnitude of `self` plus `magnitude + 1`. The inputs of a
+    /// multiplication must stay within magnitude 8.
+    #[cfg(not(feature = "bigint_ops"))]
+    #[inline(always)]
+    pub fn sub_in_place_magnitude(&mut self, rhs: &Self, magnitude: u32) {
+        self.0.sub_in_place_magnitude(&rhs.0, magnitude);
+    }
+
+    /// Brings the magnitude back to 1 between the operations, cheaper than the full
+    /// normalization (which the comparisons and the byte encodings do themselves)
+    #[cfg(not(feature = "bigint_ops"))]
+    #[inline(always)]
+    pub fn normalize_weak_in_place(&mut self) {
+        self.0.normalize_weak_in_place();
+    }
+
+    /// Computes `self = minuend - self`
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn sub_and_negate_in_place(&mut self, minuend: &Self) {
+        self.0.sub_and_negate_in_place(&minuend.0);
+    }
+
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn triple_in_place(&mut self) {
+        self.0.triple_in_place();
+    }
+
+    /// Cheaper `*self = *src` for the delegation-based field
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn copy_from(&mut self, src: &Self) {
+        self.0.copy_from(&src.0);
+    }
+
+    /// Cheaper `Clone` for the delegation-based field: initializes `dst` with a copy of `src`
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn write_copy<'a>(
+        dst: &'a mut core::mem::MaybeUninit<Self>,
+        src: &Self,
+    ) -> &'a mut Self {
+        // SAFETY: `Self` is a wrapper of the implementation with the same layout, and
+        // the implementation initializes all of it
+        unsafe {
+            let dst = &mut *(dst as *mut core::mem::MaybeUninit<Self>)
+                .cast::<core::mem::MaybeUninit<FieldElementImpl>>();
+            &mut *(FieldElementImpl::write_copy(dst, &src.0) as *mut FieldElementImpl)
+                .cast::<Self>()
+        }
+    }
+
+    #[inline(always)]
     pub fn add_int_in_place(&mut self, rhs: u32) {
         self.0.add_int_in_place(rhs);
     }
@@ -223,22 +310,64 @@ impl FieldElement {
         is_root.negate_in_place(1);
         is_root.add_in_place(&original);
 
-        is_root.normalizes_to_zero()
+        is_root.is_zero()
     }
+    #[inline(always)]
     pub fn negate_in_place(&mut self, magnitude: u32) {
         self.0.negate_in_place(magnitude);
     }
 
+    #[inline(always)]
     pub fn normalize_in_place(&mut self) {
         self.0.normalize_in_place();
     }
 
+    #[inline(always)]
     pub fn is_odd(&self) -> bool {
         self.0.is_odd()
     }
 
+    #[inline(always)]
     pub fn normalizes_to_zero(&self) -> bool {
         self.0.normalizes_to_zero()
+    }
+
+    /// Whether the element is zero
+    #[inline(always)]
+    pub fn is_zero(&self) -> bool {
+        self.0.normalizes_to_zero()
+    }
+
+    /// Whether the element is one: in the delegated representation one comparison, otherwise a
+    /// subtraction that normalizes to zero
+    #[inline(always)]
+    pub fn is_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            let mut difference = *self;
+            difference.sub_in_place(&Self::ONE);
+            difference.normalizes_to_zero()
+        }
+    }
+
+    /// Whether the element is minus one: in the delegated representation one comparison,
+    /// otherwise an addition that normalizes to zero
+    #[inline(always)]
+    pub fn is_minus_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_minus_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            let mut sum = *self;
+            sum.add_in_place(&Self::ONE);
+            sum.normalizes_to_zero()
+        }
     }
 
     #[inline(always)]
@@ -253,49 +382,70 @@ impl FieldElement {
         self.0.to_bytes()
     }
 
+    /// The canonical big-endian bytes of the element into `bytes`
+    #[inline(always)]
+    pub fn write_bytes(self, bytes: &mut [u8; 32]) {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.write_bytes(bytes);
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            bytes.copy_from_slice(&self.to_bytes());
+        }
+    }
+
     #[cfg(test)]
-    pub(crate) const fn to_storage(self) -> FieldStorage {
+    pub(crate) fn to_storage(mut self) -> FieldStorage {
+        self.normalize_in_place();
         FieldStorage(self.0.to_storage())
     }
 }
 
 impl MulAssign for FieldElement {
+    #[inline(always)]
     fn mul_assign(&mut self, rhs: Self) {
         self.mul_in_place(&rhs);
     }
 }
 
 impl MulAssign<&FieldElement> for FieldElement {
+    #[inline(always)]
     fn mul_assign(&mut self, rhs: &Self) {
         self.mul_in_place(rhs);
     }
 }
 
 impl MulAssign<u32> for FieldElement {
+    #[inline(always)]
     fn mul_assign(&mut self, rhs: u32) {
         self.mul_int_in_place(rhs);
     }
 }
 
 impl AddAssign for FieldElement {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
         self.add_in_place(&rhs);
     }
 }
 
 impl AddAssign<u32> for FieldElement {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: u32) {
         self.add_int_in_place(rhs);
     }
 }
 
 impl SubAssign for FieldElement {
+    #[inline(always)]
     fn sub_assign(&mut self, rhs: Self) {
         self.sub_in_place(&rhs);
     }
 }
 
 #[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub(crate) struct FieldStorage(FieldStorageImpl);
 
 impl FieldStorage {
@@ -303,6 +453,14 @@ impl FieldStorage {
 
     pub(crate) fn to_field_elem(self) -> FieldElement {
         FieldElement(self.0.to_field_elem())
+    }
+
+    /// The stored element in place: with the delegated field the storage is the element
+    #[cfg(feature = "bigint_ops")]
+    #[inline(always)]
+    pub(crate) fn as_field_elem(&self) -> &FieldElement {
+        // SAFETY: both are `repr(transparent)` wrappers of `FieldElement8x32`
+        unsafe { &*(self as *const Self).cast::<FieldElement>() }
     }
 }
 
@@ -350,6 +508,24 @@ impl PartialEq for FieldElement {
 mod tests {
     use super::{FieldElement, FieldElementConst};
     use proptest::{prop_assert, prop_assert_eq, proptest};
+
+    #[test]
+    fn zero_one_and_minus_one() {
+        let mut minus_one = FieldElement::ONE;
+        minus_one.negate_in_place(1);
+        assert!(FieldElement::ZERO.is_zero() && !FieldElement::ONE.is_zero());
+        assert!(FieldElement::ONE.is_one() && !FieldElement::ONE.is_minus_one());
+        assert!(minus_one.is_minus_one() && !minus_one.is_one());
+        proptest!(|(x: FieldElement)| {
+            let mut difference = x;
+            difference.sub_in_place(&FieldElement::ONE);
+            prop_assert_eq!(x.is_one(), difference.normalizes_to_zero());
+            let mut sum = x;
+            sum.add_in_place(&FieldElement::ONE);
+            prop_assert_eq!(x.is_minus_one(), sum.normalizes_to_zero());
+            prop_assert_eq!(x.is_zero(), x.normalizes_to_zero());
+        })
+    }
 
     #[test]
     fn storage_round_trip() {

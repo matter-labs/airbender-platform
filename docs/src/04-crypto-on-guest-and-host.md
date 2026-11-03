@@ -101,6 +101,27 @@ Hook implementations must produce correct results. The recovery functions trust 
 
 The [`examples/ecrecover-hooks/`](https://github.com/matter-labs/airbender-platform/tree/main/examples/ecrecover-hooks) example demonstrates the full hint-and-verify flow: the host precomputes hints with `CapturingHooks`, the guest verifies them cheaply with `PrecomputedHintHooks`.
 
+### Hints from the host over the CSR
+
+`secp256k1::oracle::OracleHooks` is a ready-made `Secp256k1Hooks` that takes every hint from the
+host over a word channel and checks it on the guest; on the RISC-V guest the channel is the
+non-determinism CSR (`CsrHooks`, i.e. `OracleHooks::new(CsrChannel)`). It also witnesses the
+recovered key (`Secp256k1Hooks::recovery_witness`), which saves about a fifth of the group
+operations of a recovery. The wire protocol is the memory-based oracle protocol of ZKsync OS
+(query id `0x40050011`, a request with the op and the address of the operand, the answers read
+word by word), so a host that serves ZKsync OS serves these hooks. The host side is
+`secp256k1::oracle::host::serve`, which reads the request from the guest's memory and answers in
+the representation of the guest's build (`Representation::Montgomery` with the `bigint_ops`
+delegation, `Representation::Canonical` otherwise).
+
+```rust
+use airbender_crypto::secp256k1::oracle::{CsrChannel, OracleHooks};
+use airbender_crypto::secp256k1::recover_from_bytes_with_hooks;
+
+let mut hooks = OracleHooks::new(CsrChannel);
+let key = recover_from_bytes_with_hooks(&digest, &r, &s, y_is_odd, &mut hooks)?;
+```
+
 ## Practical Tips
 
 - Write shared crypto code that runs on both host and guest. Test on the host first (faster iteration), then run guest execution/proof flows.

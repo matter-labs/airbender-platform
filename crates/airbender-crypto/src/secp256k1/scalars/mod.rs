@@ -38,7 +38,7 @@ impl Scalar {
     pub const ONE: Self = Self(ScalarInner::ONE);
     #[cfg(test)]
     pub(crate) const ORDER: Self = Self(ScalarInner::ORDER);
-    #[cfg(test)]
+    /// Minus the eigenvalue `λ` of the endomorphism `(x, y) -> (β x, y)`
     pub(crate) const MINUS_LAMBDA: Self = Self(ScalarInner::MINUS_LAMBDA);
 
     #[cfg(test)]
@@ -46,14 +46,65 @@ impl Scalar {
         Self(ScalarInner::from_be_bytes_unchecked(bytes))
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_u128(n: u128) -> Self {
-        Self(ScalarInner::from_u128(n))
-    }
-
     pub fn from_signature(signature: &crate::k256::ecdsa::Signature) -> (Self, Self) {
         let (r, s) = signature.split_scalars();
         (Self::from_k256_scalar(*r), Self::from_k256_scalar(*s))
+    }
+
+    /// The scalar of a big-endian integer, `None` if it is not below the order
+    pub fn from_be_bytes_checked(bytes: &[u8; 32]) -> Option<Self> {
+        #[cfg(feature = "bigint_ops")]
+        {
+            ScalarInner::from_be_bytes_checked(bytes).map(Self)
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            use crate::k256::elliptic_curve::PrimeField;
+
+            Option::from(crate::k256::Scalar::from_repr((*bytes).into()))
+                .map(Self::from_k256_scalar)
+        }
+    }
+
+    /// A non-negative integer below `2^128` as a scalar: no reduction, and in the delegated
+    /// representation one multiplication for the Montgomery form
+    pub(crate) fn from_u128(x: u128) -> Self {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&x.to_be_bytes());
+        let inner = ScalarInner::from_be_bytes_unchecked(&bytes);
+        #[cfg(feature = "bigint_ops")]
+        {
+            Self(inner.to_representation())
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            Self(inner)
+        }
+    }
+
+    /// A non-negative integer below `2^128` in the form `recover::wnaf` reads: the integer form
+    /// of the representation (what `decompose_128` returns), which the delegated scalars use
+    /// only for the digit recoding
+    pub(crate) fn wnaf_form_u128(x: u128) -> Self {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&x.to_be_bytes());
+        Self(ScalarInner::from_be_bytes_unchecked(&bytes))
+    }
+
+    /// The scalar of a big-endian integer, reduced modulo the order
+    pub fn from_be_bytes_reduced(bytes: &[u8; 32]) -> Self {
+        #[cfg(feature = "bigint_ops")]
+        {
+            Self(ScalarInner::from_be_bytes(bytes))
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            use crate::k256::elliptic_curve::ops::Reduce;
+
+            Self::from_k256_scalar(
+                <crate::k256::Scalar as Reduce<crate::k256::U256>>::reduce_bytes(&(*bytes).into()),
+            )
+        }
     }
 
     pub fn to_repr(self) -> FieldBytes {
@@ -85,12 +136,43 @@ impl Scalar {
         self.0.bits(offset, count)
     }
 
+    /// The 64-bit little-endian limbs of the representation
+    pub(crate) fn limbs(&self) -> [u64; 4] {
+        self.0.limbs()
+    }
+
     pub fn bits_var(&self, offset: usize, count: usize) -> u32 {
         self.0.bits_var(offset, count)
     }
 
     pub fn is_zero(&self) -> bool {
         self.0.is_zero()
+    }
+
+    /// Whether the scalar is one: in the delegated representation one comparison, otherwise a
+    /// subtraction and a zero check
+    pub fn is_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            (*self - Self::ONE).is_zero()
+        }
+    }
+
+    /// Whether the scalar is minus one: in the delegated representation one comparison, otherwise
+    /// an addition and a zero check
+    pub fn is_minus_one(&self) -> bool {
+        #[cfg(feature = "bigint_ops")]
+        {
+            self.0.is_minus_one()
+        }
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            (*self + Self::ONE).is_zero()
+        }
     }
 
     pub fn negate_in_place(&mut self) {
@@ -196,9 +278,27 @@ mod tests {
 
     #[test]
     fn test_zero() {
-        assert_eq!(Scalar::ZERO, Scalar::ORDER);
+        // The delegation scalar compares representations, and keeps them canonical: `ORDER` is
+        // not one of them.
+        #[cfg(not(feature = "bigint_ops"))]
+        {
+            assert_eq!(Scalar::ZERO, Scalar::ORDER);
+            assert!(Scalar::ORDER.is_zero());
+        }
         assert!(Scalar::ZERO.is_zero());
-        assert!(Scalar::ORDER.is_zero());
+        assert!(!Scalar::ONE.is_zero());
+    }
+
+    #[test]
+    fn test_one_and_minus_one() {
+        assert!(Scalar::ONE.is_one() && !Scalar::ONE.is_minus_one());
+        assert!((-Scalar::ONE).is_minus_one() && !(-Scalar::ONE).is_one());
+        assert!(!Scalar::ZERO.is_one() && !Scalar::ZERO.is_minus_one());
+        proptest!(|(x: Scalar)| {
+            prop_assert_eq!(x.is_one(), (x - Scalar::ONE).is_zero());
+            prop_assert_eq!(x.is_minus_one(), (x + Scalar::ONE).is_zero());
+            prop_assert_eq!(x.is_zero(), x == Scalar::ZERO);
+        });
     }
 
     #[test]
@@ -226,7 +326,8 @@ mod tests {
     #[test]
     fn test_decompose() {
         proptest!(|(k: Scalar)| {
-            let (r1, r2) = k.decompose();
+            #[allow(unused_mut)]
+            let (mut r1, mut r2) = k.decompose();
             let lambda = -Scalar::MINUS_LAMBDA;
 
             #[cfg(feature = "bigint_ops")]

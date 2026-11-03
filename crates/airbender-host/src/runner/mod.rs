@@ -29,7 +29,30 @@ pub struct ExecutionResult {
     pub receipt: Receipt,
     pub cycles_executed: usize,
     pub reached_end: bool,
+    /// Program counter at the end of the run. A program that stops in the
+    /// canonical exit sequence (see [`find_exit_pc`]) succeeded; a program
+    /// parked in another self-loop (an error handler) has `reached_end` set
+    /// too but a different `final_pc`.
+    pub final_pc: u32,
     pub cycle_markers: Option<CycleMarker>,
+}
+
+/// Locate the canonical exit sequence in a program image and return the PC
+/// of its final self-loop, i.e. the `final_pc` of a successful run.
+///
+/// Returns `None` when the image contains no (or more than one) exit sequence.
+pub fn find_exit_pc(bin_words: &[u32]) -> Option<u32> {
+    let sequence = riscv_common::EXIT_SEQUENCE;
+    let mut found = None;
+    for (start, window) in bin_words.windows(sequence.len()).enumerate() {
+        if window == sequence {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(((start + sequence.len() - 1) * 4) as u32);
+        }
+    }
+    found
 }
 
 /// Resolve the cycle budget from an explicit override or default.

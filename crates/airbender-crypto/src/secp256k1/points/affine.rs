@@ -47,7 +47,7 @@ impl AffineConst {
     }
 
     pub(crate) const fn is_infinity(&self) -> bool {
-        self.infinity || (self.x.normalizes_to_zero() && self.y.normalizes_to_zero())
+        self.infinity || (self.x.is_zero() && self.y.is_zero())
     }
 
     #[allow(unused_mut)]
@@ -129,7 +129,7 @@ impl Affine {
     }
 
     pub fn is_infinity(&self) -> bool {
-        self.infinity || (self.x.normalizes_to_zero() && self.y.normalizes_to_zero())
+        self.infinity || (self.x.is_zero() && self.y.is_zero())
     }
 
     pub fn decompress(x_bytes: &FieldBytes, y_is_odd: bool) -> Option<Self> {
@@ -138,6 +138,11 @@ impl Affine {
             y_is_odd,
             &mut crate::secp256k1::hooks::DefaultSecp256k1Hooks,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_xo_for_tests(&mut self, x: &FieldElement, y_is_odd: bool) -> bool {
+        self.set_xo(x, y_is_odd)
     }
 
     #[cfg(test)]
@@ -170,6 +175,24 @@ impl Affine {
         })
     }
 
+    /// The point of the curve with the coordinate `x` and the `y` of the given parity, if any
+    pub fn lift_x_with_hooks<H: Secp256k1Hooks>(
+        x: &FieldElement,
+        y_is_odd: bool,
+        hooks: &mut H,
+    ) -> Option<Self> {
+        let mut ret = Affine::DEFAULT;
+        ret.set_xo_with_hooks(x, y_is_odd, hooks).then_some(ret)
+    }
+
+    /// The coordinates `x` and `y` as big-endian bytes, of a point that is not the point at
+    /// infinity
+    pub fn write_coordinates(&self, x: &mut [u8; 32], y: &mut [u8; 32]) {
+        debug_assert!(!self.infinity);
+        self.x.write_bytes(x);
+        self.y.write_bytes(y);
+    }
+
     fn set_xo_with_hooks<H: Secp256k1Hooks>(
         &mut self,
         x: &FieldElement,
@@ -186,6 +209,10 @@ impl Affine {
 
         if self.y.is_odd() != y_is_odd {
             self.y.negate_in_place(1);
+            // back to magnitude 1 (a negation gives 2): the affine recovery takes the point as
+            // a table entry of magnitude 1 and negates it again
+            #[cfg(not(feature = "bigint_ops"))]
+            self.y.normalize_weak_in_place();
         }
 
         self.x = *x;

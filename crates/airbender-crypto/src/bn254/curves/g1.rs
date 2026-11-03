@@ -3,6 +3,12 @@
     test,
     feature = "proving"
 ))]
+use crate::ark_ff_delegation::BigInt as ScalarBigInt;
+#[cfg(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+))]
 use crate::ark_ff_delegation::MontFp;
 use ark_ec::{
     bn,
@@ -16,8 +22,14 @@ use ark_ec::{
     test,
     feature = "proving"
 )))]
+use ark_ff::BigInt as ScalarBigInt;
+#[cfg(not(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+)))]
 use ark_ff::MontFp;
-use ark_ff::{AdditiveGroup, BigInt, Field, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, Field, PrimeField, Zero};
 use ruint::aliases::U512;
 
 use crate::{
@@ -61,7 +73,7 @@ impl SWCurveConfig for Config {
         p: &bn::G1Projective<super::Config>,
         scalar: &[u64],
     ) -> bn::G1Projective<super::Config> {
-        let s = Self::ScalarField::from_sign_and_limbs(true, scalar);
+        let s = scalar_from_limbs(scalar);
         GLVConfig::glv_mul_projective(*p, s)
     }
 
@@ -77,20 +89,84 @@ impl SWCurveConfig for Config {
     }
 }
 
+/// `a + b` on the in-place group law: arkworks' `Projective + Affine` moves every field
+/// element by value, a copy per operation on the delegated field
+pub fn add_affine(a: &G1Affine, b: &G1Affine) -> bn::G1Projective<super::Config> {
+    crate::jacobian::add_affine(a, b)
+}
+
+/// `scalar * base` (little-endian limbs, any value below 2^256) in affine coordinates, with
+/// the field divisions of `divider` (see `crate::affine_glv`)
+pub fn mul_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    base: &G1Affine,
+    scalar: &[u64; 4],
+    divider: &mut D,
+) -> G1Affine {
+    crate::affine_glv::glv_mul_affine::<Config, D>(base, scalar_from_limbs(scalar), divider)
+}
+
+/// `a + b` in affine coordinates, with the field division of `divider`
+pub fn add_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
+    a: &G1Affine,
+    b: &G1Affine,
+    divider: &mut D,
+) -> G1Affine {
+    crate::affine_glv::add_affine::<Config, D>(a, b, divider)
+}
+
+/// The scalar (little-endian limbs, any value below 2^256) as a field element, reduced modulo
+/// the group order. On the delegated field this is one Montgomery multiplication by `R²`
+/// (`x R^-1 R² = x R`, the Montgomery form of `x`, with the reduction of the multiplication:
+/// `x R² < 2^256 r`, so the product is below `2r` and one conditional subtraction makes it
+/// canonical), where `from_sign_and_limbs` would run arkworks' software multiplication.
+#[inline(always)]
+fn scalar_from_limbs(scalar: &[u64]) -> Fr {
+    #[cfg(any(
+        all(target_arch = "riscv32", feature = "bigint_ops"),
+        test,
+        feature = "proving"
+    ))]
+    if scalar.len() <= 4 {
+        let mut repr = <Fr as PrimeField>::BigInt::default();
+        repr.as_mut()[..scalar.len()].copy_from_slice(scalar);
+        let mut s = Fr::new_unchecked(repr);
+        s *= &Fr::new_unchecked(Fr::R2);
+        return s;
+    }
+    Fr::from_sign_and_limbs(true, scalar)
+}
+
 impl GLVConfig for Config {
     const ENDO_COEFFS: &'static [Self::BaseField] = &[MontFp!(
         "21888242871839275220042445260109153167277707414472061641714758635765020556616"
     )];
 
-    const LAMBDA: Self::ScalarField = ark_ff::MontFp!(
-        "21888242871839275217838484774961031246154997185409878258781734729429964517155"
+    // 21888242871839275217838484774961031246154997185409878258781734729429964517155,
+    // built from limbs so that it types as either scalar field implementation
+    const LAMBDA: Self::ScalarField = Fr::from_sign_and_limbs(
+        true,
+        &[
+            13315467537088212771,
+            14715414200443454953,
+            327476452638867716,
+            3486998266802970665,
+        ],
     );
 
     const SCALAR_DECOMP_COEFFS: [(bool, <Self::ScalarField as PrimeField>::BigInt); 4] = [
-        (false, BigInt!("147946756881789319000765030803803410728")),
-        (true, BigInt!("9931322734385697763")),
-        (false, BigInt!("9931322734385697763")),
-        (false, BigInt!("147946756881789319010696353538189108491")),
+        // 147946756881789319000765030803803410728
+        (
+            false,
+            ScalarBigInt([9372478919628755240, 8020209761171036668, 0, 0]),
+        ),
+        // 9931322734385697763
+        (true, ScalarBigInt([9931322734385697763, 0, 0, 0])),
+        (false, ScalarBigInt([9931322734385697763, 0, 0, 0])),
+        // 147946756881789319010696353538189108491
+        (
+            false,
+            ScalarBigInt([857057580304901387, 8020209761171036669, 0, 0]),
+        ),
     ];
 
     fn endomorphism(p: &Projective<Self>) -> Projective<Self> {
@@ -102,6 +178,10 @@ impl GLVConfig for Config {
         let mut res = (*p).clone();
         res.x *= Self::ENDO_COEFFS[0];
         res
+    }
+
+    fn glv_mul_projective(p: Projective<Self>, k: Self::ScalarField) -> Projective<Self> {
+        crate::glv_decomposition::glv_mul_projective_jsf::<Self>(p, k)
     }
 
     fn scalar_decomposition(
@@ -202,5 +282,97 @@ mod tests {
         let data = BigUint::from_bytes_be(&Config::BETA_2.1.to_be_bytes::<{ U512::BYTES }>());
         let beta_2 = BigInt::from_biguint(sign, data);
         assert_eq!(beta_2, beta_2_ref);
+    }
+}
+
+#[cfg(test)]
+mod mul_tests {
+    use super::{Config, G1Affine};
+    use ark_ec::{models::short_weierstrass::SWCurveConfig, AffineRepr, CurveGroup};
+    use ark_ff::{BigInteger, PrimeField, UniformRand};
+
+    type RefAffine = ark_bn254::G1Affine;
+
+    fn to_ours(p: RefAffine) -> G1Affine {
+        if p.infinity {
+            return G1Affine::identity();
+        }
+        let x =
+            crate::bn254::Fq::from_bigint(crate::ark_ff_delegation::BigInt(p.x.into_bigint().0))
+                .unwrap();
+        let y =
+            crate::bn254::Fq::from_bigint(crate::ark_ff_delegation::BigInt(p.y.into_bigint().0))
+                .unwrap();
+        G1Affine::new_unchecked(x, y)
+    }
+
+    fn assert_same(ours: G1Affine, reference: RefAffine) {
+        assert_eq!(ours.infinity, reference.infinity);
+        if !ours.infinity {
+            assert_eq!(ours.x.into_bigint().0, reference.x.into_bigint().0);
+            assert_eq!(ours.y.into_bigint().0, reference.y.into_bigint().0);
+        }
+    }
+
+    #[test]
+    fn scalar_above_the_group_order_is_reduced() {
+        // the ecmul precompile passes any 256-bit scalar: the reduction modulo r must match
+        let limbs = [u64::MAX, u64::MAX - 5, 0x1234_5678_9abc_def0, u64::MAX >> 1];
+        let reduced = ark_bn254::Fr::from_sign_and_limbs(true, &limbs)
+            .into_bigint()
+            .0;
+        assert_ne!(limbs, reduced);
+        assert_eq!(
+            super::scalar_from_limbs(&limbs),
+            super::Fr::from_sign_and_limbs(true, &limbs)
+        );
+        let p = G1Affine::generator();
+        assert_eq!(
+            Config::mul_affine(&p, &limbs),
+            Config::mul_affine(&p, &reduced)
+        );
+    }
+
+    #[test]
+    fn scalar_multiplication_matches_the_reference() {
+        use ark_std::test_rng;
+        let mut rng = test_rng();
+        let r = ark_bn254::Fr::MODULUS;
+        let mut r_minus_1 = r;
+        r_minus_1.sub_with_borrow(&ark_ff::BigInt::from(1u64));
+        let mut r_plus_1 = r;
+        r_plus_1.add_with_carry(&ark_ff::BigInt::from(1u64));
+        let mut scalars: Vec<[u64; 4]> = vec![
+            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+            [2, 0, 0, 0],
+            [3, 0, 0, 0],
+            r_minus_1.0,
+            r.0,
+            r_plus_1.0,
+            [u64::MAX; 4],
+            [u64::MAX, u64::MAX, 0, 0],
+        ];
+        for _ in 0..40 {
+            scalars.push(ark_bn254::Fr::rand(&mut rng).into_bigint().0);
+            scalars.push([
+                u64::rand(&mut rng),
+                u64::rand(&mut rng),
+                u64::rand(&mut rng),
+                u64::rand(&mut rng),
+            ]);
+        }
+        let mut points: Vec<RefAffine> = vec![RefAffine::identity(), RefAffine::generator()];
+        for _ in 0..6 {
+            points.push(RefAffine::rand(&mut rng));
+        }
+        for reference in &points {
+            let ours = to_ours(*reference);
+            for scalar in &scalars {
+                let expected = ark_bn254::g1::Config::mul_affine(reference, scalar).into_affine();
+                let got = Config::mul_affine(&ours, scalar).into_affine();
+                assert_same(got, expected);
+            }
+        }
     }
 }
