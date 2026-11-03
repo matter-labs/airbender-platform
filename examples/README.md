@@ -27,3 +27,5 @@ See each example's own README for usage details and available options.
 - **std-btreemap** - std-enabled guest using `BTreeMap`
 - **cycle-markers** - transpiler profiling with cycle markers and delegation snapshots
 - **revm-basic** - revm transaction inside Airbender
+- **ecrecover-hooks** - secp256k1 recovery with hints precomputed on the host and verified by the guest
+- **oracle-hints** - a `QueryDispatcher` oracle that answers the guest's field-operation and ModExp hint queries live

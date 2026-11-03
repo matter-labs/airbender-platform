@@ -1,15 +1,15 @@
 //! The guest layout of a bls12-381 pairing request: the guest's answer from its memory matches the
 //! one a native recording gives. Outside `cfg(test)` the native points are the arkworks ones,
 //! whose layout is not the guest's.
-#![cfg(all(feature = "alloc", target_pointer_width = "64"))]
+#![cfg(all(feature = "oracle_implementations", target_pointer_width = "64"))]
 
 use airbender_crypto::{
     ark_ec::AffineRepr,
     ark_ff::{Field, PrimeField},
     bls12_381::{Fq, Fr, G1Affine, G2Affine},
     hints::{
-        answer_query, guest_layout::*, Bls12381Pair, FieldHintOp, FieldOpsHint64, HintError,
-        NativeQuerierMemory, QuerierMemory, FIELD_OPS_ADVISE_QUERY_ID,
+        answer_query, guest_layout::*, Bls12381Pair, FieldHintOp, FieldOpsHint64,
+        NativeQuerierMemory, QuerierMemory, QuerierMemoryError, FIELD_OPS_ADVISE_QUERY_ID,
     },
 };
 
@@ -20,7 +20,7 @@ impl QuerierMemory for Guest {
     fn word_size(&self) -> usize {
         4
     }
-    fn read_u32(&self, address: usize) -> Result<u32, HintError> {
+    fn read_u32(&self, address: usize) -> Result<u32, QuerierMemoryError> {
         Ok(self.0[address / 4])
     }
 }

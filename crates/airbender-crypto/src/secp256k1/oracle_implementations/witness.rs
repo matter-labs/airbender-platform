@@ -2,15 +2,12 @@
 //! recovery, and the coefficients by lattice reduction (the integral LLL of Cohen, Algorithm
 //! 2.6.7, in dimension 4). Host only.
 
-use super::context::ECRECOVER_CONTEXT;
-use super::hooks::{DefaultSecp256k1Hooks, RecoveryWitness};
-use super::points::Affine;
-use super::recover::compute_from_point;
-use super::recover_witnessed::WITNESS_COEFFICIENT_BITS;
-use super::scalars::Scalar;
-// the crate links `alloc` only with its `alloc` feature; this host-only module (where the
-// final binary has an allocator) links it on its own
-extern crate alloc;
+use super::super::context::ECRECOVER_CONTEXT;
+use super::super::hooks::{DefaultSecp256k1Hooks, RecoveryWitness};
+use super::super::points::Affine;
+use super::super::recover::compute_from_point;
+use super::super::recover_witnessed::WITNESS_COEFFICIENT_BITS;
+use super::super::scalars::Scalar;
 use alloc::vec;
 use alloc::vec::Vec;
 use num_bigint::{BigInt, Sign};
@@ -105,6 +102,8 @@ fn div_round(a: &BigInt, b: &BigInt) -> BigInt {
 /// Cohen, A Course in Computational Algebraic Number Theory, Algorithm 2.6.7 (integral LLL),
 /// with `delta = 3/4`. `d[i]` is the Gram determinant of the first `i` vectors (`d[0] = 1`),
 /// `lambda[k][j]` the scaled Gram-Schmidt coefficient `mu[k][j] d[j + 1]`.
+// the index loops follow the algorithm's statement
+#[allow(clippy::needless_range_loop)]
 fn lll(mut b: Vec<Vec<BigInt>>) -> Vec<Vec<BigInt>> {
     let n = b.len();
     let dot = |x: &[BigInt], y: &[BigInt]| -> BigInt { x.iter().zip(y).map(|(p, q)| p * q).sum() };

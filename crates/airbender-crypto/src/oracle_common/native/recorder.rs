@@ -1,7 +1,7 @@
 //! Native recording of the hint answers the RISC-V guest reads (the hint part of the prover input).
 
 use super::{answer_query, NativeQuerierMemory};
-use crate::hints::HintError;
+use crate::hints::{HintError, HintTarget};
 use airbender_oracle::MemoryOracle;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -10,10 +10,12 @@ use alloc::vec::Vec;
 /// guest's answers to the same queries, which the guest reads as its non-determinism input when it
 /// runs the same computation.
 ///
-/// Each query's whole guest answer is appended to the tape when it is sent, with no framing.
-/// Reading past the native answer is an error that consumes nothing; ending the query or sending
-/// the next one before the answer is read in full is an error that drops the rest (the guest would
-/// read it as the start of its next answer).
+/// Each query's whole guest answer is appended to the tape when it is sent, with no framing: in
+/// the representation of the guest with the bigint delegation (`HintTarget::Guest`), or, with
+/// [`recording_for`](Self::recording_for), the native one of a guest without it. Reading past the
+/// native answer is an error that consumes nothing; ending the query or sending the next one
+/// before the answer is read in full is an error that drops the rest (the guest would read it as
+/// the start of its next answer).
 ///
 /// Recordings on different threads are independent unless `proving` is on for a native target:
 /// its emulated delegation keeps one `static mut` scratch space for all threads.
@@ -21,20 +23,36 @@ use alloc::vec::Vec;
 /// Trust boundary: it dereferences each query's request and operands, per the `unsafe` contract
 /// of [`MemoryOracle::send_query`]; its answers are trusted by no one, as the hinted operations
 /// check them.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RecordingHintOracle {
     /// Words of the answer to the current query that the querier did not read yet, as it reads
     /// them
     response: VecDeque<u32>,
     /// The answers of the guest, the words it reads, in query order
     tape: Vec<u32>,
+    /// The representation the tape is recorded in
+    target: HintTarget,
+}
+
+impl Default for RecordingHintOracle {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RecordingHintOracle {
+    /// A recorder of the tape of the guest with the bigint delegation
     pub fn new() -> Self {
+        Self::recording_for(HintTarget::Guest)
+    }
+
+    /// A recorder of the tape of a guest that reads answers in the representation of `target`:
+    /// [`HintTarget::Native`] for a guest without `bigint_ops`
+    pub fn recording_for(target: HintTarget) -> Self {
         Self {
             response: VecDeque::new(),
             tape: Vec::new(),
+            target,
         }
     }
 
@@ -83,8 +101,11 @@ impl MemoryOracle for RecordingHintOracle {
                 "the query processor does not respond for the run mode",
             ));
         }
+        match self.target {
+            HintTarget::Guest => self.tape.extend(guest_run_response),
+            HintTarget::Native => self.tape.extend_from_slice(&native_run_response),
+        }
         self.response = native_run_response.into();
-        self.tape.extend(guest_run_response);
         Ok(())
     }
 
@@ -184,6 +205,12 @@ mod tests {
         });
         assert_eq!(y.to_bytes(), inverse.to_bytes());
         assert_eq!(tape, inverse.to_montgomery_words());
+
+        // a tape for a guest without the delegation: the native words
+        let mut native = RecordingHintOracle::recording_for(HintTarget::Native);
+        send_inverse(&mut native, &x).unwrap();
+        assert_eq!(native.tape(), inverse.to_canonical_words());
+        assert_eq!(read_element(&mut native), Ok(inverse.to_canonical_words()));
     }
 
     /// An answer left partly unread is an error: the guest would read its rest on the tape as the

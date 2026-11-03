@@ -1,11 +1,6 @@
 //! Smoke tests of the hinted precompile endpoints in a build without `cfg(test)`, whose fields
 //! are the arkworks ones (unless `proving` is on), not the guest representation of the unit tests.
-#![cfg(all(feature = "alloc", target_pointer_width = "64"))]
-// `std::alloc::Global`, the allocator of the endpoints that allocate
-#![cfg_attr(
-    all(feature = "alloc", target_pointer_width = "64"),
-    feature(allocator_api)
-)]
+#![cfg(all(feature = "oracle_implementations", target_pointer_width = "64"))]
 
 use airbender_crypto::ark_ec::{AffineRepr, CurveGroup};
 use airbender_crypto::ark_ff::{BigInteger, PrimeField};
@@ -21,7 +16,6 @@ use airbender_crypto::precompiles::{
 use airbender_crypto::{bls12_381, bn254};
 use core::fmt::Debug;
 use hex_literal::hex;
-use std::alloc::Global;
 
 /// Checks that the hinted call took hints, and that it and the plain one succeed alike
 fn agrees<T: PartialEq + Debug, E: PartialEq + Debug>(
@@ -145,10 +139,10 @@ fn bn254_pairing_with_hints_matches() {
     ] {
         let src: Vec<u8> = pairs.iter().flat_map(|&(p, q)| bn254_pair(p, q)).collect();
         let n = pairs.len();
-        let plain = bn254_pairing_check(n, &src, Global, None::<&mut NoHints>);
+        let plain = bn254_pairing_check(n, &src, None::<&mut NoHints>);
         assert_eq!(plain, Ok(expected));
         agrees(
-            record_hints(|oracle| bn254_pairing_check(n, &src, Global, Some(oracle))),
+            record_hints(|oracle| bn254_pairing_check(n, &src, Some(oracle))),
             plain,
         );
     }
@@ -163,15 +157,15 @@ fn bls12_381_msm_and_pairing_with_hints_match() {
             .collect();
         let input = input.as_chunks::<160>().0;
         agrees(
-            record_hints(|oracle| bls12_381_g1_msm(input, Global, Some(oracle))),
-            bls12_381_g1_msm(input, Global, None::<&mut NoHints>),
+            record_hints(|oracle| bls12_381_g1_msm(input.iter().copied(), Some(oracle))),
+            bls12_381_g1_msm(input.iter().copied(), None::<&mut NoHints>),
         );
     }
     let input = [g2(3).as_slice(), &[0xa5; 32]].concat();
     let input = input.as_chunks::<288>().0;
     agrees(
-        record_hints(|oracle| bls12_381_g2_msm(input, Global, Some(oracle))),
-        bls12_381_g2_msm(input, Global, None::<&mut NoHints>),
+        record_hints(|oracle| bls12_381_g2_msm(input.iter().copied(), Some(oracle))),
+        bls12_381_g2_msm(input.iter().copied(), None::<&mut NoHints>),
     );
 
     let mut negated = [0u8; 128];
@@ -181,10 +175,10 @@ fn bls12_381_msm_and_pairing_with_hints_match() {
         ([g1(1).as_slice(), &g2(1)].concat(), false),
     ] {
         let input = input.as_chunks::<384>().0;
-        let plain = bls12_381_pairing_check(input, Global, None::<&mut NoHints>);
+        let plain = bls12_381_pairing_check(input.iter().copied(), None::<&mut NoHints>);
         assert_eq!(plain, Ok(expected));
         agrees(
-            record_hints(|oracle| bls12_381_pairing_check(input, Global, Some(oracle))),
+            record_hints(|oracle| bls12_381_pairing_check(input.iter().copied(), Some(oracle))),
             plain,
         );
     }

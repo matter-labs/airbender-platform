@@ -3,10 +3,8 @@ use super::arith::{
     in_place_mul_sub, in_place_shl, in_place_shr, join_as_double, mod_inv, monpro, monsq,
 };
 
-extern crate alloc;
-use super::vec_in;
-use alloc::vec::Vec;
-use core::alloc::Allocator;
+use super::super::ModExpOutput;
+use super::Digits;
 
 #[cfg(target_pointer_width = "32")]
 pub type Word = u32;
@@ -25,12 +23,12 @@ pub const BASE: DoubleWord = (Word::MAX as DoubleWord) + 1;
 /// Multi-precision natural number, represented in base `Word::MAX + 1 = 2^WORD_BITS`.
 /// The digits are stored in little-endian order, i.e. digits[0] is the least
 /// significant digit.
-#[derive(Debug)]
-pub struct MPNat<A: Allocator + Clone> {
-    pub digits: Vec<Word, A>,
+#[derive(Clone, Debug)]
+pub struct MPNat {
+    pub digits: Digits,
 }
 
-impl<A: Allocator + Clone> MPNat<A> {
+impl MPNat {
     fn strip_leading_zeroes(a: &[u8]) -> (&[u8], bool) {
         let len = a.len();
         let end = a.iter().position(|&x| x != 0).unwrap_or(len);
@@ -44,32 +42,24 @@ impl<A: Allocator + Clone> MPNat<A> {
 
     // Koç's algorithm for inversion mod 2^k
     // https://eprint.iacr.org/2017/411.pdf
-    fn koc_2017_inverse(aa: &Self, k: usize, allocator: A) -> Self {
+    fn koc_2017_inverse(aa: &Self, k: usize) -> Self {
         debug_assert!(aa.is_odd());
 
         let length = k / WORD_BITS;
         let mut b = MPNat {
-            digits: vec_in!(allocator.clone(); 0; length + 1),
+            digits: Digits::from_elem(0, length + 1),
         };
         b.digits[0] = 1;
 
         let mut a = MPNat {
             digits: aa.digits.clone(),
         };
-        // `resize` without `grow`
-        if a.digits.capacity() < length + 1 {
-            let mut new_digits = Vec::with_capacity_in(length + 1, a.digits.allocator().clone());
-            new_digits.resize(length + 1, 0);
-            new_digits[..a.digits.len()].copy_from_slice(a.digits.as_slice());
-            a.digits = new_digits;
-        } else {
-            a.digits.resize(length + 1, 0);
-        }
+        a.digits.resize(length + 1, 0);
 
         let mut neg: bool = false;
 
         let mut res = MPNat {
-            digits: vec_in!(allocator.clone(); 0; length + 1),
+            digits: Digits::from_elem(0, length + 1),
         };
 
         let (mut wordpos, mut bitpos) = (0, 0);
@@ -105,10 +95,10 @@ impl<A: Allocator + Clone> MPNat<A> {
         res
     }
 
-    pub fn from_big_endian(bytes: &[u8], allocator: A) -> Self {
+    pub fn from_big_endian(bytes: &[u8]) -> Self {
         if bytes.is_empty() {
             return Self {
-                digits: vec_in!(allocator.clone(); 0),
+                digits: Digits::from_elem(0, 1),
             };
         }
         // Remainder on division by WORD_BYTES
@@ -119,7 +109,7 @@ impl<A: Allocator + Clone> MPNat<A> {
             // Need an extra digit for the remainder
             (bytes.len() / WORD_BYTES) + 1
         };
-        let mut digits = vec_in!(allocator.clone(); 0; n_digits);
+        let mut digits = Digits::from_elem(0, n_digits);
         // buffer to hold Word-sized slices of the input bytes
         let mut buf = [0u8; WORD_BYTES];
         let mut i = n_digits - 1;
@@ -172,7 +162,7 @@ impl<A: Allocator + Clone> MPNat<A> {
     }
 
     /// Computes `self ^ exp mod modulus`. `exp` must be given as big-endian bytes.
-    pub fn modpow(&mut self, exp: &[u8], modulus: &Self, allocator: A) -> Self {
+    pub fn modpow(&mut self, exp: &[u8], modulus: &Self) -> Self {
         // exp must be stripped because it is iterated over in
         // big_wrapping_pow and modpow_montgomery, and a large
         // zero-padded exp leads to performance issues.
@@ -188,11 +178,11 @@ impl<A: Allocator + Clone> MPNat<A> {
         if exp_is_zero {
             if modulus.digits.len() == 1 && modulus.digits[0] == 1 {
                 return Self {
-                    digits: vec_in!(allocator.clone(); 0),
+                    digits: Digits::from_elem(0, 1),
                 };
             } else {
                 return Self {
-                    digits: vec_in!(allocator.clone(); 1),
+                    digits: Digits::from_elem(1, 1),
                 };
             }
         }
@@ -200,7 +190,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         // 0^exp mod m = 0 for any exp > 0 (exp > 0 guaranteed above)
         if self.digits.iter().all(|&d| d == 0) {
             return Self {
-                digits: vec_in!(allocator.clone(); 0),
+                digits: Digits::from_elem(0, 1),
             };
         }
 
@@ -210,7 +200,7 @@ impl<A: Allocator + Clone> MPNat<A> {
             && !(modulus.digits.len() == 1 && modulus.digits[0] == 1)
         {
             return Self {
-                digits: vec_in!(allocator.clone(); 1),
+                digits: Digits::from_elem(1, 1),
             };
         }
 
@@ -227,16 +217,16 @@ impl<A: Allocator + Clone> MPNat<A> {
             if let Some(max_output_digits) = self.digits.len().checked_mul(exp_as_number) {
                 if modulus.digits.len() > max_output_digits {
                     // Special case: modulus is larger than `base ^ exp`, so division is not relevant
-                    let mut scratch_space = vec_in!(allocator.clone(); 0; max_output_digits);
-                    return big_wrapping_pow(self, exp, &mut scratch_space, allocator.clone());
+                    let mut scratch_space = Digits::from_elem(0, max_output_digits);
+                    return big_wrapping_pow(self, exp, &mut scratch_space);
                 }
             }
         }
 
         if modulus.is_power_of_two() {
-            return self.modpow_with_power_of_two(exp, modulus, allocator.clone());
+            return self.modpow_with_power_of_two(exp, modulus);
         } else if modulus.is_odd() {
-            return self.modpow_montgomery(exp, modulus, allocator);
+            return self.modpow_montgomery(exp, modulus);
         }
 
         // If the modulus is not a power of two and not an odd number then
@@ -248,7 +238,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         let additional_zero_bits = modulus.digits[trailing_zeros].trailing_zeros() as usize;
         let power_of_two = {
             let mut tmp = MPNat {
-                digits: vec_in!(allocator.clone(); 0; trailing_zeros + 1),
+                digits: Digits::from_elem(0, trailing_zeros + 1),
             };
             tmp.digits[trailing_zeros] = 1 << additional_zero_bits;
             tmp
@@ -257,7 +247,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         let odd = {
             let num_digits = modulus.digits.len() - trailing_zeros;
             let mut tmp = MPNat {
-                digits: vec_in!(allocator.clone(); 0; num_digits),
+                digits: Digits::from_elem(0, num_digits),
             };
             if additional_zero_bits > 0 {
                 tmp.digits[0] = modulus.digits[trailing_zeros] >> additional_zero_bits;
@@ -283,7 +273,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         );
         debug_assert!(
             {
-                let mut tmp = vec_in!(allocator.clone(); 0; modulus.digits.len());
+                let mut tmp = Digits::from_elem(0, modulus.digits.len());
                 big_wrapping_mul(&power_of_two, &odd, &mut tmp);
                 tmp == modulus.digits
             },
@@ -293,17 +283,14 @@ impl<A: Allocator + Clone> MPNat<A> {
         let mut base_copy = MPNat {
             digits: self.digits.clone(),
         };
-        let x1 = base_copy.modpow_montgomery(exp, &odd, allocator.clone());
-        let x2 = self.modpow_with_power_of_two(exp, &power_of_two, allocator.clone());
+        let x1 = base_copy.modpow_montgomery(exp, &odd);
+        let x2 = self.modpow_with_power_of_two(exp, &power_of_two);
 
-        let odd_inv = Self::koc_2017_inverse(
-            &odd,
-            trailing_zeros * WORD_BITS + additional_zero_bits,
-            allocator.clone(),
-        );
+        let odd_inv =
+            Self::koc_2017_inverse(&odd, trailing_zeros * WORD_BITS + additional_zero_bits);
 
         let s = power_of_two.digits.len();
-        let mut scratch = vec_in!(allocator.clone(); 0; s);
+        let mut scratch = Digits::from_elem(0, s);
         let diff = {
             scratch.fill(0);
             let mut b = false;
@@ -319,7 +306,7 @@ impl<A: Allocator + Clone> MPNat<A> {
             MPNat { digits: scratch }
         };
         let y = {
-            let mut out = vec_in!(allocator.clone(); 0; s);
+            let mut out = Digits::from_elem(0, s);
             big_wrapping_mul(&diff, &odd_inv, &mut out);
             *out.last_mut().unwrap() &= power_of_two_mask;
             MPNat { digits: out }
@@ -329,15 +316,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         let mut digits = diff.digits;
         let s = modulus.digits.len();
         digits.fill(0);
-        // `resize` without `grow`
-        if digits.capacity() < s {
-            let mut new_digits = Vec::with_capacity_in(s, digits.allocator().clone());
-            new_digits.resize(s, 0);
-            new_digits[..digits.len()].copy_from_slice(digits.as_slice());
-            digits = new_digits;
-        } else {
-            digits.resize(s, 0);
-        }
+        digits.resize(s, 0);
         big_wrapping_mul(&odd, &y, &mut digits);
         let mut c = false;
         for (i, out_digit) in digits.iter_mut().enumerate() {
@@ -350,7 +329,7 @@ impl<A: Allocator + Clone> MPNat<A> {
 
     // Computes `self ^ exp mod modulus` using Montgomery multiplication.
     // See https://www.microsoft.com/en-us/research/wp-content/uploads/1996/01/j37acmon.pdf
-    fn modpow_montgomery(&mut self, exp: &[u8], modulus: &Self, allocator: A) -> Self {
+    fn modpow_montgomery(&mut self, exp: &[u8], modulus: &Self) -> Self {
         // The montgomery method only works with odd modulus.
         debug_assert!(modulus.is_odd());
 
@@ -360,7 +339,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         let s = modulus.digits.len();
 
         let mut x_bar = MPNat {
-            digits: vec_in!(allocator.clone(); 0; s),
+            digits: Digits::from_elem(0, s),
         };
         // Initialize result as `r mod modulus` (Montgomery form of 1)
         compute_r_mod_n(modulus, &mut x_bar.digits);
@@ -373,7 +352,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         // then reduce mod modulus.
         let a_bar = {
             let mut tmp = MPNat {
-                digits: vec_in!(allocator.clone(); 0; 2 * s),
+                digits: Digits::from_elem(0, 2 * s),
             };
             big_wrapping_mul(self, &x_bar, &mut tmp.digits);
             tmp.sub_to_same_size(modulus);
@@ -381,7 +360,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         };
 
         // scratch space for monpro algorithm
-        let mut scratch = vec_in!(allocator.clone(); 0; 2 * s + 1);
+        let mut scratch = Digits::from_elem(0, 2 * s + 1);
         let monpro_len = s + 2;
 
         // Use binary method for computing exp, but with monpro as the multiplication
@@ -419,7 +398,7 @@ impl<A: Allocator + Clone> MPNat<A> {
         MPNat { digits: scratch }
     }
 
-    fn modpow_with_power_of_two(&mut self, exp: &[u8], modulus: &Self, allocator: A) -> Self {
+    fn modpow_with_power_of_two(&mut self, exp: &[u8], modulus: &Self) -> Self {
         debug_assert!(modulus.is_power_of_two());
         // We know `modulus` is a power of 2. So reducing is as easy as bit shifting.
         // We also know the modulus is non-zero because 0 is not a power of 2.
@@ -441,8 +420,8 @@ impl<A: Allocator + Clone> MPNat<A> {
             exp
         };
 
-        let mut scratch_space = vec_in!(allocator.clone(); 0; modulus.digits.len());
-        let mut result = big_wrapping_pow(self, exp, &mut scratch_space, allocator.clone());
+        let mut scratch_space = Digits::from_elem(0, modulus.digits.len());
+        let mut result = big_wrapping_pow(self, exp, &mut scratch_space);
 
         // The modulus is a power of 2 but that power may not be a multiple of a whole word.
         // We can clear out any higher order bits to fix this.
@@ -456,16 +435,7 @@ impl<A: Allocator + Clone> MPNat<A> {
     /// This is equivalent to reducing `self` modulo `2^(WORD_BITS*k)` where
     /// `k` is the number of digits in `other`.
     fn force_same_size(&mut self, other: &Self) {
-        // `resize` without `grow`
-        if self.digits.capacity() < other.digits.len() {
-            let mut new_digits =
-                Vec::with_capacity_in(other.digits.len(), self.digits.allocator().clone());
-            new_digits.resize(other.digits.len(), 0);
-            new_digits[..self.digits.len()].copy_from_slice(self.digits.as_slice());
-            self.digits = new_digits;
-        } else {
-            self.digits.resize(other.digits.len(), 0);
-        }
+        self.digits.resize(other.digits.len(), 0);
 
         // This is here to just drive the point home about what the
         // invariant is after calling this function.
@@ -529,13 +499,6 @@ impl<A: Allocator + Clone> MPNat<A> {
         if shift > 0 {
             // Normalize self
             let overflow = in_place_shl(&mut self.digits, shift);
-            // `push` without `grow`
-            if self.digits.capacity() == self.digits.len() {
-                let mut new_digits =
-                    Vec::with_capacity_in(self.digits.len() + 1, self.digits.allocator().clone());
-                new_digits.append(&mut self.digits);
-                self.digits = new_digits;
-            }
             self.digits.push(overflow);
 
             // Normalize other
@@ -596,20 +559,13 @@ impl<A: Allocator + Clone> MPNat<A> {
             self_most_sig = self.digits.pop().unwrap();
         }
 
-        // `push` without `grow`
-        if self.digits.capacity() == self.digits.len() {
-            let mut new_digits =
-                Vec::with_capacity_in(self.digits.len() + 1, self.digits.allocator().clone());
-            new_digits.append(&mut self.digits);
-            self.digits = new_digits;
-        }
         self.digits.push(self_most_sig);
         debug_assert!(self.digits.len() <= n);
     }
 
-    pub fn to_big_endian(&self, allocator: A) -> Vec<u8, A> {
+    pub fn to_big_endian(&self) -> ModExpOutput {
         if self.digits.iter().all(|x| x == &0) {
-            return vec_in!(allocator.clone(); 0);
+            return ModExpOutput::from_elem(0, 1);
         }
 
         // Safety: unwrap is safe since `self.digits` is always non-empty.
@@ -624,7 +580,10 @@ impl<A: Allocator + Clone> MPNat<A> {
             tmp
         };
 
-        let mut result = vec_in!(allocator.clone(); 0u8; (self.digits.len() - 1) * WORD_BYTES + be_initial_bytes.len());
+        let mut result = ModExpOutput::from_elem(
+            0u8,
+            (self.digits.len() - 1) * WORD_BYTES + be_initial_bytes.len(),
+        );
         result[0..be_initial_bytes.len()].copy_from_slice(be_initial_bytes);
         for (i, d) in self.digits.iter().take(self.digits.len() - 1).enumerate() {
             let bytes = d.to_be_bytes();
@@ -640,12 +599,10 @@ mod test {
     use crate::modexp::hex;
     use crate::modexp::software::arith::mp_nat_to_u128;
     use crate::modexp::software::mpnat::MPNat;
-    extern crate std;
     use num_bigint::BigUint;
-    use std::alloc::Global;
 
-    fn mp(n: u128) -> MPNat<Global> {
-        MPNat::from_big_endian(&n.to_be_bytes(), Global)
+    fn mp(n: u128) -> MPNat {
+        MPNat::from_big_endian(&n.to_be_bytes())
     }
 
     #[test]
@@ -673,16 +630,14 @@ mod test {
                 0x3fe14e11392c6c6be8efe956c965d5af,
             ),
         ] {
-            let result = mp(base).modpow(&u128::to_be_bytes(exp), &mp(modulus), Global);
+            let result = mp(base).modpow(&u128::to_be_bytes(exp), &mp(modulus));
             assert_eq!(mp_nat_to_u128(&result), expected);
         }
 
         let modexp = |base: &str, exp: &str, modulus: &str| {
             let [base, exp, modulus] =
                 [base, exp, modulus].map(|digits| hex::decode(digits).unwrap());
-            hex::encode(crate::modexp::software::modexp(
-                &base, &exp, &modulus, Global,
-            ))
+            hex::encode(crate::modexp::software::modexp(&base, &exp, &modulus))
         };
         assert_eq!(
             modexp(
@@ -707,7 +662,7 @@ mod test {
                 0x10c9d9071d0b86d6a59264d2f461200,
             ),
         ] {
-            let result = mp(base).modpow_montgomery(&u128::to_be_bytes(exp), &mp(modulus), Global);
+            let result = mp(base).modpow_montgomery(&u128::to_be_bytes(exp), &mp(modulus));
             assert_eq!(
                 mp_nat_to_u128(&result),
                 expected,
@@ -734,8 +689,7 @@ mod test {
                 0x0028_3d19_e6cc_b8a0_e050_6abb_b9b1_1a03,
             ),
         ] {
-            let result =
-                mp(base).modpow_with_power_of_two(&u128::to_be_bytes(exp), &mp(modulus), Global);
+            let result = mp(base).modpow_with_power_of_two(&u128::to_be_bytes(exp), &mp(modulus));
             assert_eq!(mp_nat_to_u128(&result), expected);
         }
     }
@@ -743,11 +697,11 @@ mod test {
     #[test]
     fn test_sub_to_same_size() {
         fn check(a: &[u8], n: &[u8]) {
-            let mut x = MPNat::from_big_endian(a, Global);
-            let y = MPNat::from_big_endian(n, Global);
+            let mut x = MPNat::from_big_endian(a);
+            let y = MPNat::from_big_endian(n);
             x.sub_to_same_size(&y);
             assert!(x.digits.len() <= y.digits.len());
-            let x = BigUint::from_bytes_be(&x.to_big_endian(Global));
+            let x = BigUint::from_bytes_be(&x.to_big_endian());
             let (a, n) = (BigUint::from_bytes_be(a), BigUint::from_bytes_be(n));
             assert_eq!(x % &n, &a % &n, "{a} % {n}");
         }
@@ -804,12 +758,12 @@ mod test {
             "abcdef001122334455",
             "abcdef01234567891011121314151617181920",
         ] {
-            let mp = MPNat::from_big_endian(&hex::decode(hex_input).unwrap(), Global);
+            let mp = MPNat::from_big_endian(&hex::decode(hex_input).unwrap());
             let trimmed = match hex_input.trim_start_matches('0') {
                 "" => "00",
                 x => x,
             };
-            assert_eq!(hex::encode(mp.to_big_endian(Global)), trimmed);
+            assert_eq!(hex::encode(mp.to_big_endian()), trimmed);
         }
     }
 }

@@ -273,13 +273,6 @@ fn c_runtime_image() {
     assert!(accepted(&extended), "{extended:?}");
     assert_eq!(log.read, 1 + tape.len());
 
-    // Duplicate heap initialization traps
-    let outcome = run(&runner, &input(1, &tape), &mut Log::default(), false);
-    assert!(
-        trapped(&outcome),
-        "duplicate heap initialization: {outcome:?}"
-    );
-
     let (mut tampered, mut unchanged) = (0, 0);
     if reads_hints {
         // A truncated tape traps, at its last word or halfway

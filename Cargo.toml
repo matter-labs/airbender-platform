@@ -27,6 +27,8 @@ exclude = [
     "examples/revm-basic/shared",
     "examples/ecrecover-hooks/guest",
     "examples/ecrecover-hooks/host",
+    "examples/oracle-hints/guest",
+    "examples/oracle-hints/host",
 ]
 resolver = "2"
 

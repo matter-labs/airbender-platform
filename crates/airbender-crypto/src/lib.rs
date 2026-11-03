@@ -70,11 +70,10 @@ pub mod field_inverse;
 pub mod hinted_ops;
 pub mod hints;
 pub(crate) mod jacobian;
-// ModExp allocates its operands and digits
-#[cfg(any(feature = "alloc", test))]
 pub mod modexp;
+pub mod oracle_common;
 pub mod precompiles;
-pub mod residue_witness;
+pub mod scratch;
 pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
 pub mod bls12_381;

@@ -1,18 +1,35 @@
-//! The answers to the field hints. Operands and answers are in the representation of the
-//! querier's target (see `FieldHintOp`, `HintAnswer` and `Secp256k1Element`); the responses asked
-//! for tell which target the querier is (see `answer_query`).
+//! The dispatch of the field hint queries to the oracle implementations of the primitives.
+//! Operands and answers are in the representation of the querier's target (see `FieldHintOp`,
+//! `HintAnswer` and `Secp256k1Element`); the responses asked for tell which target the querier is
+//! (see `answer_query`).
 
-use super::read_querier_u32_words;
+use super::{Operand, Responses};
+use crate::bls12_381::oracle_implementations as bls12_381;
+use crate::bn254::oracle_implementations as bn254;
 use crate::hints::{
-    guest_layout, read_field_hint_request, FieldHintOp, HintAnswer, HintEncoding, HintTarget,
-    QuerierMemory, RecoveryRequest, Secp256k1Element, FIELD_OPS_ADVISE_QUERY_ID,
+    read_field_hint_request, FieldHintOp, HintEncoding, HintError, HintTarget,
+    FIELD_OPS_ADVISE_QUERY_ID,
 };
-use crate::secp256k1::field::FieldElement;
-use crate::secp256k1::scalars::Scalar;
-use crate::secp256k1::RecoveryWitness;
+use crate::secp256k1::oracle_implementations as secp256k1;
+use airbender_oracle::{offset_address, QuerierMemory};
 use alloc::vec::Vec;
-use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
-use ark_ff::{Field, One, PrimeField, Zero};
+use ark_ff::PrimeField;
+
+/// Reads `num_words` consecutive `u32` words at `address` of the querier.
+pub fn read_querier_u32_words<M: QuerierMemory + ?Sized>(
+    memory: &M,
+    address: usize,
+    num_words: usize,
+) -> Result<Vec<u32>, HintError> {
+    (0..num_words)
+        .map(|i| {
+            let offset = i
+                .checked_mul(size_of::<u32>())
+                .ok_or(HintError("querier address overflows"))?;
+            Ok(memory.read_u32(offset_address(address, offset)?)?)
+        })
+        .collect()
+}
 
 /// The op and the operand of the hint request at `input_word`
 ///
@@ -35,37 +52,22 @@ unsafe fn read_request<'m>(
     })
 }
 
-/// The responses asked for: the answer as a native querier reads it, and as the guest does
-struct Responses<'a> {
-    native_run: Option<&'a mut Vec<u32>>,
-    guest_run: Option<&'a mut Vec<u32>>,
-}
-
-impl Responses<'_> {
-    fn write<T: HintAnswer>(&mut self, answer: &T) {
-        if let Some(response) = self.native_run.as_deref_mut() {
-            answer.write(HintTarget::Native, response);
-        }
-        if let Some(response) = self.guest_run.as_deref_mut() {
-            answer.write(HintTarget::Guest, response);
-        }
-    }
-}
-
 /// The answer to the hint `op` on `operand`
 fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) {
     match op {
-        FieldHintOp::Secp256k1BaseFieldSqrt => responses.write(&secp256k1_base_field_sqrt(operand)),
+        FieldHintOp::Secp256k1BaseFieldSqrt => {
+            responses.write(&secp256k1::base_field_sqrt(operand))
+        }
         FieldHintOp::Secp256k1BaseFieldInverse => {
-            responses.write(&secp256k1_base_field_inverse(operand))
+            responses.write(&secp256k1::base_field_inverse(operand))
         }
         FieldHintOp::Secp256k1ScalarFieldInverse => {
-            responses.write(&secp256k1_scalar_field_inverse(operand))
+            responses.write(&secp256k1::scalar_field_inverse(operand))
         }
         FieldHintOp::Secp256k1BaseFieldDivision => {
-            responses.write(&secp256k1_base_field_division(operand))
+            responses.write(&secp256k1::base_field_division(operand))
         }
-        FieldHintOp::Secp256k1RecoveryWitness => match secp256k1_recovery_witness(operand) {
+        FieldHintOp::Secp256k1RecoveryWitness => match secp256k1::recovery_witness(operand) {
             Some(witness) => responses.write(&(true, witness)),
             None => responses.write(&false),
         },
@@ -76,7 +78,7 @@ fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) {
             responses.write(&division::<crate::bn254::Fq>(operand))
         }
         FieldHintOp::Bn254Fq12Inverse => responses.write(&inverse::<crate::bn254::Fq12>(operand)),
-        FieldHintOp::Bls12381BaseFieldSqrt => responses.write(&bls12_381_base_field_sqrt(operand)),
+        FieldHintOp::Bls12381BaseFieldSqrt => responses.write(&bls12_381::base_field_sqrt(operand)),
         FieldHintOp::Bls12381BaseFieldInverse => {
             responses.write(&inverse::<crate::bls12_381::Fq>(operand))
         }
@@ -87,14 +89,14 @@ fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) {
             responses.write(&inverse::<crate::bls12_381::Fq12>(operand))
         }
         FieldHintOp::Bn254PairingResidueWitness => {
-            bn254_pairing_residue_witness(operand, false, responses)
+            bn254::pairing_residue_witness(operand, false, responses)
         }
-        FieldHintOp::Bn254G2PairingSlopes => bn254_g2_pairing_slopes(operand, responses),
+        FieldHintOp::Bn254G2PairingSlopes => bn254::g2_pairing_slopes(operand, responses),
         FieldHintOp::Bls12381KzgResidueWitness => {
-            bls12_381_kzg_residue_witness(operand, false, responses)
+            bls12_381::kzg_residue_witness(operand, false, responses)
         }
         FieldHintOp::Bls12381PairingResidueWitness => {
-            bls12_381_pairing_residue_witness(operand, false, responses)
+            bls12_381::pairing_residue_witness(operand, false, responses)
         }
     }
 }
@@ -119,13 +121,13 @@ pub unsafe fn not_identity_claim(memory: &dyn QuerierMemory, input_word: usize) 
     // SAFETY: guaranteed by the caller
     match unsafe { read_request(memory, input_word, HintTarget::Native) } {
         (FieldHintOp::Bn254PairingResidueWitness, operand) => {
-            bn254_pairing_residue_witness(&operand, true, &mut responses)
+            bn254::pairing_residue_witness(&operand, true, &mut responses)
         }
         (FieldHintOp::Bls12381KzgResidueWitness, operand) => {
-            bls12_381_kzg_residue_witness(&operand, true, &mut responses)
+            bls12_381::kzg_residue_witness(&operand, true, &mut responses)
         }
         (FieldHintOp::Bls12381PairingResidueWitness, operand) => {
-            bls12_381_pairing_residue_witness(&operand, true, &mut responses)
+            bls12_381::pairing_residue_witness(&operand, true, &mut responses)
         }
         (op, _) => panic!("not a pairing request: {op:?}"),
     }
@@ -165,230 +167,16 @@ pub(super) unsafe fn process_field_hint_query(
     answer(op, &operand, &mut responses);
 }
 
-/// The operand of a hint query, in the querier's memory and representation
-pub(crate) struct Operand<'m> {
-    memory: &'m dyn QuerierMemory,
-    querier: HintTarget,
-    address: usize,
-    len_u32_words: u32,
-}
-
-impl<'m> Operand<'m> {
-    /// # Safety
-    ///
-    /// For a native querier, `address` must point to `len_u32_words` words of live values of the
-    /// op's operand types, alive and unchanged while the operand is used: they are read in place.
-    pub(crate) unsafe fn new(
-        memory: &'m dyn QuerierMemory,
-        querier: HintTarget,
-        address: usize,
-        len_u32_words: u32,
-    ) -> Self {
-        assert!(address != 0, "the operand is not at the null address");
-        Self {
-            memory,
-            querier,
-            address,
-            len_u32_words,
-        }
-    }
-
-    /// The size of the operand in bytes
-    fn size(&self) -> usize {
-        self.len_u32_words as usize * size_of::<u32>()
-    }
-
-    /// The operand of a querier in this process, values of `T`
-    fn native_values<T: Copy>(&self) -> Vec<T> {
-        assert_eq!(self.querier, HintTarget::Native);
-        assert!(
-            self.size().is_multiple_of(size_of::<T>()),
-            "the operand is values of the type"
-        );
-        assert!(
-            self.address.is_multiple_of(align_of::<T>()),
-            "the operand is aligned for the type"
-        );
-        let values = core::ptr::with_exposed_provenance::<T>(self.address);
-        // SAFETY: the operand is live values of `T` (see `Operand::new`); size and alignment are
-        // checked above
-        unsafe { core::slice::from_raw_parts(values, self.size() / size_of::<T>()) }.to_vec()
-    }
-
-    /// The operand of a querier in this process, a `T`
-    fn native_value<T: Copy>(&self) -> T {
-        assert_eq!(
-            self.size(),
-            size_of::<T>(),
-            "the operand is a value of the type"
-        );
-        self.native_values::<T>()[0]
-    }
-
-    /// `len` words at `offset` bytes into the operand of the RISC-V guest
-    fn guest_words(&self, offset: usize, len: usize) -> Vec<u32> {
-        assert_eq!(self.querier, HintTarget::Guest);
-        assert!(offset + 4 * len <= self.size(), "within the operand");
-        read_querier_u32_words(self.memory, self.address + offset, len)
-            .expect("must read the operand")
-    }
-
-    /// The byte at `offset` into the operand of the RISC-V guest
-    fn guest_byte(&self, offset: usize) -> u8 {
-        self.guest_words(offset & !3, 1)[0].to_le_bytes()[offset & 3]
-    }
-
-    /// The field element at `offset` bytes into the operand of the RISC-V guest (see
-    /// `hints::guest_layout`)
-    fn guest_element<F: HintEncoding>(&self, offset: usize) -> F {
-        let words = self.guest_words(offset, 2 * F::TOTAL_LIMBS);
-        let components: Vec<F::BasePrimeField> = words
-            .chunks(2 * F::LIMBS)
-            .map(from_guest_montgomery)
-            .collect();
-        F::from_components(&components)
-    }
-
-    /// The affine point at `offset` bytes into the operand of the RISC-V guest
-    fn guest_affine<P: SWCurveConfig>(
-        &self,
-        offset: usize,
-        layout: guest_layout::AffinePoint,
-    ) -> Affine<P>
-    where
-        P::BaseField: HintEncoding,
-    {
-        if self.guest_byte(offset + layout.infinity) != 0 {
-            return Affine::identity();
-        }
-        Affine::new_unchecked(
-            self.guest_element(offset + layout.x),
-            self.guest_element(offset + layout.y),
-        )
-    }
-}
-
-/// The base field element of its guest Montgomery limbs (`R = 2^(32 words)`), any representative
-fn from_guest_montgomery<F: PrimeField>(words: &[u32]) -> F {
-    let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
-    let r = F::from(2u64).pow([32 * words.len() as u64]);
-    F::from_le_bytes_mod_order(&bytes) * r.inverse().expect("a power of two is invertible")
-}
-
-/// A field element operand
-fn element<F: HintEncoding + Copy>(operand: &Operand) -> F {
-    match operand.querier {
-        HintTarget::Native => operand.native_value(),
-        HintTarget::Guest => {
-            assert_eq!(
-                operand.size(),
-                8 * F::TOTAL_LIMBS,
-                "the operand is an element"
-            );
-            operand.guest_element(0)
-        }
-    }
-}
-
-/// A secp256k1 element operand (see `Secp256k1Element`)
-fn secp256k1_element<T: Secp256k1Element>(operand: &Operand) -> T {
-    match operand.querier {
-        HintTarget::Native => operand.native_value(),
-        HintTarget::Guest => {
-            assert_eq!(operand.size(), 32, "the operand is an element");
-            let words: [u32; 8] = operand.guest_words(0, 8).try_into().expect("8 words");
-            T::from_guest_operand_words(&words)
-        }
-    }
-}
-
-/// `(candidate, is_quadratic_non_residue)`: `candidate² == input` for a square, `-input` otherwise
-pub(crate) fn secp256k1_base_field_sqrt(operand: &Operand) -> (FieldElement, bool) {
-    let el: FieldElement = secp256k1_element(operand);
-    assert!(!el.is_zero());
-    let mut candidate = el;
-    let is_quadratic_residue = candidate.sqrt_in_place();
-    (candidate, !is_quadratic_residue)
-}
-
-pub(crate) fn secp256k1_base_field_inverse(operand: &Operand) -> FieldElement {
-    let mut el: FieldElement = secp256k1_element(operand);
-    assert!(!el.is_zero());
-    el.invert_in_place();
-    el
-}
-
-/// The quotient of the numerator and the (non-zero) denominator, two adjacent elements
-pub(crate) fn secp256k1_base_field_division(operand: &Operand) -> FieldElement {
-    let [numerator, denominator]: [FieldElement; 2] = match operand.querier {
-        HintTarget::Native => operand.native_value(),
-        HintTarget::Guest => {
-            assert_eq!(operand.size(), 64, "the operand is two elements");
-            core::array::from_fn(|i| {
-                let words: [u32; 8] = operand.guest_words(32 * i, 8).try_into().expect("8 words");
-                FieldElement::from_guest_operand_words(&words)
-            })
-        }
-    };
-    assert!(!denominator.is_zero());
-    let mut quotient = denominator;
-    quotient.invert_in_place();
-    quotient.mul_in_place(&numerator);
-    quotient
-}
-
-/// The witness of the key recovery the operand (a `RecoveryRequest`) asks for, if there is one:
-/// none for a key at infinity, for which the recovery fails as computed. Without the static
-/// context there is no witness either, and the querier computes the key.
-pub(crate) fn secp256k1_recovery_witness(operand: &Operand) -> Option<RecoveryWitness> {
-    let request: RecoveryRequest = match operand.querier {
-        HintTarget::Native => operand.native_value(),
-        HintTarget::Guest => {
-            assert_eq!(operand.size(), 5 * 32, "the operand is a recovery request");
-            let words = |i: usize| -> [u32; 8] {
-                operand.guest_words(32 * i, 8).try_into().expect("8 words")
-            };
-            RecoveryRequest {
-                r: Scalar::from_guest_operand_words(&words(0)),
-                s: Scalar::from_guest_operand_words(&words(1)),
-                message: Scalar::from_guest_operand_words(&words(2)),
-                x: FieldElement::from_guest_operand_words(&words(3)),
-                y: FieldElement::from_guest_operand_words(&words(4)),
-            }
-        }
-    };
-    #[cfg(feature = "secp256k1-static-context")]
-    {
-        crate::secp256k1::witness_host::recovery_witness(
-            &request.point(),
-            &request.r,
-            &request.s,
-            &request.message,
-        )
-    }
-    #[cfg(not(feature = "secp256k1-static-context"))]
-    {
-        let _ = request;
-        None
-    }
-}
-
-pub(crate) fn secp256k1_scalar_field_inverse(operand: &Operand) -> Scalar {
-    let el: Scalar = secp256k1_element(operand);
-    assert!(!el.is_zero());
-    el.invert_vartime()
-}
-
 /// The inverse of a non-zero field element
 pub(crate) fn inverse<F: HintEncoding + Copy>(operand: &Operand) -> F {
-    let el: F = element(operand);
+    let el: F = operand.element();
     crate::field_inverse::inverse(&el).expect("the operand is non-zero")
 }
 
 /// The quotient of the numerator and the (non-zero) denominator, two adjacent elements of a
 /// base prime field
 pub(crate) fn division<F: HintEncoding + PrimeField>(operand: &Operand) -> F {
-    let [numerator, denominator]: [F; 2] = match operand.querier {
+    let [numerator, denominator]: [F; 2] = match operand.querier() {
         HintTarget::Native => operand.native_value(),
         HintTarget::Guest => {
             assert_eq!(operand.size(), 16 * F::LIMBS, "the operand is two elements");
@@ -407,210 +195,18 @@ pub(crate) fn division<F: HintEncoding + PrimeField>(operand: &Operand) -> F {
     numerator * crate::field_inverse::inverse(&denominator).expect("the denominator is non-zero")
 }
 
-/// As `secp256k1_base_field_sqrt` (`p = 3 mod 4`, so exactly one of `±input` is a square)
-pub(crate) fn bls12_381_base_field_sqrt(operand: &Operand) -> (crate::bls12_381::Fq, bool) {
-    let el: crate::bls12_381::Fq = element(operand);
-    assert!(!el.is_zero());
-    match el.sqrt() {
-        Some(root) => (root, false),
-        None => {
-            let root = (-el).sqrt().expect("-1 is not a square, so -el is one");
-            (root, true)
-        }
-    }
-}
-
-/// The claim about the bn254 pairing product (see `hints::PairingClaim`). `claim_not_identity`
-/// forces a non-identity claim (for tests of the exact path).
-fn bn254_pairing_residue_witness(
-    operand: &Operand,
-    claim_not_identity: bool,
-    responses: &mut Responses,
-) {
-    use crate::bn254::curves::{Bn254, G1Evaluation, G2PreparedNoAlloc};
-    use crate::bn254::{G1Affine, G2Affine};
-    use ark_ec::pairing::{MillerLoopOutput, Pairing};
-    use guest_layout::{BN254_G1_AFFINE, BN254_G2_AFFINE, BN254_PAIR_G1, BN254_PAIR_G2};
-    let pairs: Vec<(G1Affine, G2Affine)> = match operand.querier {
-        HintTarget::Native => operand.native_values(),
-        HintTarget::Guest => {
-            let size = guest_layout::BN254_PAIR_SIZE;
-            assert!(
-                operand.size().is_multiple_of(size),
-                "the operand is affine pairs"
-            );
-            (0..operand.size() / size)
-                .map(|k| {
-                    let pair = k * size;
-                    (
-                        operand.guest_affine(pair + BN254_PAIR_G1, BN254_G1_AFFINE),
-                        operand.guest_affine(pair + BN254_PAIR_G2, BN254_G2_AFFINE),
-                    )
-                })
-                .collect()
-        }
-    };
-    assert!(!pairs.is_empty(), "the operand has pairs");
-    // the witness equation holds for the verifier's Miller loop output only
-    let prepared: Vec<G2PreparedNoAlloc> = pairs
-        .iter()
-        .map(|(_, g2)| crate::bn254::curves::g2_affine::prepare_as_verifier(g2))
-        .collect();
-    let evaluations: Vec<G1Evaluation> = pairs
-        .iter()
-        .map(|(g1, _)| G1Evaluation::new(g1, &mut crate::affine_glv::InvertingDivider))
-        .collect();
-    let f = Bn254::multi_miller_loop_normalized(None, evaluations.iter().zip(prepared.iter()));
-    let is_identity = !claim_not_identity
-        && Bn254::final_exponentiation(MillerLoopOutput(f))
-            .expect("non-zero")
-            .0
-            .is_one();
-    if is_identity {
-        let witness = crate::residue_witness::bn254::witness(&f)
-            .expect("the final exponentiation found an identity, which has a witness");
-        responses.write(&(true, witness));
-    } else {
-        responses.write(&(false, f.inverse().expect("non-zero")));
-    }
-}
-
-/// The claim about `e(p1, G2) e(p2, tau G2)`, as `bn254_pairing_residue_witness`
-fn bls12_381_kzg_residue_witness(
-    operand: &Operand,
-    claim_not_identity: bool,
-    responses: &mut Responses,
-) {
-    use crate::bls12_381::curves::Bls12_381;
-    use crate::bls12_381::G1Affine;
-    use ark_ec::pairing::{MillerLoopOutput, Pairing};
-    use guest_layout::BLS12_381_G1_AFFINE;
-    let [p1, p2]: [G1Affine; 2] = match operand.querier {
-        HintTarget::Native => operand.native_value(),
-        HintTarget::Guest => {
-            let size = BLS12_381_G1_AFFINE.size;
-            assert_eq!(operand.size(), 2 * size, "the operand is two affine points");
-            [
-                operand.guest_affine(0, BLS12_381_G1_AFFINE),
-                operand.guest_affine(size, BLS12_381_G1_AFFINE),
-            ]
-        }
-    };
-    let g2 = [
-        &crate::bls12_381::consts::PREPARED_G2_GENERATOR,
-        &crate::bls12_381::consts::PREPARED_G2_BY_TAU,
-    ];
-    let points = [p1, p2];
-    // the witness equation holds for the verifier's Miller loop output only
-    let pairs = points.iter().zip(g2);
-    let f = Bls12_381::multi_miller_loop_shared(None, pairs.clone());
-    let is_identity = !claim_not_identity
-        && Bls12_381::final_exponentiation(MillerLoopOutput(f))
-            .expect("non-zero")
-            .0
-            .is_one();
-    if is_identity {
-        let witness = crate::residue_witness::bls12_381::witness(&f)
-            .expect("the final exponentiation found an identity, which has a witness");
-        responses.write(&(true, witness));
-    } else {
-        // the inverse of the conjugated loop output, which the exact path computes
-        let mut conjugated = f;
-        conjugated.conjugate_in_place();
-        responses.write(&(false, conjugated.inverse().expect("non-zero")));
-    }
-}
-
-/// The slopes of the two affine `G2` chains of the operand (see `hints::G2SlopeHints`); an
-/// exceptional chain is a cleared flag and zeros
-fn bn254_g2_pairing_slopes(operand: &Operand, responses: &mut Responses) {
-    use crate::bn254::curves::g2_affine::{line_slopes, subgroup_slopes};
-    use crate::bn254::{Fq2, G2Affine};
-    use ark_ff::AdditiveGroup;
-    use guest_layout::BN254_G2_AFFINE;
-    let q: G2Affine = match operand.querier {
-        HintTarget::Native => operand.native_value(),
-        HintTarget::Guest => {
-            assert_eq!(
-                operand.size(),
-                BN254_G2_AFFINE.size,
-                "the operand is a point"
-            );
-            operand.guest_affine(0, BN254_G2_AFFINE)
-        }
-    };
-    fn chain<const N: usize>(slopes: Option<[Fq2; N]>, responses: &mut Responses) {
-        match slopes {
-            Some(slopes) => responses.write(&(true, slopes)),
-            None => responses.write(&(false, [Fq2::ZERO; N])),
-        }
-    }
-    chain(subgroup_slopes(&q), responses);
-    chain(line_slopes(&q), responses);
-}
-
-/// The claim about the bls12-381 pairing product, from the verifier's projective lines
-fn bls12_381_pairing_residue_witness(
-    operand: &Operand,
-    claim_not_identity: bool,
-    responses: &mut Responses,
-) {
-    use crate::bls12_381::curves::Bls12_381;
-    use crate::bls12_381::Fq12;
-    use crate::hints::Bls12381Pair;
-    use ark_ec::pairing::{MillerLoopOutput, Pairing};
-    use guest_layout::*;
-    let pairs: Vec<Bls12381Pair> = match operand.querier {
-        HintTarget::Native => operand.native_values(),
-        HintTarget::Guest => {
-            assert!(
-                operand.size().is_multiple_of(BLS12_381_PAIR_SIZE),
-                "the operand is affine pairs"
-            );
-            (0..operand.size() / BLS12_381_PAIR_SIZE)
-                .map(|i| {
-                    let offset = i * BLS12_381_PAIR_SIZE;
-                    Bls12381Pair {
-                        g1: operand.guest_affine(offset + BLS12_381_PAIR_G1, BLS12_381_G1_AFFINE),
-                        g2: operand.guest_affine(offset + BLS12_381_PAIR_G2, BLS12_381_G2_AFFINE),
-                    }
-                })
-                .collect()
-        }
-    };
-    assert!(!pairs.is_empty(), "the operand has pairs");
-    let f = Bls12_381::multi_miller_loop_with_initial_owned(
-        &Fq12::one(),
-        pairs.iter().map(|pair| pair.g1),
-        pairs.iter().map(|pair| pair.g2),
-    );
-    let mut conjugated = f;
-    conjugated.conjugate_in_place();
-    let identity = !claim_not_identity
-        && Bls12_381::final_exponentiation(MillerLoopOutput(conjugated))
-            .expect("the Miller loop is non-zero")
-            .0
-            .is_one();
-    if identity {
-        let witness = crate::residue_witness::bls12_381::witness(&f)
-            .expect("an identity has a residue witness");
-        responses.write(&(true, witness));
-    } else {
-        responses.write(&(
-            false,
-            conjugated.inverse().expect("the Miller loop is non-zero"),
-        ));
-    }
-}
-
 #[cfg(test)]
 mod native_query_tests {
     use super::*;
-    use crate::hints::host::{answer_query, NativeQuerierMemory};
     use crate::hints::test_support::{GuestMemory, TestMemorySource};
-    use crate::hints::FieldOpsHint64;
+    use crate::hints::{
+        guest_layout, FieldOpsHint64, HintAnswer, RecoveryRequest, Secp256k1Element,
+    };
+    use crate::oracle_common::{answer_query, NativeQuerierMemory};
+    use crate::secp256k1::field::FieldElement;
+    use crate::secp256k1::scalars::Scalar;
     use ark_ec::AffineRepr;
-    use ark_ff::BigInteger;
+    use ark_ff::{BigInteger, Field};
 
     /// The native and guest responses of `answer_query` to the field hint request at `input_word`
     fn respond(
@@ -904,7 +500,7 @@ mod native_query_tests {
             true,
             true,
         );
-        let witness = crate::secp256k1::witness_host::recovery_witness(
+        let witness = crate::secp256k1::oracle_implementations::witness::recovery_witness(
             &operand.point(),
             &operand.r,
             &operand.s,

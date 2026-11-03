@@ -19,6 +19,10 @@ for language in c c++; do
     fi
     echo "$standard ABI and null-pointer abort passed"
 done
-${RV32_CC:-clang} --target=riscv32-none-elf -ffreestanding -std=c11 -DLAYOUT_ONLY \
-    -Icrates/airbender-crypto-c/include -fsyntax-only crates/airbender-crypto-c/tests/abi.c
-echo 'RV32 C struct layouts passed'
+# The inline delegation (explicit register operands) must compile as C11 and C++17 for RV32
+for standard in c11 c++17; do
+    if test "$standard" = c11; then language=c; else language=c++; fi
+    ${RV32_CC:-clang} -x "$language" --target=riscv32-none-elf -ffreestanding -std=$standard -Wall -Wextra -Werror -DLAYOUT_ONLY \
+        -Icrates/airbender-crypto-c/include -fsyntax-only crates/airbender-crypto-c/tests/abi.c
+done
+echo 'RV32 C struct layouts and inline delegation passed'

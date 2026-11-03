@@ -1,49 +1,54 @@
 //! The BLS12-381 pairing check (EIP-2537).
 
 use super::*;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints as curve_hints;
 use crate::hints::{Bls12381Pair, PairingClaim};
+use crate::precompiles::MAX_BLS12_381_PAIRS;
+use crate::scratch::with_buffer;
 use crate::{ark_ec::pairing::Pairing, ark_ff::One, bls12_381::curves::Bls12_381};
-use alloc::vec::Vec;
 
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 use super::super::unavailable as curve_hints;
 
 /// The size of the EIP-2537 encoding of a pair of the pairing check: a G1 point and a G2 point
 pub const BLS12_381_PAIR_LEN: usize = G1_SERIALIZATION_LEN + G2_SERIALIZATION_LEN;
 
-/// Whether the product of the pairings of the pairs of `input` (a G1 and a G2 point each) is the
-/// identity. Fails unless every point is canonical, on its curve and in the subgroup, checked
-/// point by point while parsing.
+/// Whether the product of the pairings of the pairs of `input` (the EIP-2537 encoding of a G1
+/// and a G2 point each) is the identity. Fails unless every point is canonical, on its curve and
+/// in the subgroup, checked point by point while parsing; more than [`MAX_BLS12_381_PAIRS`]
+/// pairs fail before anything is parsed.
 ///
 /// With an oracle, the subgroup checks take checked hinted divisions, and the final
 /// exponentiation is replaced by a residue witness check or a checked hinted inverse. A wrong
-/// hint panics. The pairs go into a vector of `allocator`.
-pub fn bls12_381_pairing_check<A: core::alloc::Allocator + Clone, O: MemoryOracle>(
-    input: &[[u8; BLS12_381_PAIR_LEN]],
-    allocator: A,
+/// hint panics. Nothing is allocated: the pairs go into a stack buffer of
+/// [`MAX_BLS12_381_PAIRS`], read in place by the oracle of the residue witness.
+pub fn bls12_381_pairing_check<O: MemoryOracle>(
+    input: impl IntoIterator<Item = [u8; BLS12_381_PAIR_LEN], IntoIter: ExactSizeIterator>,
     mut oracle: Option<&mut O>,
 ) -> Result<bool, Bls12Error> {
-    let num_pairs = input.len();
-    let mut pairs = Vec::with_capacity_in(num_pairs, allocator.clone());
-
-    for pair_encoding in input.iter() {
-        let g1 = parse_g1_with_subgroup_check_with_oracle(
-            pair_encoding[0..G1_SERIALIZATION_LEN].try_into().unwrap(),
-            oracle.as_deref_mut(),
-        )?;
-        let g2 = parse_g2_with_subgroup_check_with_oracle(
-            pair_encoding[G1_SERIALIZATION_LEN..(G1_SERIALIZATION_LEN + G2_SERIALIZATION_LEN)]
-                .try_into()
-                .unwrap(),
-            oracle.as_deref_mut(),
-        )?;
-        pairs.push(Bls12381Pair { g1, g2 });
+    let input = input.into_iter();
+    // A transaction has at most 2^24 gas (EIP-7825) and a check costs 37700 + 32600 per pair
+    // (EIP-2537), so it can pay for (2^24 - 37700) / 32600 = 513 pairs: the buffer's capacity.
+    if input.len() > MAX_BLS12_381_PAIRS {
+        return Err(Bls12Error::TooManyPairs);
     }
-
-    let is_identity = pairing_product_is_identity(&pairs, oracle);
-    Ok(is_identity)
+    with_buffer::<Bls12381Pair, MAX_BLS12_381_PAIRS, _>(|pairs| {
+        for pair_encoding in input {
+            let g1 = parse_g1_with_subgroup_check_with_oracle(
+                pair_encoding[0..G1_SERIALIZATION_LEN].try_into().unwrap(),
+                oracle.as_deref_mut(),
+            )?;
+            let g2 = parse_g2_with_subgroup_check_with_oracle(
+                pair_encoding[G1_SERIALIZATION_LEN..(G1_SERIALIZATION_LEN + G2_SERIALIZATION_LEN)]
+                    .try_into()
+                    .unwrap(),
+                oracle.as_deref_mut(),
+            )?;
+            pairs.push(Bls12381Pair { g1, g2 });
+        }
+        Ok(pairing_product_is_identity(pairs, oracle))
+    })
 }
 
 /// The hint can save the final exponentiation, but cannot choose the result.
@@ -66,7 +71,7 @@ fn pairing_product_is_identity<O: MemoryOracle>(
         PairingClaim::Identity { d, s, .. } => {
             let l = Bls12_381::multi_miller_loop_with_initial_owned(&d, g1(), g2());
             assert!(
-                crate::residue_witness::bls12_381::check(&l, &d, &s),
+                crate::oracle_common::residue_witness::bls12_381::check(&l, &d, &s),
                 "the residue witness of the pairing claimed to be the identity is wrong"
             );
             true
@@ -74,7 +79,7 @@ fn pairing_product_is_identity<O: MemoryOracle>(
         PairingClaim::NotIdentity { f_inverse } => {
             let f = Bls12_381::multi_miller_loop(g1(), g2()).0;
             Bls12_381::final_exponentiation_with_inverse(&f, |f| {
-                curve_hints::checked_inverse(f, f_inverse)
+                Some(curve_hints::checked_inverse(f, f_inverse))
             })
             .expect("the Miller loop output is invertible")
             .is_one()
@@ -82,7 +87,7 @@ fn pairing_product_is_identity<O: MemoryOracle>(
     }
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::super::tests as bls_tests;
@@ -94,9 +99,30 @@ mod tests {
         answer_query, read_field_hint_request, record_hints, FieldHintOp, HintAnswer, HintTarget,
         NoHints, QuerierMemory,
     };
-    use std::alloc::Global;
     use std::vec;
     use std::vec::Vec;
+
+    /// One pair too many fails on the count alone (the pair itself is not parsed), while the
+    /// most pairs, all at infinity, pass
+    #[test]
+    fn the_pair_count_is_bounded_by_the_gas_cap() {
+        let unparsable = core::iter::repeat_n([0xff; BLS12_381_PAIR_LEN], MAX_BLS12_381_PAIRS + 1);
+        assert_eq!(
+            bls12_381_pairing_check(unparsable.clone(), None::<&mut NoHints>),
+            Err(Bls12Error::TooManyPairs)
+        );
+        let (hinted, tape) =
+            record_hints(|oracle| bls12_381_pairing_check(unparsable, Some(oracle)));
+        assert_eq!(
+            (hinted, tape.is_empty()),
+            (Err(Bls12Error::TooManyPairs), true)
+        );
+        let infinities = core::iter::repeat_n([0; BLS12_381_PAIR_LEN], MAX_BLS12_381_PAIRS);
+        assert_eq!(
+            bls12_381_pairing_check(infinities, None::<&mut NoHints>),
+            Ok(true)
+        );
+    }
 
     /// The EIP-2537 encoding of `pairs`
     fn encode(pairs: &[(G1Affine, G2Affine)]) -> Vec<u8> {
@@ -110,7 +136,7 @@ mod tests {
 
     fn check<O: MemoryOracle>(pairs: &[(G1Affine, G2Affine)], oracle: Option<&mut O>) -> bool {
         let input = encode(pairs);
-        bls12_381_pairing_check(input.as_chunks().0, Global, oracle).unwrap()
+        bls12_381_pairing_check(input.as_chunks().0.iter().copied(), oracle).unwrap()
     }
 
     /// An oracle that is honest but for a false identity claim, with the witness `(1, 1)`
@@ -204,8 +230,8 @@ mod tests {
             let (input, []) = input.as_chunks::<BLS12_381_PAIR_LEN>() else {
                 unreachable!("whole pairs")
             };
-            let hinted = hinted_cases.record(|oracle| bls12_381_pairing_check(input, Global, Some(oracle)));
-            prop_assert_eq!(hinted, bls12_381_pairing_check(input, Global, None::<&mut NoHints>));
+            let hinted = hinted_cases.record(|oracle| bls12_381_pairing_check(input.iter().copied(), Some(oracle)));
+            prop_assert_eq!(hinted, bls12_381_pairing_check(input.iter().copied(), None::<&mut NoHints>));
         });
         hinted_cases.check();
     }
@@ -226,12 +252,14 @@ mod tests {
         ] {
             let input = encode(&pairs);
             let input = input.as_chunks::<BLS12_381_PAIR_LEN>().0;
-            let result =
-                assert_tape_replays!(|oracle| bls12_381_pairing_check(input, Global, Some(oracle)));
+            let result = assert_tape_replays!(|oracle| bls12_381_pairing_check(
+                input.iter().copied(),
+                Some(oracle)
+            ));
             assert_eq!(result, expected);
             assert_eq!(
                 result,
-                bls12_381_pairing_check(input, Global, None::<&mut NoHints>)
+                bls12_381_pairing_check(input.iter().copied(), None::<&mut NoHints>)
             );
         }
     }
@@ -244,7 +272,7 @@ mod tests {
         let off_subgroup = bls_tests::g1_off_subgroup(&[7; 48]);
         let input = encode(&[(p, q), (off_subgroup, q)]);
         let (result, tape) = record_hints(|oracle| {
-            bls12_381_pairing_check(input.as_chunks().0, Global, Some(oracle))
+            bls12_381_pairing_check(input.as_chunks().0.iter().copied(), Some(oracle))
         });
         assert_eq!(result, Err(Bls12Error::NotInSubgroup));
         let g1_tape = |point: G1Affine| {

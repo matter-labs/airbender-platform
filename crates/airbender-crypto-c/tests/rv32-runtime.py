@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
-TARGET = 'riscv32im-risc0-zkvm-elf'
+TARGET = 'riscv32i-unknown-none-elf'
 CONFIGURATIONS = ['', 'delegation', 'csr-oracle delegation']
 
 
@@ -55,15 +55,17 @@ def check(features, digest, tape):
         out = Path(directory)
         reads_hints = 'csr-oracle' in features.split()
         (out / 'tape.hex').write_text(''.join(word + '\n' for word in tape) if reads_hints else '')
-        run('clang', '--target=riscv32-none-elf', '-march=rv32im', '-mabi=ilp32',
-            '-ffreestanding', '-fno-builtin', '-O2', '-S', '-emit-llvm',
+        # Like the library, the header's bigint operations delegate with `delegation` only
+        software = [] if 'delegation' in features.split() else ['-DAIRBENDER_NO_DELEGATION']
+        run('clang', '--target=riscv32-none-elf', '-march=rv32i_zmmul', '-mabi=ilp32',
+            '-ffreestanding', '-fno-builtin', '-O2', '-S', '-emit-llvm', *software,
             '-I' + str(ROOT / 'crates/airbender-crypto-c/include'),
             str(ROOT / 'crates/airbender-crypto-c/tests/runtime.c'), '-o', str(out / 'runtime.ll'))
         ir = (out / 'runtime.ll').read_text()
-        ir = re.sub(r'"target-features"="[^"]*"', '"target-features"="+m"', ir)
+        ir = re.sub(r'"target-features"="[^"]*"', '"target-features"="+zmmul"', ir)
         (out / 'runtime.ll').write_text(ir)
         # The consumer's startup: copy data to RAM before any delegation (its operands must be
-        # in RAM), set the stack, and return the status in a0 and the digest in a1. 1 MiB heap.
+        # in RAM), set the stack, and return the status in a0 and the digest in a1. No heap.
         (out / 'start.ll').write_text(r'''
 module asm ".section .text.start,\22ax\22"
 module asm ".globl _start"
@@ -78,7 +80,7 @@ module asm "j ."
 @_ebss = external global i8
 declare ptr @memcpy(ptr, ptr, i32)
 declare ptr @memset(ptr, i32, i32)
-declare i32 @airbender_crypto_runtime_smoke(ptr, ptr, i32, ptr)
+declare i32 @airbender_crypto_runtime_smoke(i32, ptr)
 define void @consumer_main() nounwind {
   %digest = alloca i32, align 4
   %size = sub i32 ptrtoint(ptr @_edata to i32), ptrtoint(ptr @_sdata to i32)
@@ -86,7 +88,7 @@ define void @consumer_main() nounwind {
   %bsssize = sub i32 ptrtoint(ptr @_ebss to i32), ptrtoint(ptr @_sbss to i32)
   %zero = call ptr @memset(ptr @_sbss, i32 0, i32 %bsssize)
   %scenario = call i32 asm sideeffect "csrrw $0, 0x7c0, zero", "=r"()
-  %result = call i32 @airbender_crypto_runtime_smoke(ptr inttoptr(i32 8388608 to ptr), ptr inttoptr(i32 9437184 to ptr), i32 %scenario, ptr %digest)
+  %result = call i32 @airbender_crypto_runtime_smoke(i32 %scenario, ptr %digest)
   %value = load i32, ptr %digest, align 4
   call void asm sideeffect "", "{a0},{a1}"(i32 %result, i32 %value)
   br label %exit
@@ -95,19 +97,27 @@ exit:
 }
 ''')
         for name in ['runtime', 'start']:
-            run(str(llvm / 'llc'), '-mtriple=riscv32-unknown-none-elf', '-mattr=+m',
+            run(str(llvm / 'llc'), '-mtriple=riscv32-unknown-none-elf', '-mattr=+zmmul',
                 '-filetype=obj', str(out / (name + '.ll')), '-o', str(out / (name + '.o')))
         (out / 'link.ld').write_text('''ENTRY(_start)
 SECTIONS {
  . = 0; .text : { *(.text.start) *(.text .text.*) }
  _sidata = ALIGN(., 32);
- .data 0x500000 : AT(_sidata) { _sdata = .; *(.rodata .rodata.* .srodata .srodata.* .data .data.* .sdata .sdata.*) _edata = .; }
+ .data 0x500000 : AT(_sidata) { _sdata = .; *(.rodata .rodata.* .srodata .srodata.* .data .data.* .sdata .sdata.*) . = ALIGN(4); _edata = .; }
  .bss (NOLOAD) : { _sbss = .; *(.bss .bss.* .sbss .sbss.*) _ebss = .; }
 }
 ''')
+        # The link also checks that no live code can allocate: the library's allocator calls an
+        # undefined function (see its `c-runtime` feature), and --why-live prints the chain of
+        # references that keeps an allocator entry point alive, next to the undefined-symbol error
         run(str(llvm / 'rust-lld'), '-flavor', 'gnu', '-m', 'elf32lriscv',
-            '--gc-sections', '--no-relax', '-T', str(out / 'link.ld'),
+            '--gc-sections', '--no-relax', '--why-live=*__rust_alloc', '-T', str(out / 'link.ld'),
             str(out / 'start.o'), str(out / 'runtime.o'), str(archive), '-o', str(out / 'guest.elf'))
+        # Zmmul only: the guest must contain no division or remainder instruction
+        listing = run(str(llvm / 'llvm-objdump'), '-d', '--no-show-raw-insn', str(out / 'guest.elf'),
+                      capture_output=True).stdout
+        divisions = re.findall(r'^\s*[0-9a-f]+:\s+(divu?|remu?)\s', listing, re.M)
+        assert not divisions, f'the guest uses M division instructions: {len(divisions)}'
         for extension, sections in [('bin', []), ('text', ['--only-section=.text'])]:
             run(str(llvm / 'llvm-objcopy'), '-O', 'binary', *sections,
                 str(out / 'guest.elf'), str(out / ('guest.' + extension)))

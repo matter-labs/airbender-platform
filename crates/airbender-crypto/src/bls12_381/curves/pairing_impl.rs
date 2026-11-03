@@ -46,7 +46,7 @@ impl Bls12_381 {
     /// of pairs, the first one started at `initial` instead of `1` and multiplied by `initial` at
     /// the set bits of `|u|`, so that the result is `initial^|u| f`: the accumulator goes through
     /// the double-and-add of the exponent, and the residue witness pairing check
-    /// (`crate::residue_witness`) gets `d^|u|` almost for free (the squarings are the loop's
+    /// (`crate::oracle_common::residue_witness`) gets `d^|u|` almost for free (the squarings are the loop's
     /// own). Unlike `multi_miller_loop` the result is not conjugated for the negative seed: the
     /// conjugation changes it by an `r`-th residue only, which the check is invariant to, and
     /// which the final exponentiation would remove.

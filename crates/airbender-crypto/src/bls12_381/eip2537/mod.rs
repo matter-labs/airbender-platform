@@ -173,10 +173,12 @@ pub fn map_fp2_to_g2(element: Fq2) -> Result<G2Affine, HashToCurveError> {
     apply_isogeny_map(&g2::Config::ISOGENY_MAP, point_on_iso_curve)
 }
 
-// A wrong hint fails an assertion: an error would let the prover fail a valid mapping.
-fn checked_inverse<F: Field>(value: &F, inverse: &mut impl FnMut(&F) -> Option<F>) -> F {
+/// `inv0` of the hash-to-curve spec: zero for a zero `value`, the inverse otherwise. The zero
+/// case is settled here, without advice; `inverse` is only asked for a non-zero value, and its
+/// answer is checked with one multiplication. A wrong hint fails an assertion: an error would let
+/// the prover fail a valid mapping.
+fn inv0<F: Field>(value: &F, inverse: &mut impl FnMut(&F) -> Option<F>) -> F {
     if value.is_zero() {
-        // inv0: a zero denominator is deterministic and does not need advice.
         return F::ZERO;
     }
     let result = inverse(value).expect("invalid inverse hint");
@@ -212,7 +214,7 @@ fn swu_with_hints<P: SWUConfig>(
     let ta = zeta_u2.square() + zeta_u2;
     let num_x1 = b * (ta + P::BaseField::ONE);
     let div = a * if ta.is_zero() { P::ZETA } else { -ta };
-    let div_inv = checked_inverse(&div, inverse);
+    let div_inv = inv0(&div, inverse);
     let div2 = div.square();
     let div3 = div2 * div;
     let num_gx1 = (num_x1.square() + a * div2) * num_x1 + b * div3;
@@ -249,12 +251,9 @@ fn apply_isogeny_map_with_inverse<
     let y_den = evaluate_polynomial(map.y_map_denominator, &x);
     let prod = x_den * y_den;
     let (x_inv, y_inv) = if prod.is_zero() {
-        (
-            checked_inverse(&x_den, inverse),
-            checked_inverse(&y_den, inverse),
-        )
+        (inv0(&x_den, inverse), inv0(&y_den, inverse))
     } else {
-        let prod_inv = checked_inverse(&prod, inverse);
+        let prod_inv = inv0(&prod, inverse);
         (y_den * prod_inv, x_den * prod_inv)
     };
     Affine::new_unchecked(x_num * x_inv, y_num * y * y_inv)

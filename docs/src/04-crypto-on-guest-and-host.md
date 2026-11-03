@@ -1,6 +1,6 @@
 # Using Crypto on Guest and Host
 
-`airbender-crypto` provides cryptographic primitives that work on both host and guest. When using `airbender-sdk` with the `crypto` feature, delegation backends are enabled automatically. If you depend on `airbender-crypto` directly, you need to enable the `proving` feature for delegated implementations — otherwise primitives fall back to their naive software versions.
+`airbender-crypto` provides cryptographic primitives that work on both host and guest. When using `airbender-sdk` with the `crypto` feature, delegation backends are enabled automatically. If you depend on `airbender-crypto` directly, you need to enable the `proving` feature for delegated implementations — otherwise primitives fall back to their naive software versions. `proving` also enables `hinted_operations`, the paths that take witnesses from an oracle; that feature stands on its own, so a guest can take hints without the delegations (and vice versa).
 
 ## Add Dependency
 
@@ -109,10 +109,12 @@ is the non-determinism CSR (`airbender_oracle::CsrOracle`). It also witnesses th
 (`Secp256k1Hooks::recovery_witness`), which saves about a fifth of the group operations of a
 recovery; a witness that does not check out panics, as any wrong hint does. The protocol is the field
 hints of ZKsync OS (query ID `FIELD_OPS_ADVISE_QUERY_ID`, `0x40050011`, with the ops of
-`hints::FieldHintOp`), so a host that serves ZKsync OS serves these hooks. The host side is
-`hints::answer_query`, which reads the request from the guest's memory and answers in the guest's
-representation; natively, `hints::RecordingHintOracle` answers a querier in the same process and
-records the guest's tape.
+`hints::FieldHintOp`), so a host that serves ZKsync OS serves these hooks. The host side (the
+`oracle_implementations` feature) is `hints::answer_query`, which reads the request from the guest's
+memory and answers in the guest's representation (that of the delegated fields: a guest with
+`bigint_ops`); natively, `hints::RecordingHintOracle` answers a querier in the same process and
+records the guest's tape. The implementations of the answers live next to each primitive, in its
+`oracle_implementations` module.
 
 ```rust
 use airbender_crypto::hints::{HintError, Secp256k1HooksWithOracle};

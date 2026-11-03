@@ -16,6 +16,12 @@ impl OracleError for HintError {
     }
 }
 
+impl From<airbender_oracle::QuerierMemoryError> for HintError {
+    fn from(error: airbender_oracle::QuerierMemoryError) -> Self {
+        Self(error.0)
+    }
+}
+
 /// No oracle: the type of `None` where an `Option<&mut O>` is expected, for computations without
 /// hints. It has no values, so none of its methods can be called.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

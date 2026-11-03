@@ -1,17 +1,20 @@
 //! The answers of field hints: how the querier receives them, and how the oracle writes them.
 
 use airbender_oracle::MemoryOracle;
-#[cfg(any(feature = "alloc", test))]
+#[cfg(any(feature = "oracle_implementations", test))]
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-/// The target of a querier. Field element representations differ between the RISC-V guest and
-/// native builds, so the answers do; a recording native run reads its own and records the guest's.
+/// The target of a querier. Field element representations differ between the RISC-V guest with
+/// the bigint delegation and the other builds, so the answers do; a recording native run reads
+/// its own and records the guest's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HintTarget {
-    /// A querier in this process (a native run)
+    /// A querier whose fields are the native ones (arkworks, the canonical secp256k1 integers): a
+    /// querier in this process, or the RISC-V guest without `bigint_ops` (`hinted_operations`
+    /// alone), which reads this representation too
     Native,
-    /// The RISC-V guest (the proving target)
+    /// The RISC-V guest with `bigint_ops` (the proving target): the delegated representation
     Guest,
 }
 
@@ -19,8 +22,8 @@ pub enum HintTarget {
 /// the `u32` words of its representation on the querier's target, and [`read`](Self::read) checks
 /// it is well-formed. Whether it is the right answer is for the caller to check.
 ///
-/// Meant for this crate's types: `write` exists only with `alloc` (or in tests), so an outside
-/// implementation compiles with or without `alloc`, not both.
+/// Meant for this crate's types: `write` exists only with `oracle_implementations` (or in
+/// tests), so an outside implementation compiles with or without it, not both.
 pub trait HintAnswer: Sized {
     /// Receives the value from the response to the current hint query into `dst`, and validates it.
     fn read<'a, O: MemoryOracle>(
@@ -30,7 +33,7 @@ pub trait HintAnswer: Sized {
 
     /// Oracle side: appends the words of the value, as [`read`](Self::read) receives them on
     /// `target`.
-    #[cfg(any(feature = "alloc", test))]
+    #[cfg(any(feature = "oracle_implementations", test))]
     fn write(&self, target: HintTarget, response: &mut Vec<u32>);
 }
 
@@ -44,7 +47,7 @@ impl HintAnswer for bool {
         Ok(dst.write(oracle.read_word()? != 0))
     }
 
-    #[cfg(any(feature = "alloc", test))]
+    #[cfg(any(feature = "oracle_implementations", test))]
     fn write(&self, _target: HintTarget, response: &mut Vec<u32>) {
         response.push(u32::from(*self));
     }
@@ -66,7 +69,7 @@ impl<T: HintAnswer, const N: usize> HintAnswer for [T; N] {
         Ok(unsafe { dst.assume_init_mut() })
     }
 
-    #[cfg(any(feature = "alloc", test))]
+    #[cfg(any(feature = "oracle_implementations", test))]
     fn write(&self, target: HintTarget, response: &mut Vec<u32>) {
         for element in self {
             element.write(target, response);
@@ -97,7 +100,7 @@ macro_rules! impl_hint_answer_for_tuple {
                 }
             }
 
-            #[cfg(any(feature = "alloc", test))]
+            #[cfg(any(feature = "oracle_implementations", test))]
             fn write(&self, target: HintTarget, response: &mut Vec<u32>) {
                 $(self.$index.write(target, response);)+
             }

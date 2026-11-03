@@ -259,8 +259,8 @@ mod bls12_381_extension {
     mod tests {
         use super::*;
         use crate::affine_glv::Divider;
-        use crate::hints::host::RecordingHintOracle;
         use crate::hints::{test_support::lying_oracle, FieldHintOp};
+        use crate::oracle_common::RecordingHintOracle;
 
         /// Zero, real, imaginary and mixed elements, squares and non-squares (from `i = 7`)
         fn inputs() -> Vec<Fq2> {
@@ -326,9 +326,9 @@ mod bls12_381_extension {
 mod tests {
     use super::*;
     use crate::affine_glv::Divider;
-    use crate::hints::host::RecordingHintOracle;
     use crate::hints::test_support::lying_oracle;
     use crate::hints::HintTarget;
+    use crate::oracle_common::RecordingHintOracle;
     use crate::{bls12_381, bn254};
     use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
     use core::mem::MaybeUninit;
