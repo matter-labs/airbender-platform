@@ -461,6 +461,8 @@ mod tests {
             "proof.bin",
             "--vk",
             "vk.bin",
+            "--app-bin",
+            "app.bin",
             "--expected-output",
             "42,0,0",
         ]);
@@ -468,6 +470,7 @@ mod tests {
             Commands::VerifyProof(args) => {
                 assert_eq!(args.proof, PathBuf::from("proof.bin"));
                 assert_eq!(args.vk, PathBuf::from("vk.bin"));
+                assert_eq!(args.app_bin, PathBuf::from("app.bin"));
                 assert_eq!(args.expected_output.as_deref(), Some("42,0,0"));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -482,6 +485,8 @@ mod tests {
             "proof.bin",
             "--vk",
             "vk.bin",
+            "--app-bin",
+            "app.bin",
             "--expected-output",
             "1",
             "--expected-output",
