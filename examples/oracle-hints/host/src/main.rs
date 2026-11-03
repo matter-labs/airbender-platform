@@ -106,7 +106,7 @@ fn main() -> Result<()> {
     inputs.push(&y_is_odd)?;
 
     let runner = program.transpiler_runner().build()?;
-    let oracle = QueryDispatcher::new(RunMode::RiscVRun);
+    let mut oracle = QueryDispatcher::new(RunMode::RiscVRun);
     oracle.add_external_processor(CryptoHints);
     let source = GuestSource {
         inputs: inputs.words().iter().copied().collect(),
