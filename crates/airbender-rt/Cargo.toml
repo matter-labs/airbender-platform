@@ -17,8 +17,13 @@ getrandom = { workspace = true, default-features = false, features = ["custom"] 
 talc = { workspace = true, default-features = false, features = ["allocator", "nightly_api"], optional = true }
 
 [features]
-default = ["allocator-talc"]
+default = ["allocator-talc", "ram-1gb"]
 std = []
 allocator-bump = []
 allocator-talc = ["dep:talc"]
 allocator-custom = []
+# Total guest memory layout (ROM + RAM). Exactly one must be enabled; the
+# linker scripts come from `riscv_common`.
+ram-32mb-no-heap = ["riscv_common/ram_32mb_no_heap"]
+ram-1gb = ["riscv_common/ram_1gb"]
+ram-4gb = ["riscv_common/ram_4gb"]

@@ -5,44 +5,21 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 
 pub fn generate(args: GenerateVkArgs) -> Result<()> {
-    ensure_gpu_vk_support()?;
     let security = args.security;
     let host_security = security.into();
+    let level = as_host_level(args.level);
 
-    let vk = match args.level {
-        ProverLevelArg::RecursionUnified => {
-            let vk = airbender_host::compute_unified_vk(&args.app_bin, host_security).map_err(
-                |err| {
-                    CliError::with_source(
-                        format!(
-                            "failed to compute unified verification keys for `{}`",
-                            args.app_bin.display()
-                        ),
-                        err,
-                    )
-                },
-            )?;
-            airbender_host::VerificationKey::RealUnified(
-                airbender_host::RealUnifiedVerificationKey { vk },
+    let vk =
+        airbender_host::compute_real_vk(&args.app_bin, level, host_security).map_err(|err| {
+            CliError::with_source(
+                format!(
+                    "failed to compute verification keys for `{}`",
+                    args.app_bin.display()
+                ),
+                err,
             )
-        }
-        ProverLevelArg::Base | ProverLevelArg::RecursionUnrolled => {
-            let level = as_host_level(args.level);
-            let vk = airbender_host::compute_unrolled_vk(&args.app_bin, level, host_security)
-                .map_err(|err| {
-                    CliError::with_source(
-                        format!(
-                            "failed to compute unrolled verification keys for `{}`",
-                            args.app_bin.display()
-                        ),
-                        err,
-                    )
-                })?;
-            airbender_host::VerificationKey::RealUnrolled(
-                airbender_host::RealUnrolledVerificationKey { level, vk },
-            )
-        }
-    };
+        })?;
+    let vk = airbender_host::VerificationKey::Real(airbender_host::RealVerificationKey { vk });
 
     write_bincode(&args.output, &vk)?;
 
@@ -52,23 +29,6 @@ pub fn generate(args: GenerateVkArgs) -> Result<()> {
     ui::field("output", args.output.display());
 
     Ok(())
-}
-
-fn ensure_gpu_vk_support() -> Result<()> {
-    #[cfg(feature = "gpu-prover")]
-    {
-        Ok(())
-    }
-
-    #[cfg(not(feature = "gpu-prover"))]
-    {
-        Err(CliError::new(
-            "verification key generation requires GPU support in `cargo-airbender`",
-        )
-        .with_hint(
-            "rebuild `cargo-airbender` with default features or pass `--features gpu-prover` to use `generate-vk`",
-        ))
-    }
 }
 
 pub fn verify(args: VerifyProofArgs) -> Result<()> {
@@ -105,8 +65,13 @@ pub fn verify(args: VerifyProofArgs) -> Result<()> {
                 .as_ref()
                 .map(|words| words as &dyn airbender_host::Commit);
 
-            airbender_host::verify_real_proof_with_vk(proof, &vk, expected_output_commit)
-                .map_err(|err| CliError::with_source("proof verification failed", err))?;
+            airbender_host::verify_real_proof_with_vk(
+                proof,
+                &vk,
+                &args.app_bin,
+                expected_output_commit,
+            )
+            .map_err(|err| CliError::with_source("proof verification failed", err))?;
             (proof.level(), proof.security())
         }
     };
@@ -259,27 +224,6 @@ fn write_bincode<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(feature = "gpu-prover"))]
-    use crate::cli::{GenerateVkArgs, SecurityLevelArg};
-    #[cfg(not(feature = "gpu-prover"))]
-    use std::path::PathBuf;
-
-    #[cfg(not(feature = "gpu-prover"))]
-    #[test]
-    fn generate_vk_requires_gpu_support() {
-        let err = generate(GenerateVkArgs {
-            app_bin: PathBuf::from("app.bin"),
-            output: PathBuf::from("vk.bin"),
-            level: ProverLevelArg::Base,
-            security: SecurityLevelArg::default(),
-        })
-        .expect_err("generate-vk must require gpu-prover support");
-
-        assert!(
-            err.to_string().contains("requires GPU support"),
-            "unexpected error: {err}"
-        );
-    }
 
     #[test]
     fn parse_expected_output_none() {
