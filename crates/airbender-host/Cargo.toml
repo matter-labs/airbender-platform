@@ -21,6 +21,7 @@ airbender-codec = { path = "../airbender-codec" }
 serde = { workspace = true, features = ["derive"] }
 prover_pipeline = { workspace = true }
 riscv_transpiler = { workspace = true, features = ["jit", "flamegraph"] }
+riscv_common = { workspace = true }
 field = { workspace = true }
 sha3 = { workspace = true }
 sha2 = { workspace = true }
