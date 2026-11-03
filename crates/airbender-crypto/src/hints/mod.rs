@@ -43,6 +43,8 @@ pub use self::request::{
     FieldHintOp, FieldOpsHint, FieldOpsHint64, GenericFieldOpsHint,
 };
 pub use self::secp256k1::{RecoveryRequest, Secp256k1Element, Secp256k1HooksWithOracle};
+#[cfg(all(feature = "oracle_processor", target_pointer_width = "64"))]
+pub use crate::oracle_common::CryptoHints;
 #[cfg(all(
     any(feature = "oracle_implementations", test),
     target_pointer_width = "64"

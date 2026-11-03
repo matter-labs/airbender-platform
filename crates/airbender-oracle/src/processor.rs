@@ -317,6 +317,11 @@ impl<E: OracleError> QueryDispatcher<E> {
         Ok(())
     }
 
+    /// Whether the querier has response words of the current query left to read.
+    pub fn has_pending_response(&self) -> bool {
+        !self.response.is_empty()
+    }
+
     /// The next word the guest reads from the CSR: the response words of the current query, and
     /// zeroes once disconnected.
     pub fn read_csr_word(&mut self) -> u32 {

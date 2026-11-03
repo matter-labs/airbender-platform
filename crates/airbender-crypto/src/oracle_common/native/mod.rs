@@ -2,10 +2,14 @@
 
 mod field_hints;
 mod operand;
+#[cfg(feature = "oracle_processor")]
+mod processor;
 mod recorder;
 
 pub use self::field_hints::{not_identity_claim, read_querier_u32_words};
 pub use self::operand::{Operand, Responses};
+#[cfg(feature = "oracle_processor")]
+pub use self::processor::CryptoHints;
 pub use self::recorder::{record_hints, RecordingHintOracle};
 pub use airbender_oracle::NativeQuerierMemory;
 

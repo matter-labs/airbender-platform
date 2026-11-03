@@ -84,6 +84,9 @@ hinted_operations = []
 # (`*/oracle_implementations`, `oracle_common`), which allocate, and the recorder of the hint
 # tape.
 oracle_implementations = ["hinted_operations", "alloc"]
+# The oracle side as a processor of `airbender_oracle::processor::QueryDispatcher`, the oracle of
+# the guest in Airbender's simulators (`CryptoHints`): `std`, and the simulators' CSR trait.
+oracle_processor = ["oracle_implementations", "airbender-oracle/oracle_processor"]
 # bigint_ops = ["zeroize", "num-bigint", "num-traits", "num-integer"]
 # The bigint delegation of the RV32 guest for the field arithmetic
 bigint_ops = []
