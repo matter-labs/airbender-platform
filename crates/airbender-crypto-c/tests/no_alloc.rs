@@ -1,5 +1,5 @@
-//! The exports that take no allocator use no heap, without a recording. The pairing checks and
-//! MSMs allocate their working vectors.
+//! No export uses the heap, without a recording: the pairing checks and the MSMs keep their
+//! parsed inputs in scratch buffers.
 mod common;
 
 use airbender_crypto as crypto;
@@ -93,6 +93,29 @@ fn exports_without_an_allocator_use_no_heap() {
         Bytes { data: [0; 192] },
     );
     let mut flag = false;
+    let scalar = Bytes { data: [0x5a; 32] };
+    // EIP-197 puts the imaginary part of each BN254 G2 coordinate first
+    let mut bn_q: Bytes<128> = point(&bn::G2Affine::generator());
+    for coordinate in bn_q.data.as_chunks_mut::<64>().0 {
+        let (c0, c1) = coordinate.split_at_mut(32);
+        c0.swap_with_slice(c1);
+    }
+    let bn_pair = Pair {
+        first: bn_p,
+        second: bn_q,
+    };
+    let bls_pair = Pair {
+        first: bls_p,
+        second: bls_q,
+    };
+    let g1_msm = [Pair {
+        first: bls_p,
+        second: scalar,
+    }; 4];
+    let g2_msm = [Pair {
+        first: bls_q,
+        second: scalar,
+    }; 4];
     // the name of each export, for the failure message
     macro_rules! no_heap {
         ($export:ident($($arg:expr),*)) => {
@@ -130,4 +153,11 @@ fn exports_without_an_allocator_use_no_heap() {
     no_heap!(zkvm_kzg_point_eval(
         &infinity, &zero, &zero, &infinity, &mut flag
     ));
+    no_heap!(zkvm_bn254_pairing(&bn_pair, 1, &mut flag));
+    no_heap!(zkvm_bls12_pairing(&bls_pair, 1, &mut flag));
+    // one pair (the affine chain with hints, the double-and-add without) and four (the buckets)
+    no_heap!(zkvm_bls12_g1_msm(g1_msm.as_ptr(), 1, &mut out96));
+    no_heap!(zkvm_bls12_g1_msm(g1_msm.as_ptr(), 4, &mut out96));
+    no_heap!(zkvm_bls12_g2_msm(g2_msm.as_ptr(), 1, &mut out192));
+    no_heap!(zkvm_bls12_g2_msm(g2_msm.as_ptr(), 4, &mut out192));
 }

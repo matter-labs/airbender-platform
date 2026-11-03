@@ -73,6 +73,7 @@ pub(crate) mod jacobian;
 pub mod modexp;
 pub mod oracle_common;
 pub mod precompiles;
+pub mod scratch;
 pub use self::bytes32::Bytes32;
 #[allow(clippy::all)]
 pub mod bls12_381;

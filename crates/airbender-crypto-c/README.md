@@ -27,7 +27,11 @@ the `precompiles` endpoints, `modexp`, `blake2f` or a checked hinted operation.
   significant bytes (EIP-7823); longer ones abort.
 - `zkvm_blake2f` takes `rounds` as a number (decode EVM's big-endian bytes first) and `f` as
   0 or 1.
-- The pairing checks and MSMs allocate; the other exports, ModExp included, don't.
+- No export allocates. The pairing checks and the MSMs keep their parsed pairs in stack
+  buffers sized by the transaction gas cap (EIP-7825): at most 492 BN254 pairs, 513 BLS12-381
+  pairs, 2693 G1 and 1423 G2 MSM pairs. More return `ZKVM_EFAIL` on `num_pairs` alone, before
+  the input is read. The largest buffer, the G1 MSM's, takes about 600 KB of stack (points,
+  scalars and buckets), so the calling thread needs that much.
 
 ## Hints
 
@@ -55,9 +59,9 @@ operations and their oracle side (`airbender-crypto/oracle_implementations`), fo
 - `delegation`: delegated big-integer arithmetic (`airbender-crypto/proving`).
 - `csr-oracle`: hints through the CSR (`airbender-crypto/hinted_operations`), with or without
   `delegation`.
-- `c-runtime`: airbender-rt's allocator and panic handler for C guests. The guest calls
-  `airbender_crypto_init_heap(start, end)` once before anything allocates. Leave it off in
-  Rust guests that start through airbender-rt.
+- `c-runtime`: airbender-rt's allocator and panic handler for C guests. The library itself no
+  longer allocates; a guest that wants the heap calls `airbender_crypto_init_heap(start, end)`
+  once before using it. Leave the feature off in Rust guests that start through airbender-rt.
 
 ## Building
 

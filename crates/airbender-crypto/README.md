@@ -22,7 +22,7 @@
 - `proving`: enables delegation-oriented features used on `riscv32` Airbender guests. It implies `bigint_ops` (the bigint delegation of the fields) and `hinted_operations`.
 - `hinted_operations`: the hinted paths of the primitives, which take oracle witnesses (`hints`). Independent of `bigint_ops`: the answers are read in the representation of the fields of the build.
 - `oracle_implementations`: the oracle side on a native host, which computes the witnesses (`*/oracle_implementations`, `oracle_common`) and records the hint tape; it allocates.
-- `alloc`: the allocating endpoints (pairing checks, MSMs).
+- `alloc`: `ECMultContext::new_in` and `TryExtend` for `Vec`; no endpoint allocates.
 - Default features keep host usage available and enable the secp256k1 static context and the hinted operations.
 
 ## Usage
@@ -49,7 +49,10 @@ of pairs at a time); `None::<&mut NoHints>` runs the plain path. Both give the s
 `modexp`, after `modexp::write_modexp_output` pads it). The hinted paths need `hinted_operations`;
 without it the endpoints panic when given an oracle. `precompiles` covers ecrecover, bn254
 (EIP-196/197), BLS12-381 (EIP-2537) and KZG point evaluation (EIP-4844); `airbender-crypto-c`
-exposes them to C. ModExp allocates nothing: its operands are bounded by EIP-7823.
+exposes them to C. Nothing allocates: ModExp's operands are bounded by EIP-7823, and the pairing
+checks and the MSMs parse their pairs into stack buffers (`scratch`) sized by the most pairs a
+transaction can pay for under the gas cap of EIP-7825 (`precompiles::MAX_TX_GAS` and the
+`MAX_*_PAIRS` constants); more pairs fail before anything is parsed.
 
 The oracle side of every hint lives in the `oracle_implementations` module of its primitive
 (`secp256k1`, `bn254`, `bls12_381`, `modexp`), behind the `oracle_implementations` feature; what
@@ -89,11 +92,10 @@ Recorders on different threads are independent, unless `proving` is enabled on a
 
 Unit tests run on the delegated fields of the test build, which have the guest's representation.
 The integration tests in `tests/` cover the arkworks fields of a normal build, and the ones for
-hints, precompiles and ModExp only compile with the oracle side (and `alloc` for the allocating
-endpoints):
+hints, precompiles and ModExp only compile with the oracle side:
 
 ```sh
-cargo test -p airbender-crypto --features alloc,oracle_implementations
+cargo test -p airbender-crypto --features oracle_implementations
 ```
 
 Debug builds run fewer property-test cases for the hint-heavy endpoints; `--release` runs them all.

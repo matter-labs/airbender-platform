@@ -56,18 +56,15 @@ pub(super) fn bls12_381_kzg_residue_witness<O: MemoryOracle>(
     super::hints_unavailable()
 }
 
-// The hints of the endpoints that allocate
+// The hints of the pairing checks and the MSMs
 
 /// `hints::Bls12381Fq2Divider`
-#[cfg(any(feature = "alloc", test))]
 pub(super) type Bls12381Fq2Divider = Unavailable;
 
 /// `hints::Bn254FqDivider`
-#[cfg(any(feature = "alloc", test))]
 pub(super) type Bn254FqDivider = Unavailable;
 
 /// `hints::G2SlopeHints`, whose chains (`hints::HintedChain`) are stand-in dividers too
-#[cfg(any(feature = "alloc", test))]
 impl Unavailable {
     pub(super) fn subgroup_chain(&mut self) -> Option<Self> {
         super::hints_unavailable()
@@ -79,7 +76,6 @@ impl Unavailable {
 }
 
 /// `hints::bn254_g2_pairing_slopes`
-#[cfg(any(feature = "alloc", test))]
 pub(super) fn bn254_g2_pairing_slopes<O: MemoryOracle>(
     _oracle: &mut O,
     _q: &crate::bn254::G2Affine,
@@ -88,7 +84,6 @@ pub(super) fn bn254_g2_pairing_slopes<O: MemoryOracle>(
 }
 
 /// `hints::bn254_pairing_residue_witness`
-#[cfg(any(feature = "alloc", test))]
 pub(super) fn bn254_pairing_residue_witness<O: MemoryOracle>(
     _oracle: &mut O,
     _pairs: &[(crate::bn254::G1Affine, crate::bn254::G2Affine)],
@@ -97,7 +92,6 @@ pub(super) fn bn254_pairing_residue_witness<O: MemoryOracle>(
 }
 
 /// `hints::bls12_381_fq_inverse`
-#[cfg(any(feature = "alloc", test))]
 pub(super) fn bls12_381_fq_inverse<O: MemoryOracle>(
     _oracle: &mut O,
     _a: &crate::bls12_381::Fq,
@@ -106,7 +100,6 @@ pub(super) fn bls12_381_fq_inverse<O: MemoryOracle>(
 }
 
 /// `hints::bls12_381_fq2_inverse`
-#[cfg(any(feature = "alloc", test))]
 pub(super) fn bls12_381_fq2_inverse<O: MemoryOracle>(
     _oracle: &mut O,
     _value: &crate::bls12_381::Fq2,
@@ -115,7 +108,6 @@ pub(super) fn bls12_381_fq2_inverse<O: MemoryOracle>(
 }
 
 /// `hints::bls12_381_pairing_residue_witness`
-#[cfg(any(feature = "alloc", test))]
 pub(super) fn bls12_381_pairing_residue_witness<O: MemoryOracle>(
     _oracle: &mut O,
     _pairs: &[crate::hints::Bls12381Pair],

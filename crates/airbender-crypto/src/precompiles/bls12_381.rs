@@ -2,7 +2,6 @@
 //! on the EIP-2537 encoding of the points.
 
 use crate::ark_ec::{AffineRepr, CurveGroup};
-#[cfg(any(feature = "alloc", test))]
 use crate::ark_ff::PrimeField;
 #[cfg(any(feature = "hinted_operations", test))]
 use crate::ark_ff::Zero;
@@ -17,23 +16,15 @@ use airbender_oracle::MemoryOracle;
 use core::cell::RefCell;
 
 // the dividers of the subgroup checks of the MSMs and the pairing check
-#[cfg(all(
-    any(feature = "alloc", test),
-    not(any(feature = "hinted_operations", test))
-))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 use super::unavailable::{Bls12381Fq2Divider, Bls12381FqDivider};
 
-#[cfg(any(feature = "alloc", test))]
 mod msm;
-#[cfg(any(feature = "alloc", test))]
 mod pairing;
 
-#[cfg(any(feature = "alloc", test))]
 pub use self::msm::{bls12_381_g1_msm, bls12_381_g2_msm, G1_MSM_PAIR_LEN, G2_MSM_PAIR_LEN};
-#[cfg(any(feature = "alloc", test))]
 pub use self::pairing::{bls12_381_pairing_check, BLS12_381_PAIR_LEN};
 
-#[cfg(any(feature = "alloc", test))]
 const SCALAR_SERIALIZATION_LEN: usize = 32;
 /// The size of the EIP-2537 encoding of a base field element
 pub const FIELD_ELEMENT_SERIALIZATION_LEN: usize = 64;
@@ -55,10 +46,12 @@ pub enum Bls12Error {
     NotInSubgroup,
     /// A field element is not canonical
     InvalidFieldElement,
+    /// More pairs than a transaction can pay for under the gas cap of EIP-7825 (the `MAX_*_PAIRS`
+    /// bounds of [`crate::precompiles`])
+    TooManyPairs,
 }
 
 // infallible: scalars need not be canonical
-#[cfg(any(feature = "alloc", test))]
 fn parse_integer(input: &[u8; SCALAR_SERIALIZATION_LEN]) -> <Fr as PrimeField>::BigInt {
     let mut repr = [0u64; 4];
     for (dst, src) in repr.iter_mut().zip(input.as_rchunks::<8>().1.iter().rev()) {
@@ -80,7 +73,6 @@ fn parse_g2(input: &[u8; G2_SERIALIZATION_LEN]) -> Result<G2Affine, Bls12Error> 
 }
 
 // the MSMs and the pairing check
-#[cfg(any(feature = "alloc", test))]
 fn parse_g1_with_subgroup_check(
     input: &[u8; G1_SERIALIZATION_LEN],
 ) -> Result<G1Affine, Bls12Error> {
@@ -92,7 +84,6 @@ fn parse_g1_with_subgroup_check(
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 fn parse_g2_with_subgroup_check(
     input: &[u8; G2_SERIALIZATION_LEN],
 ) -> Result<G2Affine, Bls12Error> {
@@ -106,7 +97,6 @@ fn parse_g2_with_subgroup_check(
 
 /// Parses and checks subgroup membership; with an oracle, by an affine chain with checked hinted
 /// divisions. On RV32 without `bigint_ops` the divider panics (see `unavailable`).
-#[cfg(any(feature = "alloc", test))]
 fn parse_g1_with_subgroup_check_with_oracle<O: MemoryOracle>(
     input: &[u8; G1_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
@@ -124,7 +114,6 @@ fn parse_g1_with_subgroup_check_with_oracle<O: MemoryOracle>(
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 fn parse_g2_with_subgroup_check_with_oracle<O: MemoryOracle>(
     input: &[u8; G2_SERIALIZATION_LEN],
     oracle: Option<&mut O>,

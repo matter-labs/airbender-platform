@@ -12,7 +12,7 @@ description = "C ABI for Airbender cryptographic accelerators"
 crate-type = ["rlib"]
 
 [dependencies]
-airbender-crypto = { path = "../airbender-crypto", default-features = false, features = ["forward", "secp256k1-static-context", "alloc"] }
+airbender-crypto = { path = "../airbender-crypto", default-features = false, features = ["forward", "secp256k1-static-context"] }
 
 # Native builds take hints from a recording on the calling thread: the oracle side of the hints
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]

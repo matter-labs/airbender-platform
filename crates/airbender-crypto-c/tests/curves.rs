@@ -11,6 +11,76 @@ use airbender_crypto::hints::{self, record_hints, Bls12381Fq2Divider, Bls12381Fq
 use airbender_crypto_c::*;
 use common::{call, encode, point};
 
+/// One pair over the gas-cap bound fails on `num_pairs` alone: the input, here a single pair
+/// (so that reading `num_pairs` of them would be out of bounds), is not read, and the output
+/// stays. The most pairs, all at infinity, pass.
+#[test]
+fn too_many_pairs_fail_on_the_count_alone() {
+    use airbender_crypto::precompiles::{
+        MAX_BLS12_381_G1_MSM_PAIRS, MAX_BLS12_381_G2_MSM_PAIRS, MAX_BLS12_381_PAIRS,
+        MAX_BN254_PAIRS,
+    };
+    let bn_pair = Pair {
+        first: Bytes { data: [0; 64] },
+        second: Bytes { data: [0; 128] },
+    };
+    let bls_pair = Pair {
+        first: Bytes { data: [0; 96] },
+        second: Bytes { data: [0; 192] },
+    };
+    let g1_pair = Pair {
+        first: Bytes { data: [0; 96] },
+        second: Bytes { data: [0; 32] },
+    };
+    let g2_pair = Pair {
+        first: Bytes { data: [0; 192] },
+        second: Bytes { data: [0; 32] },
+    };
+    let mut verified = true;
+    let mut out96 = Bytes { data: [0xa5; 96] };
+    let mut out192 = Bytes { data: [0xa5; 192] };
+    unsafe {
+        assert_eq!(
+            zkvm_bn254_pairing(&bn_pair, MAX_BN254_PAIRS + 1, &mut verified),
+            EFAIL
+        );
+        assert_eq!(
+            zkvm_bls12_pairing(&bls_pair, MAX_BLS12_381_PAIRS + 1, &mut verified),
+            EFAIL
+        );
+        assert!(verified);
+        assert_eq!(
+            zkvm_bls12_g1_msm(&g1_pair, MAX_BLS12_381_G1_MSM_PAIRS + 1, &mut out96),
+            EFAIL
+        );
+        assert_eq!(out96.data, [0xa5; 96]);
+        assert_eq!(
+            zkvm_bls12_g2_msm(&g2_pair, MAX_BLS12_381_G2_MSM_PAIRS + 1, &mut out192),
+            EFAIL
+        );
+        assert_eq!(out192.data, [0xa5; 192]);
+
+        let bn = vec![bn_pair; MAX_BN254_PAIRS];
+        assert_eq!(
+            zkvm_bn254_pairing(bn.as_ptr(), bn.len(), &mut verified),
+            EOK
+        );
+        assert!(verified);
+        let bls = vec![bls_pair; MAX_BLS12_381_PAIRS];
+        assert_eq!(
+            zkvm_bls12_pairing(bls.as_ptr(), bls.len(), &mut verified),
+            EOK
+        );
+        assert!(verified);
+        let g1 = vec![g1_pair; MAX_BLS12_381_G1_MSM_PAIRS];
+        assert_eq!(zkvm_bls12_g1_msm(g1.as_ptr(), g1.len(), &mut out96), EOK);
+        assert_eq!(out96.data, [0; 96]);
+        let g2 = vec![g2_pair; MAX_BLS12_381_G2_MSM_PAIRS];
+        assert_eq!(zkvm_bls12_g2_msm(g2.as_ptr(), g2.len(), &mut out192), EOK);
+        assert_eq!(out192.data, [0; 192]);
+    }
+}
+
 #[test]
 fn bn_big_endian_and_in_place_output() {
     let mut point = Bytes { data: [0; 64] };

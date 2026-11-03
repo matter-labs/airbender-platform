@@ -2,12 +2,13 @@
 //! helpers.
 use crate::{commit, crypto, decode, input, point, point_bytes, read, with_active_oracle};
 use crate::{Bytes, Pair};
-use alloc::alloc::Global;
-use alloc::vec::Vec;
 use core::{mem, slice};
 use crypto::ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use crypto::ark_ec::{AffineRepr, CurveGroup};
-use crypto::precompiles;
+use crypto::precompiles::{
+    self, MAX_BLS12_381_G1_MSM_PAIRS, MAX_BLS12_381_G2_MSM_PAIRS, MAX_BLS12_381_PAIRS,
+    MAX_BN254_PAIRS,
+};
 use crypto::{bls12_381 as bls, bn254 as bn};
 #[cfg(any(not(target_arch = "riscv32"), feature = "csr-oracle"))]
 use crypto::{
@@ -86,14 +87,17 @@ pub unsafe extern "C" fn zkvm_bn254_pairing(
     verified: *mut bool,
 ) -> i32 {
     commit(verified, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a check costs 45000 + 34000 per
+        // pair (EIP-1108), so it can pay for (2^24 - 45000) / 34000 = 492 pairs: more fail
+        // before the input is read.
+        if num_pairs > MAX_BN254_PAIRS {
+            return None;
+        }
         let pairs = input(pairs, num_pairs);
         // the EIP-197 encoding: `Pair` is two byte arrays with no padding between or after them
         const { assert!(mem::size_of::<Pair<64, 128>>() == 192) };
         let src = slice::from_raw_parts(pairs.as_ptr().cast::<u8>(), mem::size_of_val(pairs));
-        with_active_oracle(|oracle| {
-            precompiles::bn254_pairing_check(num_pairs, src, Global, oracle)
-        })
-        .ok()
+        with_active_oracle(|oracle| precompiles::bn254_pairing_check(num_pairs, src, oracle)).ok()
     })
 }
 
@@ -127,22 +131,21 @@ pub unsafe extern "C" fn zkvm_bls12_g2_add(
     })
 }
 
-/// The EIP-2537 MSM input of compact `(point, scalar)` pairs; `None` for none, which EIP-2537
-/// rejects
+/// The EIP-2537 MSM input of compact `(point, scalar)` pairs, widened one pair at a time; `None`
+/// for none, which EIP-2537 rejects
 fn msm_input<const P: usize, const Q: usize, const N: usize>(
     pairs: &[Pair<P, 32>],
-) -> Option<Vec<[u8; N]>> {
+) -> Option<impl ExactSizeIterator<Item = [u8; N]> + '_> {
     const { assert!(N == Q + 32) };
     if pairs.is_empty() {
         return None;
     }
-    let encoded = pairs.iter().map(|pair| {
+    Some(pairs.iter().map(|pair| {
         let mut bytes = [0; N];
         bytes[..Q].copy_from_slice(&eip2537::<P, Q>(&pair.first.data));
         bytes[Q..].copy_from_slice(&pair.second.data);
         bytes
-    });
-    Some(encoded.collect())
+    }))
 }
 
 #[no_mangle]
@@ -154,9 +157,14 @@ pub unsafe extern "C" fn zkvm_bls12_g1_msm(
     result: *mut Bytes<96>,
 ) -> i32 {
     commit(result, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a pair costs 12000 gas at the
+        // largest discount, 519/1000 from 128 pairs on (EIP-2537), so it can pay for
+        // 2^24 / (12000 * 519 / 1000) = 2693 pairs: more fail before the input is read.
+        if num_pairs > MAX_BLS12_381_G1_MSM_PAIRS {
+            return None;
+        }
         let input = msm_input::<96, 128, 160>(input(pairs, num_pairs))?;
-        let sum =
-            with_active_oracle(|oracle| precompiles::bls12_381_g1_msm(&input, Global, oracle));
+        let sum = with_active_oracle(|oracle| precompiles::bls12_381_g1_msm(input, oracle));
         sum.ok().map(bls_out1)
     })
 }
@@ -170,9 +178,14 @@ pub unsafe extern "C" fn zkvm_bls12_g2_msm(
     result: *mut Bytes<192>,
 ) -> i32 {
     commit(result, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a pair costs 22500 gas at the
+        // largest discount, 524/1000 from 128 pairs on (EIP-2537), so it can pay for
+        // 2^24 / (22500 * 524 / 1000) = 1423 pairs: more fail before the input is read.
+        if num_pairs > MAX_BLS12_381_G2_MSM_PAIRS {
+            return None;
+        }
         let input = msm_input::<192, 256, 288>(input(pairs, num_pairs))?;
-        let sum =
-            with_active_oracle(|oracle| precompiles::bls12_381_g2_msm(&input, Global, oracle));
+        let sum = with_active_oracle(|oracle| precompiles::bls12_381_g2_msm(input, oracle));
         sum.ok().map(bls_out2)
     })
 }
@@ -186,22 +199,25 @@ pub unsafe extern "C" fn zkvm_bls12_pairing(
     verified: *mut bool,
 ) -> i32 {
     commit(verified, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a check costs 37700 + 32600 per
+        // pair (EIP-2537), so it can pay for (2^24 - 37700) / 32600 = 513 pairs: more fail
+        // before the input is read.
+        if num_pairs > MAX_BLS12_381_PAIRS {
+            return None;
+        }
         let pairs = input(pairs, num_pairs);
         // EIP-2537 rejects an empty input; the endpoint leaves it to its caller
         if pairs.is_empty() {
             return None;
         }
-        let input: Vec<[u8; 384]> = pairs
-            .iter()
-            .map(|pair| {
-                let mut bytes = [0; 384];
-                bytes[..128].copy_from_slice(&eip2537::<96, 128>(&pair.first.data));
-                bytes[128..].copy_from_slice(&eip2537::<192, 256>(&pair.second.data));
-                bytes
-            })
-            .collect();
-        with_active_oracle(|oracle| precompiles::bls12_381_pairing_check(&input, Global, oracle))
-            .ok()
+        // widened to the EIP-2537 encoding one pair at a time
+        let input = pairs.iter().map(|pair| {
+            let mut bytes = [0; 384];
+            bytes[..128].copy_from_slice(&eip2537::<96, 128>(&pair.first.data));
+            bytes[128..].copy_from_slice(&eip2537::<192, 256>(&pair.second.data));
+            bytes
+        });
+        with_active_oracle(|oracle| precompiles::bls12_381_pairing_check(input, oracle)).ok()
     })
 }
 

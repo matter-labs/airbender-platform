@@ -14,7 +14,6 @@
 //! in the representation of the delegated fields (`delegation`); a guest without `delegation`
 //! reads the hints in the native representation (see `airbender_crypto::hints::HintTarget`).
 #![cfg_attr(target_arch = "riscv32", no_std)]
-#![feature(allocator_api)]
 
 // Native builds record the hints of the guest's delegated arithmetic without delegating.
 #[cfg(all(feature = "delegation", not(target_arch = "riscv32")))]

@@ -8,10 +8,8 @@ use crate::ark_serialize::Valid;
 use crate::hints::{bn254_fq_inverse, Bn254FqDivider};
 use airbender_oracle::MemoryOracle;
 
-#[cfg(any(feature = "alloc", test))]
 mod pairing_check;
 
-#[cfg(any(feature = "alloc", test))]
 pub use self::pairing_check::bn254_pairing_check;
 
 /// The sum of two points, each big-endian `x || y` (all zeroes for the point at infinity).
