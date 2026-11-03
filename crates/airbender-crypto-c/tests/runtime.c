@@ -27,72 +27,55 @@ static void mix(const void* data, size_t len) {
 static const char BLS_G1[] = "17f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb08b3f481e3aaa0f1a09e30ed741d8ae4fcf5e095d5d00af600db18cb2c04b3edd03cc744a2888ae40caa232946c5e7e1";
 static const char BLS_G2[] = "024aa2b2f08f0a91260805272dc51051c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb813e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049334cf11213945d57e5ac7d055d042b7e0ce5d527727d6e118cc9cdc6da2e351aadfd9baa8cbdd3a76d429a695160d12c923ac9cc3baca289e193548608b828010606c4a02ea734cc32acd2b02bc28b99cb3e287e85a763af267492ab572e99ab3f370d275cec1da1aaa9075ff05f79be";
 
-/* Field bindings; zero operands take no hint. */
-static uint32_t fields(void) {
-    zkvm_bytes_32 a = {0}, b = {0}, zero = {0}, result = {0};
-    a.data[31] = 6; b.data[31] = 3;
-    if (airbender_bn254_fq_divide(&a, &b, &result) != ZKVM_EOK || result.data[31] != 2)
-        return 3;
-    MIX(result);
-    CHECK(airbender_bn254_fq_inverse(&b, &result), 20); MIX(result);
-    if (airbender_secp256k1_fe_divide(&a, &b, &result) != ZKVM_EOK || result.data[31] != 2)
-        return 4;
-    MIX(result);
-    CHECK(airbender_secp256k1_fe_inverse(&b, &result), 21); MIX(result);
-    CHECK(airbender_secp256k1_scalar_inverse(&b, &result), 22); MIX(result);
-    /* the even root: 2 for 4, p - 9 for 81 (natural root 9) */
-    zkvm_bytes_32 four = {0}, eighty_one = {0}, minus_nine = {0};
-    four.data[31] = 4; eighty_one.data[31] = 81;
-    unhex(minus_nine.data, "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc26", 32);
-    if (airbender_secp256k1_fe_sqrt(&four, &result) != ZKVM_EOK || result.data[31] != 2) return 23;
-    for (unsigned i = 0; i < 31; ++i) if (result.data[i]) return 23;
-    if (airbender_secp256k1_fe_sqrt(&eighty_one, &result) != ZKVM_EOK || !same(&result, &minus_nine, 32)) return 23;
-    MIX(result);
-    /* 3 is a nonsquare: the hint proves it */
-    if (airbender_secp256k1_fe_sqrt(&b, &result) != ZKVM_EFAIL) return 24;
-    if (airbender_secp256k1_fe_inverse(&zero, &result) != ZKVM_EFAIL) return 24;
-    if (airbender_bn254_fq_inverse(&zero, &result) != ZKVM_EFAIL) return 24;
+/* The Airbender bindings: byte swap, the inline bigint operations (delegated unless
+ * AIRBENDER_NO_DELEGATION is defined) and the streaming hashes; none takes a hint. */
+static uint32_t airbender(void) {
+    if (airbender_bswap32(0x01020304u) != 0x04030201u) return 3;
+    airbender_u256 a = {0}, b = {0}, c = {0};
+    for (unsigned i = 0; i < 32; ++i) { a.data[i] = (uint8_t)(i * 37 + 1); b.data[i] = (uint8_t)(255 - i * 11); }
+    airbender_u256_copy(&c, &a);
+    if (!airbender_u256_eq(&a, &c) || airbender_u256_eq(&a, &b)) return 4;
+    bool carry = airbender_u256_add(&a, &b, true); MIX(a); MIX(carry);
+    bool borrow = airbender_u256_sub(&a, &b, carry); MIX(a); MIX(borrow);
+    if (!airbender_u256_eq(&a, &c)) return 20; /* (c + b + 1) - b - 1 */
+    borrow = airbender_u256_sub_and_negate(&a, &b, false); MIX(a); MIX(borrow);
+    bool fits = airbender_u256_mul_low(&a, &b); MIX(a); MIX(fits);
+    airbender_u256_copy(&a, &c);
+    airbender_u256_mul_high(&a, &b); MIX(a);
+    airbender_u256 three = {0}, four = {0}; three.data[0] = 3; four.data[0] = 4;
+    if (!airbender_u256_mul_low(&three, &four) || three.data[0] != 12 || three.data[1] != 0) return 21;
 
-    zkvm_bytes_64 fq2 = {0}, fq2_inverse = {0}, u = {0}, quotient = {0};
-    fq2.data[31] = 1;
-    if (airbender_bn254_fq2_inverse(&fq2, &fq2_inverse) != ZKVM_EOK) return 64;
-    if (!same(&fq2, &fq2_inverse, sizeof fq2)) return 64;
-    u.data[31] = 3; u.data[63] = 5;
-    CHECK(airbender_bn254_fq2_inverse(&u, &fq2_inverse), 25); MIX(fq2_inverse);
-    CHECK(airbender_bn254_fq2_divide(&fq2, &u, &quotient), 26);
-    if (!same(&quotient, &fq2_inverse, sizeof quotient)) return 26;
-
-    airbender_bytes_384 f = {0}, f_inverse = {0}, f_one = {0};
-    for (unsigned i = 0; i < 12; ++i) f.data[32 * i + 31] = (uint8_t)(i + 1);
-    CHECK(airbender_bn254_fq12_inverse(&f, &f_inverse), 27); MIX(f_inverse);
-    CHECK(airbender_bn254_fq12_divide(&f, &f, &f_one), 28);
-    if (f_one.data[31] != 1) return 28;
-    for (unsigned i = 0; i < 384; ++i) if (i != 31 && f_one.data[i]) return 28;
-
-    zkvm_bytes_48 c = {0}, d = {0}, e = {0};
-    c.data[47] = 6; d.data[47] = 3;
-    CHECK(airbender_bls12_fq_inverse(&d, &e), 29); MIX(e);
-    if (airbender_bls12_fq_divide(&c, &d, &e) != ZKVM_EOK || e.data[47] != 2) return 30;
-    zkvm_bytes_96 v = {0}, v_inverse = {0}, w = {0}, one96 = {0};
-    v.data[47] = 3; v.data[95] = 5; one96.data[47] = 1;
-    CHECK(airbender_bls12_fq2_inverse(&v, &v_inverse), 31); MIX(v_inverse);
-    CHECK(airbender_bls12_fq2_divide(&one96, &v, &w), 32);
-    if (!same(&w, &v_inverse, sizeof w)) return 32;
-    airbender_bytes_576 g = {0}, g_inverse = {0}, g_one = {0};
-    for (unsigned i = 0; i < 12; ++i) g.data[48 * i + 47] = (uint8_t)(i + 1);
-    CHECK(airbender_bls12_fq12_inverse(&g, &g_inverse), 33); MIX(g_inverse);
-    CHECK(airbender_bls12_fq12_divide(&g, &g, &g_one), 34);
-    if (g_one.data[47] != 1) return 34;
+    uint8_t data[300];
+    for (unsigned i = 0; i < sizeof data; ++i) data[i] = (uint8_t)(i * 7 + 3);
+    zkvm_bytes_32 one_shot = {0}, streamed = {0};
+    airbender_keccak_state state;
+    for (unsigned len = 0; len <= sizeof data; len += 67) {
+        CHECK(zkvm_keccak256(data, len, &one_shot), 22);
+        airbender_keccak256_init(&state);
+        airbender_keccak256_update(&state, data, len / 3);
+        airbender_keccak256_update(&state, data + len / 3, len - len / 3);
+        airbender_keccak256_finalize_reset(&state, &streamed);
+        if (!same(&one_shot, &streamed, 32)) return 23;
+        airbender_keccak256_update(&state, data, len);
+        airbender_keccak256_finalize(&state, &streamed);
+        if (!same(&one_shot, &streamed, 32)) return 24;
+    }
+    MIX(streamed);
+    airbender_sha3_256_init(&state);
+    airbender_sha3_256_update(&state, data, sizeof data);
+    airbender_sha3_256_finalize(&state, &streamed); MIX(streamed);
+    airbender_sha3_256_init(&state);
+    airbender_sha3_256_update(&state, (const uint8_t*)"abc", 3);
+    airbender_sha3_256_finalize_reset(&state, &streamed);
+    if (streamed.data[0] != 0x3a || streamed.data[31] != 0x32) return 25;
+    CHECK(airbender_blake2s256(data, sizeof data, &streamed), 26); MIX(streamed);
     return 0;
 }
 
-/* BLS12-381: maps, additions, MSMs (both algorithms), subgroup checks, cofactor clearing,
- * normalization and pairings. */
+/* BLS12-381: maps, additions, MSMs (both algorithms) and pairings. */
 static uint32_t bls12_381(void) {
     zkvm_bytes_48 fp = {0}; zkvm_bytes_96 point = {0}, product = {0}, doubled = {0}, zero1 = {0};
     CHECK(zkvm_bls12_map_fp_to_g1(&fp, &point), 5); MIX(point);
-    bool flag = false;
-    if (airbender_bls12_g1_is_in_subgroup(&point, &flag) != ZKVM_EOK || !flag) return 6;
     zkvm_bls12_381_g1_msm_pair pair = {0}; pair.point = point; pair.scalar.data[31] = 2;
     CHECK(zkvm_bls12_g1_msm(&pair, 1, &product), 7);
     CHECK(zkvm_bls12_g1_add(&point, &point, &doubled), 8);
@@ -107,30 +90,14 @@ static uint32_t bls12_381(void) {
     CHECK(zkvm_bls12_g1_msm(terms, 3, &product), 36);
     if (!same(&product, &doubled, sizeof product)) return 36;
 
-    /* (4, y): on the curve, outside the subgroup until its cofactor is cleared */
-    zkvm_bytes_96 outside = {0}, cleared = {0};
-    unhex(outside.data, "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040a989badd40d6212b33cffc3f3763e9bc760f988c9926b26da9dd85e928483446346b8ed00e1de5d5ea93e354abe706c", 96);
-    if (airbender_bls12_g1_is_in_subgroup(&outside, &flag) != ZKVM_EOK || flag) return 37;
-    CHECK(airbender_bls12_g1_clear_cofactor(&outside, &cleared), 38); MIX(cleared);
-    if (airbender_bls12_g1_is_in_subgroup(&cleared, &flag) != ZKVM_EOK || !flag) return 39;
-
     zkvm_bytes_96 g1 = {0}; zkvm_bytes_192 g2 = {0};
     unhex(g1.data, BLS_G1, 96); unhex(g2.data, BLS_G2, 192);
-    airbender_bytes_144 g1_jacobian = {0}; airbender_bytes_288 g2_jacobian = {0};
-    unhex(g1_jacobian.data, "0777e18ef2575f630263423cb299a5d2baf292a4b6f1eb37723977301a715dfad9a52a4a3aaaf272051a7061b43ba73b00f12876fd7fde0f4cb643a2e174929425bd0820fd437f37766435c4f84652cfe25d0448e872a60fcbfab55a76e274b8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003", 144);
-    unhex(g2_jacobian.data, "149fb84a75075f1a56482e609bed92dffe08517ccc42131856d9668852025d2f690c1c5be8339b6e78830d0eca2fab7816db1ae58cff32c6a86d825f359bbd83c9fe9237ad07f673f9887fd4f8540dba15ac79aa883f4818b71665304527876c0a2f924427bbe60408e12fb79807d2e03fb0953c7a435ef0488b96ef0e398fdddd77489b49f1248e5896ea22eb708d6c06b0516792a329eb95944a4f09beac2c14c2803a638912fca326884c69c47036f2c6632ea4ef200ea3d9c71e5a13d708000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", 288);
-    zkvm_bytes_96 affine1 = {0}; zkvm_bytes_192 affine2 = {0};
-    if (airbender_bls12_g1_to_affine(&g1_jacobian, &affine1) != ZKVM_EOK || !same(&affine1, &g1, 96)) return 41;
-    if (airbender_bls12_g2_to_affine(&g2_jacobian, &affine2) != ZKVM_EOK || !same(&affine2, &g2, 192)) return 42;
-
-    zkvm_bytes_96 fp2 = {0}; zkvm_bytes_192 q = {0}, q_doubled = {0}, q_product = {0}, q_cleared = {0};
+    zkvm_bytes_96 fp2 = {0}; zkvm_bytes_192 q = {0}, q_doubled = {0}, q_product = {0};
     CHECK(zkvm_bls12_map_fp2_to_g2(&fp2, &q), 15); MIX(q);
     zkvm_bls12_381_g2_msm_pair term = {0}; term.point = q; term.scalar.data[31] = 2;
     if (zkvm_bls12_g2_msm(&term, 1, &q_product) != ZKVM_EOK || zkvm_bls12_g2_add(&q, &q, &q_doubled) != ZKVM_EOK) return 16;
     if (!same(&q_doubled, &q_product, sizeof q_product)) return 17;
     MIX(q_product);
-    if (airbender_bls12_g2_is_in_subgroup(&q, &flag) != ZKVM_EOK || !flag) return 44;
-    CHECK(airbender_bls12_g2_clear_cofactor(&q, &q_cleared), 45); MIX(q_cleared);
 
     /* e(G1, G2) e(-G1, G2) = 1, and e(G1, G2) alone is not */
     zkvm_bls12_381_pairing_pair pairs[2] = {0};
@@ -142,7 +109,7 @@ static uint32_t bls12_381(void) {
     return 0;
 }
 
-/* BN254: additions, multiplications, normalization and pairings. */
+/* BN254: additions, multiplications and pairings. */
 static uint32_t bn254(void) {
     zkvm_bn254_g1_point g = {0}, minus_g = {0}, sum = {0}, product = {0}, zero = {0};
     g.data[31] = 1; g.data[63] = 2;
@@ -159,12 +126,6 @@ static uint32_t bn254(void) {
     if (zkvm_bn254_g1_add(&g, &minus_g, &sum) != ZKVM_EOK || !same(&sum, &zero, 64)) return 50;
     for (unsigned i = 0; i < 32; ++i) scalar.data[i] = 0xff;
     CHECK(zkvm_bn254_g1_mul(&g, &scalar, &product), 50); MIX(product);
-
-    zkvm_bytes_96 jacobian = {0}; zkvm_bytes_64 affine = {0};
-    jacobian.data[31] = 9; jacobian.data[63] = 54; jacobian.data[95] = 3; /* G with Z = 3 */
-    if (airbender_bn254_g1_to_affine(&jacobian, &affine) != ZKVM_EOK || !same(&affine, &g, 64)) return 40;
-    jacobian.data[95] = 0; /* Z = 0: infinity, whatever X and Y */
-    if (airbender_bn254_g1_to_affine(&jacobian, &affine) != ZKVM_EOK || !same(&affine, &zero, 64)) return 43;
 
     zkvm_bn254_pairing_pair bn[2] = {0};
     bn[0].g1 = g;
@@ -230,6 +191,9 @@ static uint32_t modexp(void) {
     uint8_t output[34] = {0};
     const uint8_t zero_modulus[4] = {0}, one_modulus[1] = {1};
     output[0] = 0xa5;
+    /* EIP-7823: a declared length over 1024 bytes fails before the operands are read */
+    if (zkvm_modexp(base, 1025, exponent, 1, modulus, 4, output) != ZKVM_EFAIL || output[0] != 0xa5) return 60;
+    if (zkvm_modexp(base, 1, exponent, 1, modulus, 1025, output) != ZKVM_EFAIL || output[0] != 0xa5) return 60;
     if (zkvm_modexp(base, 1, exponent, 1, modulus, 0, output) != ZKVM_EOK || output[0] != 0xa5) return 55;
     if (zkvm_modexp(base, 1, exponent, 1, zero_modulus, 4, output) != ZKVM_EOK || !same(output, zero_modulus, 4)) return 56;
     if (zkvm_modexp(base, 1, exponent, 1, one_modulus, 1, output) != ZKVM_EOK || output[0] != 0) return 57;
@@ -246,16 +210,12 @@ static uint32_t modexp(void) {
     return 0;
 }
 
-/* The RV32 c-runtime fixture; scenario 1 initializes the heap twice, which must trap. */
-uint32_t airbender_crypto_runtime_smoke(uint8_t* heap_start, uint8_t* heap_end, uint32_t scenario, uint32_t* digest) {
-#ifdef __riscv
-    airbender_crypto_init_heap(heap_start, heap_end);
-    if (scenario == 1) airbender_crypto_init_heap(heap_start, heap_end);
-#else
-    (void)heap_start; (void)heap_end; (void)scenario;
-#endif
+/* The RV32 c-runtime fixture, without a heap: the library allocates nothing. The scenario word
+ * of the guest's input is reserved (0). */
+uint32_t airbender_crypto_runtime_smoke(uint32_t scenario, uint32_t* digest) {
+    (void)scenario;
     digest_state = 2166136261u;
-    uint32_t status = fields();
+    uint32_t status = airbender();
     if (status == 0) status = bls12_381();
     if (status == 0) status = bn254();
     if (status == 0) status = signatures();
@@ -289,9 +249,9 @@ void* memmove(void* out, const void* in, size_t len) {
  * the tape, one hex word per line. */
 int main(void) {
     uint32_t plain = 0, hinted = 0;
-    if (airbender_crypto_runtime_smoke(NULL, NULL, 0, &plain) != 0) return 1;
+    if (airbender_crypto_runtime_smoke(0, &plain) != 0) return 1;
     airbender_crypto_record_begin();
-    uint32_t status = airbender_crypto_runtime_smoke(NULL, NULL, 0, &hinted);
+    uint32_t status = airbender_crypto_runtime_smoke(0, &hinted);
     uint32_t none;
     size_t len = airbender_crypto_record_end(&none, 0);
     if (status != 0) return 2;

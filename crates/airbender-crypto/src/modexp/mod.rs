@@ -21,8 +21,10 @@ mod test_vectors;
 pub use self::fixed_vec::FixedVec;
 use crate::hints::{read_querier_word, HintError, MemoryOracle, QuerierMemory};
 
-/// The most bytes of a base, an exponent or a modulus (EIP-7823); longer operands are rejected by
-/// the caller, and panic here.
+/// The most bytes of a base, an exponent or a modulus. EIP-7823 bounds the three declared
+/// lengths of the precompile's input (leading zeroes included) by this, and the caller enforces
+/// that; the operands of [`modexp`] are bounded on their significant bytes, which is what the
+/// buffers hold, so an operand allowed by the EIP always fits, and a longer one panics.
 pub const MAX_OPERAND_BYTES: usize = 1024;
 
 /// The most 256-bit digits of an operand
@@ -47,12 +49,13 @@ pub fn modexp<O: MemoryOracle>(
     }
 }
 
-/// The significant bytes of an operand, checked against the EIP-7823 bound
+/// The significant bytes of an operand, which must fit the buffers ([`MAX_OPERAND_BYTES`]; a
+/// weaker condition than EIP-7823's on the declared lengths, which the caller enforces)
 pub(crate) fn checked_operand(bytes: &[u8]) -> &[u8] {
     let significant = strip_leading_zeroes(bytes);
     assert!(
         significant.len() <= MAX_OPERAND_BYTES,
-        "a ModExp operand is longer than EIP-7823 allows"
+        "a ModExp operand has more significant bytes than EIP-7823 allows"
     );
     significant
 }

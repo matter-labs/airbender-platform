@@ -14,8 +14,8 @@
 #define LAYOUT(T,N) ASSERT(sizeof(T)==N, "size: " #T); ASSERT(ALIGNOF(T)==8, "alignment: " #T)
 LAYOUT(zkvm_bytes_16,16); LAYOUT(zkvm_bytes_32,32); LAYOUT(zkvm_bytes_48,48);
 LAYOUT(zkvm_bytes_64,64); LAYOUT(zkvm_bytes_96,96); LAYOUT(zkvm_bytes_128,128);
-LAYOUT(airbender_bytes_144,144); LAYOUT(airbender_bytes_288,288);
-LAYOUT(airbender_bytes_384,384); LAYOUT(airbender_bytes_576,576);
+ASSERT(sizeof(airbender_u256)==32, "size: airbender_u256"); ASSERT(ALIGNOF(airbender_u256)==32, "alignment: airbender_u256");
+ASSERT(sizeof(airbender_keccak_state)==512, "size: airbender_keccak_state"); ASSERT(ALIGNOF(airbender_keccak_state)==256, "alignment: airbender_keccak_state");
 LAYOUT(zkvm_bytes_192,192); LAYOUT(zkvm_bn254_pairing_pair,192);
 LAYOUT(zkvm_bls12_381_g1_msm_pair,128); LAYOUT(zkvm_bls12_381_g2_msm_pair,224);
 LAYOUT(zkvm_bls12_381_pairing_pair,288);
@@ -68,47 +68,45 @@ int main(int argc,char** argv) {
     zkvm_bls12_381_pairing_pair bls_pair={0};
     assert(zkvm_bls12_pairing(&bls_pair,1,&verified)==ZKVM_EOK && verified);
     assert(airbender_blake2s256(abc,3,&hash)==ZKVM_EOK && hash.data[0]==0x50 && hash.data[31]==0x82);
-    /* Extension field one is in the first base-field component. */
-#define FIELD_TEST(prefix, type, width) do { \
-    type a={0}, out={0}; a.data[(width)-1]=1; \
-    assert(prefix##_inverse(&a,&out)==ZKVM_EOK && memcmp(&a,&out,sizeof(a))==0); \
-    assert(prefix##_divide(&a,&a,&out)==ZKVM_EOK && memcmp(&a,&out,sizeof(a))==0); \
-    type zero={0}; \
-    assert(prefix##_divide(&a,&zero,&out)==ZKVM_EFAIL && memcmp(&a,&out,sizeof(a))==0); \
-} while(0)
-    FIELD_TEST(airbender_secp256k1_fe,zkvm_bytes_32,32);
-    FIELD_TEST(airbender_bn254_fq,zkvm_bytes_32,32);
-    FIELD_TEST(airbender_bn254_fq2,zkvm_bytes_64,32);
-    FIELD_TEST(airbender_bn254_fq12,airbender_bytes_384,32);
-    FIELD_TEST(airbender_bls12_fq,zkvm_bytes_48,48);
-    FIELD_TEST(airbender_bls12_fq2,zkvm_bytes_96,48);
-    FIELD_TEST(airbender_bls12_fq12,airbender_bytes_576,48);
-#undef FIELD_TEST
-    zkvm_bytes_32 one={0}; one.data[31]=1;
-    assert(airbender_secp256k1_scalar_inverse(&one,&hash)==ZKVM_EOK && memcmp(&one,&hash,sizeof(one))==0);
-    /* The even root: p - 1 for 1, 2 for 4. */
-    assert(airbender_secp256k1_fe_sqrt(&one,&hash)==ZKVM_EOK && hash.data[0]==0xff && hash.data[27]==0xfe && hash.data[31]==0x2e);
-    zkvm_bytes_32 four={0}; four.data[31]=4;
-    assert(airbender_secp256k1_fe_sqrt(&four,&hash)==ZKVM_EOK && hash.data[0]==0 && hash.data[31]==2);
-    /* Recording: a scalar inverse is one 8-word answer; end(NULL, 0) is a size query. */
-    uint32_t tape[8]={0};
+    /* Recording: a point multiplication takes hints; end(NULL, 0) is a size query. */
+    static uint32_t tape[1<<16];
     airbender_crypto_record_begin();
-    assert(airbender_secp256k1_scalar_inverse(&one,&hash)==ZKVM_EOK);
-    assert(airbender_crypto_record_end(NULL,0)==8);
-    assert(airbender_crypto_record_end(tape,8)==8);
-    assert(airbender_crypto_record_end(tape,8)==0);
-    zkvm_bytes_96 bn_xyz={0}; memcpy(bn_xyz.data,g.data,64); bn_xyz.data[95]=1;
-    assert(airbender_bn254_g1_to_affine(&bn_xyz,&sum)==ZKVM_EOK && memcmp(&sum,&g,sizeof(g))==0);
-    airbender_bytes_144 bls_xyz1={0}; memcpy(bls_xyz1.data,p1.data,96); bls_xyz1.data[143]=1;
-    airbender_bytes_288 bls_xyz2={0}; memcpy(bls_xyz2.data,p2.data,192); bls_xyz2.data[239]=1;
-    assert(airbender_bls12_g1_to_affine(&bls_xyz1,&q1)==ZKVM_EOK && memcmp(&q1,&p1,sizeof(q1))==0);
-    assert(airbender_bls12_g2_to_affine(&bls_xyz2,&q2)==ZKVM_EOK && memcmp(&q2,&p2,sizeof(q2))==0);
-    assert(airbender_bls12_g1_is_in_subgroup(&p1,&verified)==ZKVM_EOK && verified);
-    assert(airbender_bls12_g2_is_in_subgroup(&p2,&verified)==ZKVM_EOK && verified);
-    assert(airbender_bls12_g1_clear_cofactor(&p1,&q1)==ZKVM_EOK);
-    assert(airbender_bls12_g2_clear_cofactor(&p2,&q2)==ZKVM_EOK);
-    assert(airbender_bls12_g1_is_in_subgroup(&q1,&verified)==ZKVM_EOK && verified);
-    assert(airbender_bls12_g2_is_in_subgroup(&q2,&verified)==ZKVM_EOK && verified);
+    assert(zkvm_bn254_g1_mul(&g,&scalar,&sum)==ZKVM_EOK && memcmp(&g,&sum,sizeof(g))==0);
+    size_t words=airbender_crypto_record_end(NULL,0);
+    assert(words>0 && words<=sizeof(tape)/sizeof(tape[0]));
+    assert(airbender_crypto_record_end(tape,words)==words);
+    assert(airbender_crypto_record_end(tape,words)==0);
+    /* Byte swap and the bigint operations: little-endian, flags as documented. */
+    assert(airbender_bswap32(0x01020304u)==0x04030201u);
+    airbender_u256 a={0}, b={0}; a.data[0]=3; b.data[0]=4;
+    assert(airbender_u256_mul_low(&a,&b) && a.data[0]==12 && a.data[1]==0);
+    assert(!airbender_u256_add(&a,&b,true) && a.data[0]==17);
+    assert(!airbender_u256_eq(&a,&b));
+    airbender_u256_copy(&b,&a);
+    assert(airbender_u256_eq(&a,&b) && b.data[0]==17);
+    assert(!airbender_u256_sub(&a,&b,false) && a.data[0]==0 && a.data[31]==0);
+    assert(airbender_u256_sub(&a,&b,false) && a.data[0]==(uint8_t)(256-17) && a.data[31]==0xff);
+    memset(&a,0,sizeof(a)); memset(&b,0,sizeof(b)); a.data[16]=1; b.data[16]=1; /* 2^128 */
+    assert(!airbender_u256_mul_low(&a,&b) && a.data[0]==0 && a.data[31]==0);
+    a.data[16]=1;
+    airbender_u256_mul_high(&a,&b);
+    assert(a.data[0]==1 && a.data[16]==0);
+    memset(&a,0,sizeof(a)); memset(&b,0,sizeof(b)); a.data[0]=2; b.data[0]=5;
+    assert(!airbender_u256_sub_and_negate(&a,&b,false) && a.data[0]==3);
+    /* Streaming hashes: Keccak-256 of "abc" in two parts, SHA3-256 reset and reused. */
+    airbender_keccak_state state;
+    airbender_keccak256_init(&state);
+    airbender_keccak256_update(&state,abc,1);
+    airbender_keccak256_update(&state,abc+1,2);
+    airbender_keccak256_finalize(&state,&hash);
+    assert(hash.data[0]==0x4e && hash.data[31]==0x45);
+    airbender_sha3_256_init(&state);
+    airbender_sha3_256_update(&state,abc,3);
+    airbender_sha3_256_finalize_reset(&state,&hash);
+    assert(hash.data[0]==0x3a && hash.data[31]==0x32);
+    airbender_sha3_256_update(&state,abc,3);
+    airbender_sha3_256_finalize(&state,&hash);
+    assert(hash.data[0]==0x3a && hash.data[31]==0x32);
     /* In-place BLAKE2f; zero rounds give a fixed IV-derived state. */
     zkvm_blake2f_state blake_state={0}, blake_saved={0};
     zkvm_blake2f_message blake_message={0}; zkvm_blake2f_offset blake_offset={0};

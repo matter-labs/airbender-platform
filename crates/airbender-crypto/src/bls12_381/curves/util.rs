@@ -31,6 +31,11 @@ pub struct EncodingFlags {
 impl EncodingFlags {
     /// Fetches the flags from the byte-string
     pub fn get_flags(bytes: &[u8]) -> Result<Self, SerializationError> {
+        Self::parse(bytes).ok_or(SerializationError::InvalidData)
+    }
+
+    /// The flags of the first byte; `None` for an invalid combination
+    pub fn parse(bytes: &[u8]) -> Option<Self> {
         let compression_flag_set = (bytes[0] >> 7) & 1;
         let infinity_flag_set = (bytes[0] >> 6) & 1;
         let sort_flag_set = (bytes[0] >> 5) & 1;
@@ -40,10 +45,10 @@ impl EncodingFlags {
         let is_lexographically_largest = sort_flag_set == 1;
 
         if is_lexographically_largest && (!is_compressed || is_infinity) {
-            return Err(SerializationError::InvalidData);
+            return None;
         }
 
-        Ok(Self {
+        Some(Self {
             is_compressed,
             is_infinity,
             is_lexographically_largest,
@@ -302,11 +307,12 @@ pub(crate) fn read_g2_uncompressed<R: ark_serialize::Read>(
 /// with validation) with the square root of `y² = x³ + b` supplied by `sqrt`: it returns `None`
 /// when its argument is not a square and either root otherwise (the sign flag of the encoding
 /// then picks between the root and its negation). A prover can take the root from a hint that
-/// it checks with one squaring. The point is checked to be in the prime-order subgroup.
+/// it checks with one squaring. The point is checked to be in the prime-order subgroup. `None`
+/// for an invalid encoding (no arkworks error: nothing here allocates).
 pub fn g1_from_compressed_with_sqrt(
     bytes: &[u8],
     sqrt: impl FnOnce(&Fq) -> Option<Fq>,
-) -> Result<G1Affine, SerializationError> {
+) -> Option<G1Affine> {
     g1_from_compressed_with_hints(bytes, sqrt, |p| {
         use ark_ec::short_weierstrass::SWCurveConfig;
         G1Config::is_in_correct_subgroup_assuming_on_curve(p)
@@ -320,31 +326,31 @@ pub fn g1_from_compressed_with_hints(
     bytes: &[u8],
     sqrt: impl FnOnce(&Fq) -> Option<Fq>,
     is_in_subgroup: impl FnOnce(&G1Affine) -> bool,
-) -> Result<G1Affine, SerializationError> {
+) -> Option<G1Affine> {
     use ark_ec::short_weierstrass::SWCurveConfig;
     use ark_ff::Field;
 
     if bytes.len() != G1_SERIALIZED_SIZE {
-        return Err(SerializationError::InvalidData);
+        return None;
     }
-    let flags = EncodingFlags::get_flags(bytes)?;
+    let flags = EncodingFlags::parse(bytes)?;
     if !flags.is_compressed {
-        return Err(SerializationError::UnexpectedFlags);
+        return None;
     }
     let x_bytes = read_bytes_with_offset(bytes, 0, true);
     if flags.is_infinity {
         if x_bytes != [0u8; G1_SERIALIZED_SIZE] {
-            return Err(SerializationError::InvalidData);
+            return None;
         }
-        return Ok(G1Affine::zero());
+        return Some(G1Affine::zero());
     }
-    let x = deserialize_fq(x_bytes).ok_or(SerializationError::InvalidData)?;
+    let x = deserialize_fq(x_bytes)?;
     // y² = x³ + b (a = 0)
     let mut y_squared = x;
     y_squared.square_in_place();
     y_squared *= &x;
     y_squared += &G1Config::COEFF_B;
-    let y = sqrt(&y_squared).ok_or(SerializationError::InvalidData)?;
+    let y = sqrt(&y_squared)?;
     let neg_y = -y;
     // the same ordering as `Affine::get_ys_from_x_unchecked`: as integers
     let (smaller, larger) = if y < neg_y { (y, neg_y) } else { (neg_y, y) };
@@ -355,9 +361,9 @@ pub fn g1_from_compressed_with_hints(
     };
     let p = G1Affine::new_unchecked(x, y);
     if !is_in_subgroup(&p) {
-        return Err(SerializationError::InvalidData);
+        return None;
     }
-    Ok(p)
+    Some(p)
 }
 
 #[cfg(test)]
@@ -410,8 +416,8 @@ mod hinted_decoding_tests {
         for input in inputs {
             let expected = reference(&input);
             let hinted = g1_from_compressed_with_sqrt(&input, |y2| y2.sqrt());
-            assert_eq!(expected.is_ok(), hinted.is_ok(), "{input:02x?}");
-            if let (Ok(a), Ok(b)) = (expected, hinted) {
+            assert_eq!(expected.is_ok(), hinted.is_some(), "{input:02x?}");
+            if let (Ok(a), Some(b)) = (expected, hinted) {
                 assert_eq!(a, b, "{input:02x?}");
             }
             // the other root gives the same point

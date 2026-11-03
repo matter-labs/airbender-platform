@@ -3,7 +3,6 @@
 use super::bigint_from_be;
 use crate::ark_ec::pairing::Pairing;
 use crate::ark_ff::{One, PrimeField, Zero};
-use crate::ark_serialize::Valid;
 use crate::bn254::curves::{g2_affine, Bn254, G1Affine, G1Evaluation, G2Affine, G2PreparedNoAlloc};
 use crate::bn254::fields::{Fq, Fq12, Fq2};
 #[cfg(any(feature = "hinted_operations", test))]
@@ -83,8 +82,9 @@ fn parse_and_check<O: MemoryOracle>(
 
         let g1_is_zero = g1_x.is_zero() && g1_y.is_zero();
         let g1_point = G1Affine::new_unchecked(g1_x, g1_y);
-        if !g1_is_zero {
-            g1_point.check().map_err(|_| ())?;
+        // on the curve is in the subgroup (cofactor 1); `check()` would drop arkworks' error
+        if !g1_is_zero && !g1_point.is_on_curve() {
+            return Err(());
         }
 
         let g2_x = Fq2::new(parse(g2_x_c0)?, parse(g2_x_c1)?);

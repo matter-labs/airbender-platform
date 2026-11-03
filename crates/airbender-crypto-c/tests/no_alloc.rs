@@ -4,8 +4,8 @@ mod common;
 
 use airbender_crypto as crypto;
 use airbender_crypto_c::*;
-use common::{encode, point};
-use crypto::ark_ec::{AffineRepr, CurveGroup};
+use common::point;
+use crypto::ark_ec::AffineRepr;
 use crypto::{bls12_381 as bls, bn254 as bn};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -65,12 +65,6 @@ fn exports_without_an_allocator_use_no_heap() {
     let bn_p = point(&bn::G1Affine::generator());
     let bls_p = point(&bls::G1Affine::generator());
     let bls_q = point(&bls::G2Affine::generator());
-    let two = encode(&[bn::Fq::from(2u64)]);
-    let jacobian = {
-        let p = (bn::G1Affine::generator() * bn::Fr::from(2u64)).into_affine();
-        let z = bn::Fq::from(3u64);
-        encode(&[p.x * z * z, p.y * z * z * z, z])
-    };
     let key = SigningKey::from_bytes(&[7u8; 32].into()).unwrap();
     let msg = Bytes { data: [0x11; 32] };
     let (sig, id) = key.sign_prehash_recoverable(&msg.data).unwrap();
@@ -122,6 +116,29 @@ fn exports_without_an_allocator_use_no_heap() {
             without_allocations(stringify!($export), || unsafe { $export($($arg),*) })
         };
     }
+    // the exports without a status
+    macro_rules! no_heap_void {
+        ($export:ident($($arg:expr),*)) => {
+            without_allocations(stringify!($export), || unsafe {
+                let _ = $export($($arg),*);
+                EOK
+            })
+        };
+    }
+    let mut state = KeccakState { opaque: [0; 512] };
+    no_heap_void!(airbender_keccak256_init(&mut state));
+    no_heap_void!(airbender_keccak256_update(
+        &mut state,
+        msg.data.as_ptr(),
+        32
+    ));
+    no_heap_void!(airbender_keccak256_finalize_reset(&mut state, &mut out32));
+    no_heap_void!(airbender_keccak256_finalize(&mut state, &mut out32));
+    no_heap_void!(airbender_sha3_256_init(&mut state));
+    no_heap_void!(airbender_sha3_256_update(&mut state, msg.data.as_ptr(), 32));
+    no_heap_void!(airbender_sha3_256_finalize_reset(&mut state, &mut out32));
+    no_heap_void!(airbender_sha3_256_finalize(&mut state, &mut out32));
+    no_heap!(airbender_blake2s256(msg.data.as_ptr(), 32, &mut out32));
     no_heap!(zkvm_bn254_g1_add(&bn_p, &bn_p, &mut out64));
     no_heap!(zkvm_bn254_g1_mul(
         &bn_p,
@@ -138,11 +155,6 @@ fn exports_without_an_allocator_use_no_heap() {
         &Bytes { data: [7; 96] },
         &mut out192
     ));
-    no_heap!(airbender_bls12_g1_is_in_subgroup(&bls_p, &mut flag));
-    no_heap!(airbender_bls12_g2_clear_cofactor(&bls_q, &mut out192));
-    no_heap!(airbender_bn254_g1_to_affine(&jacobian, &mut out64));
-    no_heap!(airbender_bn254_fq_divide(&two, &two, &mut out32));
-    no_heap!(airbender_secp256k1_fe_inverse(&two, &mut out32));
     no_heap!(zkvm_secp256k1_ecrecover(
         &msg,
         &sig,

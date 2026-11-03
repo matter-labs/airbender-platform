@@ -4,7 +4,9 @@
 //! Every export requires non-null pointers, aligned for their type and valid for the declared
 //! sizes, even for empty inputs; the one exception is `airbender_crypto_record_end(NULL, 0)`.
 //! Inputs may overlap outputs: an output is written only after every input was read.
-//! Violations abort execution. Malformed cryptographic inputs return -1.
+//! Violations abort execution. Malformed cryptographic inputs return -1. The streaming hashers
+//! (`keccak`) take over-aligned operands and cannot fail. The bigint operations are inline in
+//! the header: one delegation call each on RV32, portable C elsewhere, no Rust behind them.
 //!
 //! # Hints
 //! An export takes airbender-crypto's hinted path when there is an oracle (`with_active_oracle`)
@@ -19,6 +21,8 @@
 #[cfg(all(feature = "delegation", not(target_arch = "riscv32")))]
 compile_error!("`delegation` is RV32 only: native builds record hints without it");
 
+// The recording keeps the tape natively; the RV32 build allocates nothing
+#[cfg(not(target_arch = "riscv32"))]
 extern crate alloc;
 use airbender_crypto as crypto;
 use core::{mem, ptr, slice};
@@ -26,7 +30,7 @@ use crypto::ark_ec::{
     short_weierstrass::{Affine, SWCurveConfig},
     AffineRepr,
 };
-use crypto::ark_ff::{AdditiveGroup, Field, PrimeField};
+use crypto::ark_ff::{Field, PrimeField};
 use crypto::hints::{HintError, MemoryOracle};
 
 /// `$hinted` with the oracle of the call (`$oracle: &mut ActiveOracle`), else `$plain`. The hinted
@@ -44,7 +48,7 @@ macro_rules! hinted {
 }
 
 mod curves;
-mod fields;
+mod keccak;
 #[cfg(not(target_arch = "riscv32"))]
 mod recording;
 mod signatures;
@@ -130,23 +134,38 @@ pub(crate) fn with_active_oracle<R>(f: impl FnOnce(Option<&mut ActiveOracle<'_>>
     })
 }
 
+/// The global allocator of a standalone C guest: nothing in the library allocates, but the
+/// `alloc` crate is linked through the dependencies and a static library must name one. Its
+/// methods call a function that no object defines, so a guest whose live code could reach an
+/// allocation fails to link (the linker ignores undefined references in sections it discards),
+/// with the chain of references in the error.
 #[cfg(all(target_arch = "riscv32", feature = "c-runtime"))]
-#[no_mangle]
-/// Initializes airbender-rt's global allocator for a standalone C guest.
-/// # Safety
-/// Call once, before anything allocates. [start, end) must be writable, aligned for usize, owned
-/// by the allocator only, and stay live.
-pub unsafe extern "C" fn airbender_crypto_init_heap(start: *mut u8, end: *mut u8) {
-    check_ptr(start.cast::<usize>());
-    check_ptr(end.cast::<usize>());
-    assert!(start.addr() < end.addr(), "empty or reversed heap range");
-    static INITIALIZED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-    assert!(
-        !INITIALIZED.swap(true, core::sync::atomic::Ordering::Relaxed),
-        "heap already initialized"
-    );
-    airbender_rt::allocator::init(start.cast(), end.cast());
+struct NoHeap;
+
+#[cfg(all(target_arch = "riscv32", feature = "c-runtime"))]
+extern "C" {
+    /// Deliberately undefined: see `NoHeap`
+    fn airbender_crypto_c_reaches_an_allocation() -> !;
 }
+
+#[cfg(all(target_arch = "riscv32", feature = "c-runtime"))]
+unsafe impl core::alloc::GlobalAlloc for NoHeap {
+    unsafe fn alloc(&self, _: core::alloc::Layout) -> *mut u8 {
+        airbender_crypto_c_reaches_an_allocation()
+    }
+
+    unsafe fn dealloc(&self, _: *mut u8, _: core::alloc::Layout) {
+        airbender_crypto_c_reaches_an_allocation()
+    }
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "c-runtime"))]
+#[global_allocator]
+static NO_HEAP: NoHeap = NoHeap;
+
+// The panic handler of the C guest
+#[cfg(all(target_arch = "riscv32", feature = "c-runtime"))]
+use airbender_rt as _;
 
 #[cfg(not(target_arch = "riscv32"))]
 std::thread_local! {
@@ -211,29 +230,8 @@ fn check_ptr<T>(p: *const T) {
     assert_eq!(p as usize % mem::align_of::<T>(), 0, "unaligned C pointer");
 }
 
-// The C encoding: canonical big-endian prime-field components, c0 first recursively for
-// extension fields.
-pub(crate) fn decode<F: Field>(bytes: &[u8]) -> Option<F> {
-    let width = (F::BasePrimeField::MODULUS_BIT_SIZE as usize).div_ceil(8);
-    let count = F::extension_degree() as usize;
-    if bytes.len() != width * count {
-        return None;
-    }
-    let mut elements = [F::BasePrimeField::ZERO; 12];
-    for (element, input) in elements[..count].iter_mut().zip(bytes.chunks_exact(width)) {
-        let mut repr = <F::BasePrimeField as PrimeField>::BigInt::default();
-        for (limb, chunk) in repr
-            .as_mut()
-            .iter_mut()
-            .zip(input.as_chunks::<8>().0.iter().rev())
-        {
-            *limb = u64::from_be_bytes(*chunk);
-        }
-        *element = F::BasePrimeField::from_bigint(repr)?;
-    }
-    F::from_base_prime_field_elems(elements[..count].iter().copied())
-}
-
+// The C encoding of a field element: canonical big-endian prime-field components, c0 first
+// recursively for extension fields.
 pub(crate) fn encode_into<F: Field>(value: F, bytes: &mut [u8]) {
     let width = (F::BasePrimeField::MODULUS_BIT_SIZE as usize).div_ceil(8);
     for (element, dst) in value
@@ -252,15 +250,6 @@ pub(crate) fn encode_into<F: Field>(value: F, bytes: &mut [u8]) {
 }
 
 // Compact affine coordinates (not EIP-2537's 64-byte padding); infinity is all-zero x/y.
-pub(crate) fn point<C: SWCurveConfig>(bytes: &[u8]) -> Option<Affine<C>> {
-    if bytes.iter().all(|byte| *byte == 0) {
-        return Some(Affine::identity());
-    }
-    let (x, y) = bytes.split_at(bytes.len() / 2);
-    let point = Affine::new_unchecked(decode(x)?, decode(y)?);
-    point.is_on_curve().then_some(point)
-}
-
 pub(crate) fn point_bytes<C: SWCurveConfig, const N: usize>(point: Affine<C>) -> Bytes<N> {
     let mut output = Bytes { data: [0; N] };
     if let Some((x, y)) = point.xy() {
@@ -358,8 +347,9 @@ impl crypto::modexp::TryExtend<u8> for ModExpOutput<'_> {
 }
 
 #[no_mangle]
-/// Big-endian ModExp of operands of up to 1024 significant bytes each (EIP-7823; longer ones
-/// abort); the output is exactly `mod_len` bytes. Nothing is allocated.
+/// Big-endian ModExp; the output is exactly `mod_len` bytes. A length over 1024 bytes fails
+/// (EIP-7823 bounds the three declared lengths, leading zeroes included) before any operand is
+/// read, and leaves the output unchanged. Nothing is allocated.
 /// # Safety
 /// See the crate-level contract. Output may overlap any input.
 pub unsafe extern "C" fn zkvm_modexp(
@@ -372,7 +362,13 @@ pub unsafe extern "C" fn zkvm_modexp(
     output: *mut u8,
 ) -> i32 {
     check_ptr(output);
-    assert!(mod_len <= isize::MAX as usize, "C length overflow");
+    // EIP-7823: each declared length at most 1024 bytes, else the precompile fails
+    if [base_len, exp_len, mod_len]
+        .iter()
+        .any(|len| *len > crypto::modexp::MAX_OPERAND_BYTES)
+    {
+        return EFAIL;
+    }
     let base = input(base, base_len);
     let exp = input(exp, exp_len);
     let modulus = input(modulus, mod_len);
@@ -428,5 +424,5 @@ pub unsafe extern "C" fn zkvm_blake2f(
 }
 
 pub use curves::*;
-pub use fields::*;
+pub use keccak::*;
 pub use signatures::*;

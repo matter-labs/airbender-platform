@@ -40,8 +40,10 @@ pub fn parse_scalar(input: &[u8; 32]) -> Result<KzgScalar, ()> {
 // The callers map the failure to their own error
 #[allow(clippy::result_unit_err)]
 pub fn parse_g1_compressed(input: &[u8]) -> Result<crate::bls12_381::G1Affine, ()> {
-    use crate::ark_serialize::CanonicalDeserialize;
-    crate::bls12_381::G1Affine::deserialize_compressed(input).map_err(|_| ())
+    use crate::ark_ff::Field;
+    // the same decoding as arkworks' `deserialize_compressed`, without its `Read`-based errors
+    // (which allocate)
+    crate::bls12_381::g1_from_compressed_with_sqrt(input, |y_squared| y_squared.sqrt()).ok_or(())
 }
 
 /// [`parse_g1_compressed`]; with an oracle, the square root is a checked hint and the subgroup
@@ -66,7 +68,7 @@ pub fn parse_g1_compressed_with_oracle<O: MemoryOracle>(
                     )
                 },
             )
-            .map_err(|_| ())
+            .ok_or(())
         }
         None => parse_g1_compressed(input),
     }

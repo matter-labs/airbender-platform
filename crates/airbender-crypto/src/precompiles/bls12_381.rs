@@ -2,6 +2,7 @@
 //! on the EIP-2537 encoding of the points.
 
 use crate::ark_ec::{AffineRepr, CurveGroup};
+use crate::ark_ff::Field;
 use crate::ark_ff::PrimeField;
 #[cfg(any(feature = "hinted_operations", test))]
 use crate::ark_ff::Zero;
@@ -175,13 +176,26 @@ pub fn bls12_381_g2_add<O: MemoryOracle>(
 /// The G1 point of a field element: the simplified SWU map, then cofactor clearing. With an
 /// oracle, the inversions, square roots and divisions are checked hints. The caller encodes the
 /// result.
+/// The `sqrt_ratio` of the SWU map without hints: `(sqrt(value), true)` for a non-zero square,
+/// else `(sqrt(z * value), false)`, as the hinted path (zero takes the non-residue branch).
+fn plain_sqrt_ratio<F: Field>(value: &F, z: &F) -> (F, bool) {
+    if !value.is_zero() {
+        if let Some(root) = value.sqrt() {
+            return (root, true);
+        }
+    }
+    let root = (*z * value)
+        .sqrt()
+        .expect("the SWU non-residue times a non-square is square");
+    (root, false)
+}
+
 pub fn bls12_381_map_fp_to_g1<O: MemoryOracle>(
     fp: &[u8; FIELD_ELEMENT_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
 ) -> Result<G1Affine, Bls12Error> {
     let field_element =
         crate::bls12_381::eip2537::parse_fq_bytes(fp).ok_or(Bls12Error::InvalidFieldElement)?;
-    let invalid_field = || Bls12Error::InvalidFieldElement;
     let result = match oracle {
         #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => {
@@ -210,9 +224,12 @@ pub fn bls12_381_map_fp_to_g1<O: MemoryOracle>(
         }
         #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
-        None => crate::bls12_381::eip2537::map_fp_to_g1(field_element)
-            .map_err(|_| invalid_field())?
-            .clear_cofactor(),
+        None => crate::bls12_381::eip2537::map_fp_to_g1_with_hints(
+            field_element,
+            |value| value.inverse(),
+            plain_sqrt_ratio,
+        )
+        .clear_cofactor(),
     };
 
     Ok(result)
@@ -226,7 +243,6 @@ pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
     let field_element =
         crate::bls12_381::eip2537::parse_fq2_bytes(fp2).ok_or(Bls12Error::InvalidFieldElement)?;
 
-    let invalid_field = || Bls12Error::InvalidFieldElement;
     let result = match oracle {
         #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => {
@@ -255,9 +271,12 @@ pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
         }
         #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
-        None => crate::bls12_381::eip2537::map_fp2_to_g2(field_element)
-            .map_err(|_| invalid_field())?
-            .clear_cofactor(),
+        None => crate::bls12_381::eip2537::map_fp2_to_g2_with_hints(
+            field_element,
+            |value| value.inverse(),
+            plain_sqrt_ratio,
+        )
+        .clear_cofactor(),
     };
 
     Ok(result)

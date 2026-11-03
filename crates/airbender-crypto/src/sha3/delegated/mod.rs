@@ -123,6 +123,16 @@ impl<const SHA3: bool> Keccak256Core<SHA3> {
         }
     }
 
+    /// The digest, computed in place: the state is unspecified afterwards (`finalize_reset`
+    /// clears it). The by-value `finalize` moves the 512-byte core; this does not.
+    #[inline(always)]
+    pub fn finalize_in_place(&mut self) -> crate::Bytes32 {
+        keccak_pad::<SHA3>(self.state.as_words_mut(), self.filled_bytes);
+        keccak_f1600(&mut self.state);
+        // state is overaligned, and the output is word aligned: copied by words
+        unsafe { self.state.0.as_ptr().cast::<crate::Bytes32>().read() }
+    }
+
     #[inline(always)]
     fn state_words(&mut self) -> *mut u32 {
         self.state.0.as_mut_ptr().cast::<u32>()
@@ -239,27 +249,23 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
 
     #[inline(always)]
     fn finalize(mut self) -> Self::HashOutput {
-        keccak_pad::<SHA3>(self.state.as_words_mut(), self.filled_bytes);
-        keccak_f1600(&mut self.state);
-        // state is overaligned, and the output is word aligned: copied by words
-        unsafe { self.state.0.as_ptr().cast::<crate::Bytes32>().read() }
+        self.finalize_in_place()
     }
 
     #[inline(always)]
     fn finalize_reset(&mut self) -> Self::HashOutput {
-        keccak_pad::<SHA3>(self.state.as_words_mut(), self.filled_bytes);
-        keccak_f1600(&mut self.state);
-        let output = unsafe { self.state.0.as_ptr().cast::<crate::Bytes32>().read() };
+        let output = self.finalize_in_place();
         self.reset_state();
 
         output
     }
 
+    // in place: `finalize(self)` would move the core
     #[inline(always)]
     fn digest(input: impl AsRef<[u8]>) -> Self::HashOutput {
         let mut hasher = Self::new();
         hasher.update(input);
-        hasher.finalize()
+        hasher.finalize_in_place()
     }
 
     #[inline(always)]

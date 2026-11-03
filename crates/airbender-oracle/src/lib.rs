@@ -16,9 +16,10 @@
 //! The oracle side reads the inputs of a query from the memory of the querier through
 //! [`QuerierMemory`] ([`NativeQuerierMemory`] for a querier in this process). With the
 //! `oracle_processor` feature (`std`), [`processor`] has the oracle of the host:
-//! [`ZkEENonDeterminismSource`](processor::ZkEENonDeterminismSource) dispatches queries to
+//! [`QueryDispatcher`](processor::QueryDispatcher) dispatches queries to
 //! [`OracleQueryProcessor`](processor::OracleQueryProcessor)s, serves a querier in this process
-//! as a [`MemoryOracle`] and the RISC-V guest of the simulator as its non-determinism CSR source.
+//! as a [`MemoryOracle`] and the RISC-V guest of Airbender's simulators (transpiler-based and
+//! JIT) as its non-determinism CSR source.
 //!
 //! # Security
 //!

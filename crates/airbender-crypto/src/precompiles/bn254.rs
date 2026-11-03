@@ -3,7 +3,6 @@
 
 use crate::ark_ec::CurveGroup;
 use crate::ark_ff::PrimeField;
-use crate::ark_serialize::Valid;
 #[cfg(any(feature = "hinted_operations", test))]
 use crate::hints::{bn254_fq_inverse, Bn254FqDivider};
 use airbender_oracle::MemoryOracle;
@@ -125,7 +124,10 @@ pub(crate) fn parse_affine(x: &[u8; 32], y: &[u8; 32]) -> Result<crate::bn254::G
     let x = Fq::from_bigint(bigint_from_be(x)).ok_or(())?;
     let y = Fq::from_bigint(bigint_from_be(y)).ok_or(())?;
     let point = G1Affine::new_unchecked(x, y);
-    point.check().map_err(|_| ())?;
+    // `check()` would add the subgroup test, trivial here, and drop glue of arkworks' error
+    if !point.is_on_curve() {
+        return Err(());
+    }
     Ok(point)
 }
 
