@@ -71,7 +71,7 @@ End users depending on published crates (crates.io or git) don't need this.
 **Cargo.lock note:** the guest must have a `Cargo.lock` generated with the same nightly toolchain used inside the container. Regenerate if needed:
 
 ```sh
-cargo +nightly-2026-02-10 generate-lockfile --manifest-path <guest>/Cargo.toml
+cargo +nightly-2026-08-09 generate-lockfile --manifest-path <guest>/Cargo.toml
 ```
 
 ### Output layout

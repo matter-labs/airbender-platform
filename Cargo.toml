@@ -29,7 +29,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.4"
+version = "0.3.0"
 edition = "2021"
 authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
 homepage = "https://zksync.io/"
@@ -64,6 +64,8 @@ insta = "1"
 tera = { version = "1", default-features = false }
 
 # Dependencies for airbender-crypto
+common_constants = { git = "https://github.com/matter-labs/zksync-airbender", rev = "0decdcdb", default-features = false }
+blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender", rev = "0decdcdb", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 k256 = { version = "0.13", default-features = false }
@@ -92,8 +94,6 @@ rand_core = { version = "0.6.4", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 
 # Airbender dependencies
-common_constants = { git = "https://github.com/matter-labs/zksync-airbender", rev = "0decdcdb", default-features = false }
-blake2s_u32 = { git = "https://github.com/matter-labs/zksync-airbender", rev = "0decdcdb", default-features = false }
 riscv_common = { git = "https://github.com/matter-labs/zksync-airbender", rev = "0decdcdb" }
 execution_utils = { git = "https://github.com/matter-labs/zksync-airbender", rev = "0decdcdb" }
 gpu_prover = { git = "https://github.com/matter-labs/zksync-airbender", rev = "0decdcdb" }

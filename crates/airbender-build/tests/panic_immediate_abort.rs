@@ -78,7 +78,7 @@ build-std-features = ["compiler-builtins-mem"]
     write_file(
         &dir.join("rust-toolchain.toml"),
         r#"[toolchain]
-channel = "nightly-2026-02-10"
+channel = "nightly-2026-08-09"
 "#,
     );
 

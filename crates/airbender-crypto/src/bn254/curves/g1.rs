@@ -1,5 +1,3 @@
-use core::u64;
-
 #[cfg(any(
     all(target_arch = "riscv32", feature = "bigint_ops"),
     test,

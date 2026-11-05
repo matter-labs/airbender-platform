@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-codec"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "airbender-core",
  "bincode",
@@ -25,11 +25,11 @@ dependencies = [
 
 [[package]]
 name = "airbender-core"
-version = "0.2.4"
+version = "0.3.0"
 
 [[package]]
 name = "airbender-guest"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "airbender-codec",
  "airbender-core",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-macros"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -56,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-rt"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "getrandom 0.2.17",
  "riscv_common",
@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "airbender-sdk"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "airbender-codec",
  "airbender-guest",
@@ -759,7 +759,7 @@ dependencies = [
 [[package]]
 name = "common_constants"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5#73d69b5346b3c2350fa104a56ec4df78840cea99"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=67ee094#67ee094449abaebc77e58435f130ce6ea27721e5"
 dependencies = [
  "seq-macro",
 ]
@@ -2189,7 +2189,7 @@ dependencies = [
 [[package]]
 name = "riscv_common"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5#73d69b5346b3c2350fa104a56ec4df78840cea99"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=67ee094#67ee094449abaebc77e58435f130ce6ea27721e5"
 dependencies = [
  "common_constants",
  "seq-macro",

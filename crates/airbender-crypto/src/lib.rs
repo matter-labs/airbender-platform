@@ -3,7 +3,14 @@
 #![allow(static_mut_refs)]
 #![allow(clippy::uninit_assumed_init)]
 #![allow(clippy::new_without_default)]
-#![feature(allocator_api)]
+// Only `secp256k1::context::ECMultContext::new_in` needs it, and that is behind
+// `alloc`. Declaring it unconditionally trips `unused_features` on every build
+// without that feature.
+#![cfg_attr(feature = "alloc", feature(allocator_api))]
+// The crate is `no_std`, so `context.rs`'s `use alloc::boxed::Box` needs the
+// crate linked explicitly. Without this, `--features alloc` does not build at all.
+#[cfg(feature = "alloc")]
+extern crate alloc;
 #[allow(clippy::all)]
 #[allow(unused_imports, dead_code)]
 #[cfg(any(

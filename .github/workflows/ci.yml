@@ -12,7 +12,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # Keep this value in sync with rust-toolchain.toml.
-  RUST_TOOLCHAIN: nightly-2026-02-10
+  RUST_TOOLCHAIN: nightly-2026-08-09
   ZKSYNC_USE_CUDA_STUBS: "true"
 
 jobs:
