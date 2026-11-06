@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/matter-labs/airbender-platform/compare/v0.3.0...v0.4.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* depend on public zksync-airbender V2 ([#100](https://github.com/matter-labs/airbender-platform/issues/100))
+
+### Features
+
+* depend on public zksync-airbender V2 ([#100](https://github.com/matter-labs/airbender-platform/issues/100)) ([b6ce3dd](https://github.com/matter-labs/airbender-platform/commit/b6ce3dd1252bfbda8e42b77fdd868e81c54b7bdc))
+
 ## [0.3.0](https://github.com/matter-labs/airbender-platform/compare/v0.2.4...v0.3.0) (2026-08-25)
 
 
