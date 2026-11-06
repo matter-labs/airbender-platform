@@ -71,7 +71,8 @@ impl GpuProverConfig {
     /// Size of the RAM image the simulator runs with. Defaults to 1 GiB.
     ///
     /// [`RamSize::FourGb`] page-locks 12 GiB of host memory per cached simulator
-    /// instance, so raise it only where the host has the headroom.
+    /// holder. The prover keeps one holder per expected concurrent job plus one, so
+    /// 24 GiB by default; raise it only where the host has the headroom.
     pub fn with_ram_size(mut self, ram_size: RamSize) -> Self {
         self.ram_size = Some(ram_size);
         self

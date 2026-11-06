@@ -34,14 +34,18 @@
 //! # Git credentials
 //!
 //! The container has no credentials of its own, so `cargo` cannot fetch
-//! private git dependencies inside it. To support them, the host's effective
+//! private git dependencies inside it. Setting
+//! `AIRBENDER_PLATFORM_FORWARD_GIT_REWRITES=true` replays the host's effective
 //! `url.<base>.insteadOf` git rewrites (the standard way to inject an
-//! authenticated HTTPS URL, used by CI) are replayed inside the container
-//! before the build. Key/value pairs travel via container environment
-//! variables so the token never appears in `docker run` argv, and
-//! `CARGO_NET_GIT_FETCH_WITH_CLI` is forwarded when set on the host. URL
-//! rewrites only affect fetch transport, not checked-out sources, so
-//! reproducibility is unaffected.
+//! authenticated HTTPS URL, used by CI) inside the container before the build.
+//! Only rewrites to `http(s)://` bases are replayed: the container has no SSH
+//! keys. Key/value pairs travel via container environment variables so the
+//! token never appears in `docker run` argv, and `CARGO_NET_GIT_FETCH_WITH_CLI`
+//! is forwarded when set on the host. URL rewrites only affect fetch transport,
+//! not checked-out sources, so reproducibility is unaffected.
+//!
+//! Forwarded tokens are readable by dependency build scripts and proc macros
+//! inside the container, so forwarding is off by default.
 //!
 //! # Cleanup
 //!
@@ -177,14 +181,22 @@ fn container_name() -> String {
     format!("airbender-build-{id:016x}")
 }
 
+/// Environment variable that, when set to `true`, replays the host's git URL
+/// rewrites inside the build container.
+const FORWARD_GIT_REWRITES_ENV: &str = "AIRBENDER_PLATFORM_FORWARD_GIT_REWRITES";
+
 /// Collects the host's effective `url.<base>.insteadOf` git rewrites.
 ///
 /// CI and developers with access to private git dependencies configure an
 /// authenticated rewrite such as
 /// `url.https://x-access-token:<token>@github.com/.insteadOf = https://github.com/`
 /// so cargo can fetch those repositories over HTTPS. Returns an empty list
-/// when git is unavailable or no rewrites are configured.
+/// unless [`FORWARD_GIT_REWRITES_ENV`] is `true`, or when git is unavailable or
+/// no rewrites are configured.
 fn host_git_url_rewrites() -> Vec<(String, String)> {
+    if std::env::var(FORWARD_GIT_REWRITES_ENV).as_deref() != Ok("true") {
+        return Vec::new();
+    }
     let output = Command::new("git")
         .args(["config", "--get-regexp", r"^url\..*\.insteadof$"])
         .output();
@@ -200,12 +212,16 @@ fn host_git_url_rewrites() -> Vec<(String, String)> {
 /// Parses `git config --get-regexp` output into `(key, value)` pairs.
 ///
 /// Each line is `<key> <value>`; a multi-valued key appears once per value.
+/// Rewrites to non-HTTP(S) bases, such as `url.git@github.com:.insteadof`, are
+/// dropped: the container has no SSH keys, so they would break every git fetch.
 fn parse_git_url_rewrites(stdout: &str) -> Vec<(String, String)> {
     stdout
         .lines()
         .filter_map(|line| {
             let (key, value) = line.split_once(' ')?;
-            (!value.is_empty()).then(|| (key.to_string(), value.to_string()))
+            let base = key.strip_prefix("url.")?;
+            let is_http = base.starts_with("https://") || base.starts_with("http://");
+            (is_http && !value.is_empty()).then(|| (key.to_string(), value.to_string()))
         })
         .collect()
 }
@@ -502,6 +518,22 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].0, parsed[1].0);
         assert_eq!(parsed[1].1, "ssh://git@github.com/");
+    }
+
+    #[test]
+    fn parse_git_url_rewrites_drops_non_http_bases() {
+        let parsed = parse_git_url_rewrites(
+            "url.git@github.com:.insteadof https://github.com/\n\
+             url.ssh://git@github.com/.insteadof https://github.com/\n\
+             url.http://mirror.local/.insteadof https://github.com/\n",
+        );
+        assert_eq!(
+            parsed,
+            vec![(
+                "url.http://mirror.local/.insteadof".to_string(),
+                "https://github.com/".to_string()
+            )]
+        );
     }
 
     #[test]

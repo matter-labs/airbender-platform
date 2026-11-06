@@ -7,10 +7,10 @@ use core::ptr::{null_mut, NonNull};
 /// talc walks a free gap with `base.add(size)` / `acme.sub(size)`, which is undefined
 /// behaviour once the gap exceeds `isize::MAX`: 2 GiB on riscv32, which an arena on
 /// the 4 GiB machine image (`RamSize::FourGb`) can exceed. The arena is therefore
-/// claimed as several adjacent heaps. talc never merges across heaps (each heap's
-/// bottom is tagged allocated), so every gap stays within its heap; the only thing
-/// given up is a single allocation straddling two heaps, and `Layout` already caps
-/// one allocation at `isize::MAX`.
+/// claimed as several adjacent heaps of equal size. talc never merges across heaps
+/// (each heap's bottom is tagged allocated), so every gap stays within its heap, and
+/// one allocation is limited to a single heap: about half the arena once the arena
+/// exceeds `isize::MAX`, which can be well below the `Layout` cap.
 const MAX_HEAP_SIZE: usize = (isize::MAX as usize) & PAGE_MASK;
 
 /// Granularity of heap sizes. talc only needs its own word-sized chunk alignment;

@@ -58,6 +58,8 @@ cargo airbender build -- --features my_extra_feature
 
 `--reproducible` compiles inside a pinned Docker image (`debian:bullseye-slim`, fixed nightly toolchain). Two builds of the same source on any machine produce identical artifacts and SHA-256 hashes. Requires Docker.
 
+The container has no git credentials. For private git dependencies, configure an authenticated HTTPS rewrite on the host (`url.https://<token>@github.com/.insteadOf https://github.com/`) and set `AIRBENDER_PLATFORM_FORWARD_GIT_REWRITES=true` to replay it inside the container. Only `http(s)://` rewrites are replayed, and the token is readable by dependency build scripts and proc macros during the build.
+
 ### Monorepo path dependencies
 
 If your guest has `path = "../../..."` dependencies pointing outside its cargo workspace root, the Docker container won't see them. Pass `--workspace-root` to widen the mount:

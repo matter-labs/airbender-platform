@@ -26,6 +26,11 @@ pub enum MachineProfile {
 
 /// Size of the RAM image the machine runs with.
 ///
+/// The image must cover the RAM the guest is linked for. Nothing checks this: a guest
+/// that touches memory past the image hits an unchecked access, not an error. The dev
+/// prover, the CPU prover's cycle estimator, `cargo airbender run` and the CLI's GPU
+/// backend always use 1 GiB.
+///
 /// Upstream Airbender offers smaller images as well, but they are only useful for its
 /// own tests, so this is the set `airbender-host` is willing to name and keep stable.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -34,8 +39,9 @@ pub enum RamSize {
     /// 1 GiB.
     #[default]
     OneGb,
-    /// 4 GiB. Costs 12 GiB of host memory per simulator instance, since every word of
-    /// the image carries a timestamp alongside it.
+    /// 4 GiB. Every word of the image carries a timestamp, so host memory grows with
+    /// it: 12 GiB per JIT instance, 16 GiB of address space for the interpreter, and
+    /// 12 GiB page-locked per GPU prover simulator holder (24 GiB by default).
     FourGb,
 }
 
