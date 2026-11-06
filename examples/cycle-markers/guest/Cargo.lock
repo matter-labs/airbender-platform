@@ -284,7 +284,7 @@ dependencies = [
 [[package]]
 name = "blake2s_u32"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=67ee094#67ee094449abaebc77e58435f130ce6ea27721e5"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=0decdcdb#0decdcdb515e3db01178bf20aac20c18ea6168e2"
 dependencies = [
  "common_constants",
  "unroll",
@@ -308,7 +308,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "common_constants"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=67ee094#67ee094449abaebc77e58435f130ce6ea27721e5"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=0decdcdb#0decdcdb515e3db01178bf20aac20c18ea6168e2"
 dependencies = [
  "seq-macro",
 ]
@@ -704,7 +704,7 @@ dependencies = [
 [[package]]
 name = "riscv_common"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender?rev=67ee094#67ee094449abaebc77e58435f130ce6ea27721e5"
+source = "git+https://github.com/matter-labs/zksync-airbender?rev=0decdcdb#0decdcdb515e3db01178bf20aac20c18ea6168e2"
 dependencies = [
  "common_constants",
  "seq-macro",

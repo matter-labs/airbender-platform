@@ -31,6 +31,22 @@
 //! digest, change `DEFAULT_GUEST_TOOLCHAIN` in `constants.rs`; the new tag
 //! forces a fresh `docker build`.
 //!
+//! # Git credentials
+//!
+//! The container has no credentials of its own, so `cargo` cannot fetch
+//! private git dependencies inside it. Setting
+//! `AIRBENDER_PLATFORM_FORWARD_GIT_REWRITES=true` replays the host's effective
+//! `url.<base>.insteadOf` git rewrites (the standard way to inject an
+//! authenticated HTTPS URL, used by CI) inside the container before the build.
+//! Only rewrites to `http(s)://` bases are replayed: the container has no SSH
+//! keys. Key/value pairs travel via container environment variables so the
+//! token never appears in `docker run` argv, and `CARGO_NET_GIT_FETCH_WITH_CLI`
+//! is forwarded when set on the host. URL rewrites only affect fetch transport,
+//! not checked-out sources, so reproducibility is unaffected.
+//!
+//! Forwarded tokens are readable by dependency build scripts and proc macros
+//! inside the container, so forwarding is off by default.
+//!
 //! # Cleanup
 //!
 //! Use [`clean_reproducible_volumes`] (exposed as `cargo airbender clean`) to remove
@@ -163,6 +179,51 @@ fn container_name() -> String {
         .as_nanos();
     let id = (nanos ^ (std::process::id() as u128)) as u64;
     format!("airbender-build-{id:016x}")
+}
+
+/// Environment variable that, when set to `true`, replays the host's git URL
+/// rewrites inside the build container.
+const FORWARD_GIT_REWRITES_ENV: &str = "AIRBENDER_PLATFORM_FORWARD_GIT_REWRITES";
+
+/// Collects the host's effective `url.<base>.insteadOf` git rewrites.
+///
+/// CI and developers with access to private git dependencies configure an
+/// authenticated rewrite such as
+/// `url.https://x-access-token:<token>@github.com/.insteadOf = https://github.com/`
+/// so cargo can fetch those repositories over HTTPS. Returns an empty list
+/// unless [`FORWARD_GIT_REWRITES_ENV`] is `true`, or when git is unavailable or
+/// no rewrites are configured.
+fn host_git_url_rewrites() -> Vec<(String, String)> {
+    if std::env::var(FORWARD_GIT_REWRITES_ENV).as_deref() != Ok("true") {
+        return Vec::new();
+    }
+    let output = Command::new("git")
+        .args(["config", "--get-regexp", r"^url\..*\.insteadof$"])
+        .output();
+    match output {
+        // `git config --get-regexp` exits non-zero when nothing matches.
+        Ok(output) if output.status.success() => {
+            parse_git_url_rewrites(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Parses `git config --get-regexp` output into `(key, value)` pairs.
+///
+/// Each line is `<key> <value>`; a multi-valued key appears once per value.
+/// Rewrites to non-HTTP(S) bases, such as `url.git@github.com:.insteadof`, are
+/// dropped: the container has no SSH keys, so they would break every git fetch.
+fn parse_git_url_rewrites(stdout: &str) -> Vec<(String, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(' ')?;
+            let base = key.strip_prefix("url.")?;
+            let is_http = base.starts_with("https://") || base.starts_with("http://");
+            (is_http && !value.is_empty()).then(|| (key.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 /// Builds the `sh -c` command string: `cargo build` then three `cargo objcopy` invocations.
@@ -308,11 +369,30 @@ impl<'a> ReproducibleBuild<'a> {
             &format!("{}:/src:ro", self.params.mount_root.display()),
             "-v",
             "airbender-cargo-registry:/usr/local/cargo/registry",
-            &tag,
-            "sh",
-            "-c",
-            &build_cmd,
         ]);
+
+        // Replay the host's authenticated git URL rewrites inside the container
+        // so cargo can fetch private git dependencies. Keys can embed a token,
+        // so they travel via environment variables (name-only `-e` flags pull
+        // the value from this process's environment) rather than argv, and the
+        // container command references them by name only.
+        let mut git_setup_cmd = String::new();
+        for (i, (key, value)) in host_git_url_rewrites().iter().enumerate() {
+            let key_var = format!("AIRBENDER_GIT_REWRITE_KEY_{i}");
+            let value_var = format!("AIRBENDER_GIT_REWRITE_VALUE_{i}");
+            cmd.env(&key_var, key);
+            cmd.env(&value_var, value);
+            cmd.arg("-e").arg(&key_var).arg("-e").arg(&value_var);
+            git_setup_cmd.push_str(&format!(
+                "git config --global --add \"${key_var}\" \"${value_var}\" && "
+            ));
+        }
+        if std::env::var_os("CARGO_NET_GIT_FETCH_WITH_CLI").is_some() {
+            cmd.args(["-e", "CARGO_NET_GIT_FETCH_WITH_CLI"]);
+        }
+
+        let build_cmd = format!("{git_setup_cmd}{build_cmd}");
+        cmd.args([&tag, "sh", "-c", &build_cmd]);
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::piped());
 
@@ -413,6 +493,54 @@ mod tests {
     #[test]
     fn docker_image_tag_is_deterministic() {
         assert_eq!(docker_image_tag(), docker_image_tag());
+    }
+
+    #[test]
+    fn parse_git_url_rewrites_splits_key_and_value() {
+        let parsed = parse_git_url_rewrites(
+            "url.https://x-access-token:tok@github.com/.insteadof https://github.com/\n",
+        );
+        assert_eq!(
+            parsed,
+            vec![(
+                "url.https://x-access-token:tok@github.com/.insteadof".to_string(),
+                "https://github.com/".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn parse_git_url_rewrites_keeps_multi_valued_keys() {
+        let parsed = parse_git_url_rewrites(
+            "url.https://x:t@github.com/.insteadof https://github.com/\n\
+             url.https://x:t@github.com/.insteadof ssh://git@github.com/\n",
+        );
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].0, parsed[1].0);
+        assert_eq!(parsed[1].1, "ssh://git@github.com/");
+    }
+
+    #[test]
+    fn parse_git_url_rewrites_drops_non_http_bases() {
+        let parsed = parse_git_url_rewrites(
+            "url.git@github.com:.insteadof https://github.com/\n\
+             url.ssh://git@github.com/.insteadof https://github.com/\n\
+             url.http://mirror.local/.insteadof https://github.com/\n",
+        );
+        assert_eq!(
+            parsed,
+            vec![(
+                "url.http://mirror.local/.insteadof".to_string(),
+                "https://github.com/".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn parse_git_url_rewrites_ignores_malformed_lines() {
+        assert!(parse_git_url_rewrites("").is_empty());
+        assert!(parse_git_url_rewrites("keywithoutvalue\n").is_empty());
+        assert!(parse_git_url_rewrites("key \n").is_empty());
     }
 
     #[test]

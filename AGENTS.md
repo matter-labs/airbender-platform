@@ -13,6 +13,12 @@ This file defines project-specific guidance for coding agents working in `airben
 - Treat upstream `zksync-airbender` crates as external dependencies for routine tasks.
 - Keep changes focused; avoid unrelated refactors.
 
+## Public API
+
+- The platform crates exist to give Airbender a stable, developer-friendly interface. Upstream Airbender APIs are unstable and do not follow semver.
+- Do not expose upstream Airbender types in public APIs (signatures, re-exports, doc links) without a concrete need. Prefer a platform-owned type mapped internally, as `MachineProfile` and `RamSize` do.
+- When an upstream type does have to be exposed, re-export it through `airbender_host::raw`, not the crate root.
+
 ## Build and Lint Commands
 
 - Do not require `RUST_MIN_STACK` for normal development flows.

@@ -23,7 +23,7 @@ pub use airbender_core::guest::Commit;
 pub use cycle_marker::{CycleMarker, Mark};
 pub use error::{HostError, Result};
 pub use inputs::Inputs;
-pub use machine::MachineProfile;
+pub use machine::{MachineProfile, RamSize};
 pub use program::Program;
 pub use proof::{DevProof, Proof, RealProof};
 pub use prover::{
