@@ -2,39 +2,30 @@
 //! on the EIP-2537 encoding of the points.
 
 use crate::ark_ec::{AffineRepr, CurveGroup};
-#[cfg(any(feature = "alloc", test))]
+use crate::ark_ff::Field;
 use crate::ark_ff::PrimeField;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::ark_ff::Zero;
 use crate::bls12_381::*;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints::{
     bls12_381_fq2_inverse, bls12_381_fq2_sqrt, bls12_381_fq_inverse, bls12_381_fq_sqrt,
     Bls12381Fq2Divider, Bls12381FqDivider,
 };
 use airbender_oracle::MemoryOracle;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use core::cell::RefCell;
 
 // the dividers of the subgroup checks of the MSMs and the pairing check
-#[cfg(all(
-    any(feature = "alloc", test),
-    target_arch = "riscv32",
-    not(feature = "bigint_ops")
-))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 use super::unavailable::{Bls12381Fq2Divider, Bls12381FqDivider};
 
-#[cfg(any(feature = "alloc", test))]
 mod msm;
-#[cfg(any(feature = "alloc", test))]
 mod pairing;
 
-#[cfg(any(feature = "alloc", test))]
 pub use self::msm::{bls12_381_g1_msm, bls12_381_g2_msm, G1_MSM_PAIR_LEN, G2_MSM_PAIR_LEN};
-#[cfg(any(feature = "alloc", test))]
 pub use self::pairing::{bls12_381_pairing_check, BLS12_381_PAIR_LEN};
 
-#[cfg(any(feature = "alloc", test))]
 const SCALAR_SERIALIZATION_LEN: usize = 32;
 /// The size of the EIP-2537 encoding of a base field element
 pub const FIELD_ELEMENT_SERIALIZATION_LEN: usize = 64;
@@ -56,10 +47,12 @@ pub enum Bls12Error {
     NotInSubgroup,
     /// A field element is not canonical
     InvalidFieldElement,
+    /// More pairs than a transaction can pay for under the gas cap of EIP-7825 (the `MAX_*_PAIRS`
+    /// bounds of [`crate::precompiles`])
+    TooManyPairs,
 }
 
 // infallible: scalars need not be canonical
-#[cfg(any(feature = "alloc", test))]
 fn parse_integer(input: &[u8; SCALAR_SERIALIZATION_LEN]) -> <Fr as PrimeField>::BigInt {
     let mut repr = [0u64; 4];
     for (dst, src) in repr.iter_mut().zip(input.as_rchunks::<8>().1.iter().rev()) {
@@ -81,7 +74,6 @@ fn parse_g2(input: &[u8; G2_SERIALIZATION_LEN]) -> Result<G2Affine, Bls12Error> 
 }
 
 // the MSMs and the pairing check
-#[cfg(any(feature = "alloc", test))]
 fn parse_g1_with_subgroup_check(
     input: &[u8; G1_SERIALIZATION_LEN],
 ) -> Result<G1Affine, Bls12Error> {
@@ -93,7 +85,6 @@ fn parse_g1_with_subgroup_check(
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 fn parse_g2_with_subgroup_check(
     input: &[u8; G2_SERIALIZATION_LEN],
 ) -> Result<G2Affine, Bls12Error> {
@@ -107,7 +98,6 @@ fn parse_g2_with_subgroup_check(
 
 /// Parses and checks subgroup membership; with an oracle, by an affine chain with checked hinted
 /// divisions. On RV32 without `bigint_ops` the divider panics (see `unavailable`).
-#[cfg(any(feature = "alloc", test))]
 fn parse_g1_with_subgroup_check_with_oracle<O: MemoryOracle>(
     input: &[u8; G1_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
@@ -125,7 +115,6 @@ fn parse_g1_with_subgroup_check_with_oracle<O: MemoryOracle>(
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 fn parse_g2_with_subgroup_check_with_oracle<O: MemoryOracle>(
     input: &[u8; G2_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
@@ -154,9 +143,9 @@ pub fn bls12_381_g1_add<O: MemoryOracle>(
     let p1 = parse_g1(b)?;
 
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => g1::add_affine_with_divider(&p0, &p1, &mut Bls12381FqDivider::new(oracle)),
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => (p0 + p1).into_affine(),
     };
@@ -174,9 +163,9 @@ pub fn bls12_381_g2_add<O: MemoryOracle>(
     let p1 = parse_g2(b)?;
 
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => g2::add_affine_with_divider(&p0, &p1, &mut Bls12381Fq2Divider::new(oracle)),
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
         None => (p0 + p1).into_affine(),
     };
@@ -187,15 +176,28 @@ pub fn bls12_381_g2_add<O: MemoryOracle>(
 /// The G1 point of a field element: the simplified SWU map, then cofactor clearing. With an
 /// oracle, the inversions, square roots and divisions are checked hints. The caller encodes the
 /// result.
+/// The `sqrt_ratio` of the SWU map without hints: `(sqrt(value), true)` for a non-zero square,
+/// else `(sqrt(z * value), false)`, as the hinted path (zero takes the non-residue branch).
+fn plain_sqrt_ratio<F: Field>(value: &F, z: &F) -> (F, bool) {
+    if !value.is_zero() {
+        if let Some(root) = value.sqrt() {
+            return (root, true);
+        }
+    }
+    let root = (*z * value)
+        .sqrt()
+        .expect("the SWU non-residue times a non-square is square");
+    (root, false)
+}
+
 pub fn bls12_381_map_fp_to_g1<O: MemoryOracle>(
     fp: &[u8; FIELD_ELEMENT_SERIALIZATION_LEN],
     oracle: Option<&mut O>,
 ) -> Result<G1Affine, Bls12Error> {
     let field_element =
         crate::bls12_381::eip2537::parse_fq_bytes(fp).ok_or(Bls12Error::InvalidFieldElement)?;
-    let invalid_field = || Bls12Error::InvalidFieldElement;
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => {
             // The callbacks run sequentially; both need access to the same oracle.
             let oracle = RefCell::new(oracle);
@@ -220,11 +222,14 @@ pub fn bls12_381_map_fp_to_g1<O: MemoryOracle>(
                 &mut Bls12381FqDivider::new(oracle.into_inner()),
             )
         }
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
-        None => crate::bls12_381::eip2537::map_fp_to_g1(field_element)
-            .map_err(|_| invalid_field())?
-            .clear_cofactor(),
+        None => crate::bls12_381::eip2537::map_fp_to_g1_with_hints(
+            field_element,
+            |value| value.inverse(),
+            plain_sqrt_ratio,
+        )
+        .clear_cofactor(),
     };
 
     Ok(result)
@@ -238,9 +243,8 @@ pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
     let field_element =
         crate::bls12_381::eip2537::parse_fq2_bytes(fp2).ok_or(Bls12Error::InvalidFieldElement)?;
 
-    let invalid_field = || Bls12Error::InvalidFieldElement;
     let result = match oracle {
-        #[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => {
             // The callbacks run sequentially; both need access to the same oracle.
             let oracle = RefCell::new(oracle);
@@ -265,17 +269,20 @@ pub fn bls12_381_map_fp2_to_g2<O: MemoryOracle>(
                 &mut Bls12381Fq2Divider::new(oracle.into_inner()),
             )
         }
-        #[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+        #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
-        None => crate::bls12_381::eip2537::map_fp2_to_g2(field_element)
-            .map_err(|_| invalid_field())?
-            .clear_cofactor(),
+        None => crate::bls12_381::eip2537::map_fp2_to_g2_with_hints(
+            field_element,
+            |value| value.inverse(),
+            plain_sqrt_ratio,
+        )
+        .clear_cofactor(),
     };
 
     Ok(result)
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

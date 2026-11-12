@@ -55,10 +55,11 @@ pub(crate) use self::in_process::{
 /// The doubles that answer in process, with the host side (64-bit hosts only)
 #[cfg(target_pointer_width = "64")]
 mod in_process {
-    use crate::hints::host::{answer_query, not_identity_claim, NativeQuerierMemory};
     use crate::hints::{
         read_field_hint_request, FieldHintOp, HintError, MemoryOracle, QuerierMemory,
+        QuerierMemoryError,
     };
+    use crate::oracle_common::{answer_query, not_identity_claim, NativeQuerierMemory};
     use std::collections::{BTreeMap, VecDeque};
     use std::vec::Vec;
 
@@ -147,11 +148,11 @@ mod in_process {
             size_of::<u32>()
         }
 
-        fn read_u32(&self, address: usize) -> Result<u32, HintError> {
+        fn read_u32(&self, address: usize) -> Result<u32, QuerierMemoryError> {
             let address = u32::try_from(address)
-                .map_err(|_| HintError("guest address does not fit into u32"))?;
+                .map_err(|_| QuerierMemoryError("guest address does not fit into u32"))?;
             if !address.is_multiple_of(4) {
-                return Err(HintError("unaligned guest address"));
+                return Err(QuerierMemoryError("unaligned guest address"));
             }
             Ok(self.0.words.get(&address).copied().unwrap_or(0))
         }

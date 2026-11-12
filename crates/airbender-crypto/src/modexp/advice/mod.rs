@@ -1,6 +1,7 @@
-use alloc::vec::Vec;
+//! ModExp with hints: a modulus of up to 32 bytes on the single-digit path (`single_digit`), a
+//! longer one on the multi-digit path (`bigint`), both walking the exponent as `exponent` does.
+
 use bigint::ModexpAdvisor;
-use core::alloc::Allocator;
 
 mod bigint;
 mod digit;
@@ -8,43 +9,45 @@ mod exponent;
 mod single_digit;
 
 use self::bigint::BigintRepr;
-use crate::modexp::strip_leading_zeroes;
+use crate::modexp::{checked_operand, ModExpOutput};
 use airbender_oracle::MemoryOracle;
 
 /// `base^exp mod modulus` for big-endian operands, with hints from `oracle`. Every hint is checked
 /// and a wrong one panics. A zero result (also for a modulus of 0 or 1) has no bytes;
-/// [`write_modexp_output`](super::write_modexp_output) pads it.
-pub fn modexp<O: MemoryOracle, A: Allocator + Clone>(
+/// [`write_modexp_output`](super::write_modexp_output) pads it. The base and the modulus must
+/// have at most [`MAX_OPERAND_BYTES`](super::MAX_OPERAND_BYTES) significant bytes.
+pub fn modexp<O: MemoryOracle>(
     base: &[u8],
     exp: &[u8],
     modulus: &[u8],
     oracle: &mut O,
-    allocator: A,
-) -> Vec<u8, A> {
+) -> ModExpOutput {
     let mut advisor = self::bigint::OracleAdvisor { inner: oracle };
 
-    modexp_inner::<A>(base, exp, modulus, &mut advisor, allocator)
+    modexp_inner(base, exp, modulus, &mut advisor)
 }
 
 /// [`modexp`] with hints computed natively instead of by an oracle, for fuzzing.
-#[cfg(feature = "testing")]
-pub fn delegated_modexp_with_naive_advisor(base: &[u8], exp: &[u8], modulus: &[u8]) -> Vec<u8> {
-    use alloc::alloc::Global;
+#[cfg(any(test, feature = "testing"))]
+pub fn delegated_modexp_with_naive_advisor(
+    base: &[u8],
+    exp: &[u8],
+    modulus: &[u8],
+) -> ModExpOutput {
     let mut advisor = bigint::naive_advisor::NaiveAdvisor;
-    modexp_inner::<Global>(base, exp, modulus, &mut advisor, Global)
+    modexp_inner(base, exp, modulus, &mut advisor)
 }
 
-#[allow(clippy::needless_borrow)]
-fn modexp_inner<A: Allocator + Clone>(
+fn modexp_inner(
     base: &[u8],
     exp: &[u8],
     modulus: &[u8],
     advisor: &mut impl ModexpAdvisor,
-    allocator: A,
-) -> Vec<u8, A> {
-    let modulus_digits = strip_leading_zeroes(modulus);
+) -> ModExpOutput {
+    let modulus_digits = checked_operand(modulus);
+    let base = checked_operand(base);
     if modulus_digits.is_empty() {
-        return Vec::new_in(allocator);
+        return ModExpOutput::new();
     }
     if modulus_digits.len() <= 32 {
         // one digit: the U256 path
@@ -53,45 +56,37 @@ fn modexp_inner<A: Allocator + Clone>(
         let m = crate::modexp::u256::U256::from_be_bytes(&padded);
         if m.is_one() {
             // x^e mod 1 = 0
-            return Vec::new_in(allocator);
+            return ModExpOutput::new();
         }
-        return single_digit::modexp(base, exp, &m, advisor, allocator);
+        return single_digit::modexp(base, exp, &m, advisor);
     }
 
-    let m = BigintRepr::from_big_endian_with_double_capacity(&modulus, allocator.clone());
+    let m = BigintRepr::from_big_endian(modulus_digits);
     debug_assert!(m.digits > 1);
-    {
-        let min_capacity = m.capacity();
-        let x = BigintRepr::from_big_endian_with_double_capacity_or_min_capacity(
-            &base,
-            min_capacity,
-            allocator.clone(),
-        );
-        let x = x.modpow(&exp, m, advisor, allocator.clone());
-        x.to_big_endian(allocator)
-    }
+    let x = BigintRepr::from_big_endian(base);
+    let x = x.modpow(exp, m, advisor);
+    x.to_big_endian()
 }
 
 #[cfg(test)]
 mod test {
-    use std::alloc::Global;
-
     use super::bigint::naive_advisor::NaiveAdvisor;
     use super::*;
     use crate::modexp::u256::U256;
     use num_bigint::BigUint;
     use num_traits::Zero;
+    use std::vec;
 
     fn modexp_with_advisor(
         base: &[u8],
         exp: &[u8],
         modulus: &[u8],
         advisor: &mut impl ModexpAdvisor,
-    ) -> Vec<u8> {
-        super::modexp_inner(base, exp, modulus, advisor, Global)
+    ) -> ModExpOutput {
+        super::modexp_inner(base, exp, modulus, advisor)
     }
 
-    fn modexp_honest(base: &[u8], exp: &[u8], modulus: &[u8]) -> Vec<u8> {
+    fn modexp_honest(base: &[u8], exp: &[u8], modulus: &[u8]) -> ModExpOutput {
         modexp_with_advisor(base, exp, modulus, &mut NaiveAdvisor)
     }
 
@@ -237,10 +232,7 @@ mod test {
         next_response: usize,
     }
 
-    fn write_bigint_digits<A: core::alloc::Allocator + Clone>(
-        digits: &[u64],
-        dst: &mut BigintRepr<A>,
-    ) {
+    fn write_bigint_digits(digits: &[u64], dst: &mut BigintRepr) {
         unsafe {
             let dst_capacity = dst.clear_as_capacity_mut();
             for (dst_digit, src_digit) in dst_capacity.iter_mut().zip(digits.iter()) {
@@ -255,12 +247,12 @@ mod test {
     }
 
     impl ModexpAdvisor for MaliciousReductionAdvisor {
-        fn get_reduction_op_advice<A: core::alloc::Allocator + Clone>(
+        fn get_reduction_op_advice(
             &mut self,
-            _a: &BigintRepr<A>,
-            _m: &BigintRepr<A>,
-            quotient_dst: &mut BigintRepr<A>,
-            remainder_dst: &mut BigintRepr<A>,
+            _a: &BigintRepr,
+            _m: &BigintRepr,
+            quotient_dst: &mut BigintRepr,
+            remainder_dst: &mut BigintRepr,
         ) {
             let (quotient, remainder) = &self.responses[self.next_response];
             self.next_response += 1;
@@ -277,7 +269,7 @@ mod test {
     /// squaring is `q = 2^256 + 1`, `r = 5 * 2^256 + 5`: `q * m + r = 2^768 + x^2`, which equals
     /// `x^2` modulo 2^768 and must be rejected because it does not fit.
     #[test]
-    #[should_panic(expected = "the product does not fit")]
+    #[should_panic(expected = "modexp advice: q * m + r does not fit the digits of the product")]
     fn test_modexp_delegation_malicious_advisor_truncates_reconstruction_regression() {
         let mut base = vec![0u8; 33];
         base[0] = 0x01;
@@ -298,5 +290,321 @@ mod test {
             next_response: 0,
         };
         modexp_with_advisor(&base, &[2], &modulus, &mut advisor);
+    }
+
+    /// The digits of a forged quotient or remainder, 64-bit limbs low first, as written
+    type Digits = std::vec::Vec<[u64; 4]>;
+
+    /// What a forgery answers for `a / m`, given the true quotient and remainder
+    type Forgery = fn(&BigUint, &BigUint, &BigUint, &BigUint) -> (Digits, Digits);
+
+    /// The digits of `x`, none for zero
+    fn digits_of(x: &BigUint) -> Digits {
+        let limbs: std::vec::Vec<u64> = x.iter_u64_digits().collect();
+        limbs
+            .chunks(4)
+            .map(|chunk| {
+                let mut digit = [0u64; 4];
+                digit[..chunk.len()].copy_from_slice(chunk);
+                digit
+            })
+            .collect()
+    }
+
+    /// `count` digits of all ones
+    fn ones(count: usize) -> Digits {
+        vec![[u64::MAX; 4]; count]
+    }
+
+    /// Writes `digits` as they are (zero top digits too), as many as the buffer holds
+    fn write_digits(digits: &[[u64; 4]], dst: &mut BigintRepr) {
+        let capacity = dst.clear_as_capacity_mut();
+        let count = digits.len().min(capacity.len());
+        for (slot, digit) in capacity.iter_mut().zip(digits) {
+            // SAFETY: a slot holds four aligned limbs
+            unsafe { slot.as_mut_ptr().cast::<[u64; 4]>().write(*digit) };
+        }
+        // SAFETY: the first `count` slots were written, within the capacity
+        unsafe { dst.set_num_digits(count) };
+    }
+
+    /// Answers reduction advice honestly, except call `forged_call` (every call for `None`),
+    /// which gets what `forge` makes of the honest answer
+    struct ForgingReductionAdvisor {
+        calls: usize,
+        forged_call: Option<usize>,
+        forge: Forgery,
+    }
+
+    impl ModexpAdvisor for ForgingReductionAdvisor {
+        fn get_reduction_op_advice(
+            &mut self,
+            a: &BigintRepr,
+            m: &BigintRepr,
+            quotient_dst: &mut BigintRepr,
+            remainder_dst: &mut BigintRepr,
+        ) {
+            use super::bigint::naive_advisor::to_biguint;
+            let (a, m) = (to_biguint(a), to_biguint(m));
+            let (q, r) = (&a / &m, &a % &m);
+            let call = self.calls;
+            self.calls += 1;
+            let (quotient, remainder) = if self.forged_call.is_none_or(|forged| forged == call) {
+                (self.forge)(&q, &r, &a, &m)
+            } else {
+                (digits_of(&q), digits_of(&r))
+            };
+            write_digits(&quotient, quotient_dst);
+            write_digits(&remainder, remainder_dst);
+        }
+
+        fn wide_quotient(&mut self, _lo: &U256, _hi: &U256, _modulus: &U256) -> (U256, U256) {
+            unreachable!("the multi-digit path asks for no wide quotient")
+        }
+    }
+
+    /// Answers that differ from the honest one in content, in length or only in their spelling
+    /// (zero top digits, a remainder that is not reduced). The last ones are right values, and
+    /// must not fail anywhere but in a check either.
+    const FORGERIES: [Forgery; 17] = [
+        // the honest answer
+        |q, r, _, _| (digits_of(q), digits_of(r)),
+        // zero top digits: on the remainder (a zero remainder gets digits), up to the modulus's
+        // length, and on the quotient
+        |q, r, _, _| {
+            let mut remainder = digits_of(r);
+            remainder.push([0; 4]);
+            (digits_of(q), remainder)
+        },
+        |q, r, _, m| {
+            let mut remainder = digits_of(r);
+            remainder.resize(digits_of(m).len(), [0; 4]);
+            (digits_of(q), remainder)
+        },
+        |q, r, _, _| {
+            let mut quotient = digits_of(q);
+            quotient.push([0; 4]);
+            (quotient, digits_of(r))
+        },
+        // a remainder that is congruent but not reduced
+        |q, r, _, m| {
+            if q.is_zero() {
+                (digits_of(q), digits_of(&(r + m)))
+            } else {
+                (digits_of(&(q - 1u32)), digits_of(&(r + m)))
+            }
+        },
+        |q, r, _, m| {
+            if *q < BigUint::from(2u32) {
+                (digits_of(q), digits_of(r))
+            } else {
+                (digits_of(&(q - 2u32)), digits_of(&(r + m + m)))
+            }
+        },
+        // wrong values of the right lengths
+        |q, r, _, _| (digits_of(&(q + 1u32)), digits_of(r)),
+        |q, r, _, _| (digits_of(q), digits_of(&(r + 1u32))),
+        |q, r, _, m| (digits_of(&(q + 1u32)), digits_of(&(r + m))),
+        |_, _, a, _| (Digits::new(), digits_of(a)),
+        |_, _, a, _| (digits_of(a), Digits::new()),
+        |_, _, _, _| (Digits::new(), Digits::new()),
+        |q, _, _, m| (ones(digits_of(q).len()), ones(digits_of(m).len())),
+        // `q * m + r` that is the product only modulo a power of the digit base
+        |q, r, a, m| {
+            let shift = 256 * (digits_of(a).len() - digits_of(m).len().min(digits_of(a).len()));
+            (
+                digits_of(&(q + (BigUint::from(1u32) << shift))),
+                digits_of(r),
+            )
+        },
+        // too long: by a digit each, and whole buffers
+        |q, r, _, m| {
+            let mut remainder = digits_of(r);
+            remainder.resize(digits_of(m).len() + 1, [1; 4]);
+            (digits_of(q), remainder)
+        },
+        |q, r, a, _| {
+            let mut quotient = digits_of(q);
+            quotient.resize(digits_of(a).len() + 2, [1; 4]);
+            (quotient, digits_of(r))
+        },
+        |_, _, _, _| (ones(200), ones(200)),
+    ];
+
+    /// The output of a ModExp with `advisor`, or the message of its panic
+    fn outcome(
+        base: &[u8],
+        exp: &[u8],
+        modulus: &[u8],
+        advisor: &mut impl ModexpAdvisor,
+    ) -> Result<std::vec::Vec<u8>, std::string::String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            modexp_with_advisor(base, exp, modulus, advisor).to_vec()
+        }))
+        .map_err(|payload| match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_owned(),
+            Err(payload) => *payload
+                .downcast::<std::string::String>()
+                .expect("a panic message"),
+        })
+    }
+
+    fn reference(base: &[u8], exp: &[u8], modulus: &[u8]) -> BigUint {
+        BigUint::from_bytes_be(base).modpow(
+            &BigUint::from_bytes_be(exp),
+            &BigUint::from_bytes_be(modulus),
+        )
+    }
+
+    /// `2^bits` in big-endian bytes
+    fn power_of_two(bits: usize) -> std::vec::Vec<u8> {
+        let mut bytes = vec![0u8; bits / 8 + 1];
+        bytes[0] = 1 << (bits % 8);
+        bytes
+    }
+
+    /// Operands for the forgeries: both walks, a composite modulus whose residues become zero,
+    /// and the longest operands EIP-7823 allows
+    fn forgery_cases() -> std::vec::Vec<(std::vec::Vec<u8>, std::vec::Vec<u8>, std::vec::Vec<u8>)> {
+        let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+        let mut odd = rng.bytes(70);
+        odd[69] |= 1;
+        let mut just_above = power_of_two(4096);
+        just_above[512] = 1;
+        vec![
+            // the binary and the windowed walk, with an initial reduction
+            (rng.bytes(100), vec![0x1d], odd.clone()),
+            (rng.bytes(40), rng.bytes(9), odd),
+            // 2^512 divides the powers of 2^300 from the square on: zero remainders
+            (power_of_two(300), vec![0x0b], power_of_two(512)),
+            // a base equal to the modulus: the initial reduction gives zero
+            (vec![0xff; 64], vec![5], vec![0xff; 64]),
+            // 513-byte operands: products of 34 digits
+            (power_of_two(4096), vec![2], just_above),
+            // 1024-byte operands: products that fill the buffers
+            (vec![0xff; 1024], vec![3], {
+                let mut modulus = vec![0xff; 1024];
+                modulus[1023] = 0xfd;
+                modulus
+            }),
+        ]
+    }
+
+    /// Whatever an advisor answers, ModExp fails only in a check of the advice, and when it
+    /// returns its output is the right one, which the output buffer holds.
+    #[test]
+    fn forged_reduction_advice_fails_only_in_its_checks() {
+        let (mut accepted, mut rejected) = (0, 0);
+        for (base, exp, modulus) in forgery_cases() {
+            let expected = reference(&base, &exp, &modulus);
+            let mut honest = ForgingReductionAdvisor {
+                calls: 0,
+                forged_call: Some(usize::MAX),
+                forge: FORGERIES[0],
+            };
+            let output = outcome(&base, &exp, &modulus, &mut honest).expect("honest advice");
+            assert_eq!(BigUint::from_bytes_be(&output), expected);
+            let calls = honest.calls;
+            assert!(calls > 0, "the case asks for advice");
+
+            let mut forged_calls = vec![None, Some(0), Some(1), Some(calls / 2), Some(calls - 1)];
+            forged_calls.dedup();
+            for forged_call in forged_calls {
+                if forged_call.is_some_and(|call| call >= calls) {
+                    continue;
+                }
+                for (index, forge) in FORGERIES.iter().enumerate() {
+                    let mut advisor = ForgingReductionAdvisor {
+                        calls: 0,
+                        forged_call,
+                        forge: *forge,
+                    };
+                    match outcome(&base, &exp, &modulus, &mut advisor) {
+                        Ok(output) => {
+                            assert!(output.len() <= crate::modexp::MAX_OPERAND_BYTES);
+                            assert_eq!(
+                                BigUint::from_bytes_be(&output),
+                                expected,
+                                "forgery {index} at {forged_call:?} is accepted with a wrong result"
+                            );
+                            accepted += 1;
+                        }
+                        Err(message) => {
+                            assert!(
+                                message.starts_with("modexp advice: "),
+                                "forgery {index} at {forged_call:?} fails outside the checks: {message}"
+                            );
+                            assert_ne!(index, 0, "honest advice is rejected: {message}");
+                            rejected += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // both happen: the spellings of right answers are accepted, the wrong answers rejected
+        assert!(
+            accepted > 50 && rejected > 50,
+            "{accepted} accepted, {rejected} rejected"
+        );
+    }
+
+    /// A zero remainder spelled with digits is a right answer: the next product is zero, and is
+    /// not a reason to fail (regression: it reached an internal assertion).
+    #[test]
+    fn a_zero_remainder_with_digits_is_accepted() {
+        let (base, exp, modulus) = (power_of_two(300), vec![0x0b], power_of_two(512));
+        for forge in [FORGERIES[1], FORGERIES[2]] {
+            let mut advisor = ForgingReductionAdvisor {
+                calls: 0,
+                forged_call: None,
+                forge,
+            };
+            let output = outcome(&base, &exp, &modulus, &mut advisor).expect("a right answer");
+            assert!(output.is_empty(), "2^3300 mod 2^512 = 0");
+        }
+    }
+
+    /// A remainder that is congruent but not below the modulus is caught by the last check when
+    /// it is the result
+    #[test]
+    fn an_unreduced_result_is_rejected() {
+        // x^1 for a base of the modulus's length: the initial reduction is the result
+        let (base, modulus) = (vec![0x80; 64], vec![0x7f; 64]);
+        let mut advisor = ForgingReductionAdvisor {
+            calls: 0,
+            forged_call: Some(0),
+            forge: FORGERIES[4],
+        };
+        assert_eq!(
+            outcome(&base, &[1], &modulus, &mut advisor),
+            Err("modexp advice: the result is not below the modulus".to_owned())
+        );
+    }
+
+    /// The honest advisor serves operands up to the bound, whose products are double width
+    #[test]
+    fn naive_advisor_matches_reference_at_the_bound() {
+        for (base, exp, modulus) in forgery_cases() {
+            assert_matches_reference(&base, &exp, &modulus);
+        }
+        let mut rng = Rng(0x1234_5678_9abc_def1);
+        for len in [513, 800, 1024] {
+            let mut modulus = rng.bytes(len);
+            modulus[0] |= 0x80;
+            assert_matches_reference(&rng.bytes(len), &rng.bytes(2), &modulus);
+        }
+    }
+
+    #[test]
+    fn naive_advisor_reduces_a_513_byte_square() {
+        use super::delegated_modexp_with_naive_advisor;
+
+        let mut base = vec![0u8; 513];
+        base[0] = 1; // 2^4096
+
+        let mut modulus = base.clone();
+        modulus[512] = 1; // 2^4096 + 1
+
+        let result = delegated_modexp_with_naive_advisor(&base, &[2], &modulus);
     }
 }

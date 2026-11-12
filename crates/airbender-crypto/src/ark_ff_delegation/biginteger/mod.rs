@@ -495,9 +495,15 @@ impl<const N: usize> UpperHex for BigInt<N> {
     }
 }
 
+// Hexadecimal, from the limbs: the decimal conversion goes through `BigUint`, which allocates,
+// and `Debug` is what a failed `assert_eq!` on a field element formats on the guest.
 impl<const N: usize> Debug for BigInt<N> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:?}", BigUint::from(*self))
+        f.write_str("0x")?;
+        for limb in self.0.iter().rev() {
+            write!(f, "{limb:016x}")?;
+        }
+        Ok(())
     }
 }
 

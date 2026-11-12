@@ -3,12 +3,12 @@
 //! (`MODEXP_ADVICE_QUERY_ID`). Operands are read through the querier memory of either target, and
 //! both runs get the same answer.
 
-use super::read_querier_u32_words;
 use crate::hints::{
     read_querier_word, HintError, QuerierMemory, MODEXP_ADVICE_QUERY_ID,
     U256_WIDE_DIV_REM_ADVICE_QUERY_ID,
 };
 use crate::modexp::read_modexp_advice_params;
+use crate::oracle_common::read_querier_u32_words;
 use alloc::vec::Vec;
 
 /// Limbs of a 256-bit operand, as the querier keeps them: 8 `u32` words, little-endian
@@ -36,7 +36,10 @@ fn read_three_operands<M: QuerierMemory + ?Sized>(
             .checked_mul(word_size)
             .and_then(|offset| input_word.checked_add(offset))
             .ok_or(HintError("querier address overflows"))?;
-        read_operand(memory, read_querier_word(memory, address)?)
+        read_operand(
+            memory,
+            read_querier_word(memory, address).map_err(HintError::from)?,
+        )
     };
     Ok((element(0)?, element(1)?, element(2)?))
 }
@@ -130,7 +133,7 @@ fn process_arithmetic_query(
 }
 
 /// Serves the ModExp advice, appending the same answer to each response asked for
-pub(super) fn process_memory_query(
+pub(crate) fn process_memory_query(
     query_id: u32,
     input_word: usize,
     memory: &dyn QuerierMemory,
@@ -151,10 +154,10 @@ pub(super) fn process_memory_query(
 
 #[cfg(test)]
 mod tests {
-    use crate::hints::host::{answer_query, NativeQuerierMemory};
     use crate::hints::test_support::{GuestMemory, TestMemorySource};
     use crate::hints::{MODEXP_ADVICE_QUERY_ID, U256_WIDE_DIV_REM_ADVICE_QUERY_ID};
     use crate::modexp::{ModExpAdviceParams, ModExpAdviceParams64};
+    use crate::oracle_common::{answer_query, NativeQuerierMemory};
     use std::vec;
     use std::vec::Vec;
 

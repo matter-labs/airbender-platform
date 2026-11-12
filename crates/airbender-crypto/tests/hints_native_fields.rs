@@ -2,7 +2,7 @@
 //! (unless `proving` is on): a bls12-381 element is 6 limbs, `x 2^384`, and the oracle converts the
 //! guest's answers to `x 2^512`. The unit tests run on the delegated fields, which cannot tell the
 //! targets apart.
-#![cfg(all(feature = "alloc", target_pointer_width = "64"))]
+#![cfg(all(feature = "oracle_implementations", target_pointer_width = "64"))]
 
 use airbender_crypto::ark_ff::{BigInteger, Field, PrimeField};
 use airbender_crypto::hints::{

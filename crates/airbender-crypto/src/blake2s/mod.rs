@@ -91,6 +91,3 @@ pub mod blake2s_tests {
         compare_blakes(&input);
     }
 }
-
-#[cfg(test)]
-mod test;

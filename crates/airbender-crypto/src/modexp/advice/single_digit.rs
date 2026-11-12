@@ -6,10 +6,8 @@ use super::exponent::{exponentiate, ModMul};
 use crate::hints::wide_div::{
     clone_into_slot, reduce_product_of_residues_with_quotient, verify_wide_div_rem_hint,
 };
-use crate::modexp::strip_leading_zeroes;
 use crate::modexp::u256::U256;
-use alloc::vec::Vec;
-use core::alloc::Allocator;
+use crate::modexp::{strip_leading_zeroes, ModExpOutput};
 use core::mem::MaybeUninit;
 
 struct U256ModMul<'a, Adv: ModexpAdvisor> {
@@ -56,13 +54,12 @@ impl<Adv: ModexpAdvisor> ModMul for U256ModMul<'_, Adv> {
 }
 
 /// `base^exp mod modulus` as big-endian bytes, for `modulus >= 2`
-pub(crate) fn modexp<Adv: ModexpAdvisor, A: Allocator>(
+pub(crate) fn modexp<Adv: ModexpAdvisor>(
     base: &[u8],
     exp: &[u8],
     modulus: &U256,
     advisor: &mut Adv,
-    allocator: A,
-) -> Vec<u8, A> {
+) -> ModExpOutput {
     debug_assert!(!modulus.is_zero() && !modulus.is_one());
 
     let base = reduce_base(strip_leading_zeroes(base), modulus, advisor);
@@ -79,7 +76,7 @@ pub(crate) fn modexp<Adv: ModexpAdvisor, A: Allocator>(
     };
 
     // as the multi-digit path: no bytes for zero, else the whole digit
-    let mut out = Vec::with_capacity_in(32, allocator);
+    let mut out = ModExpOutput::new();
     if !result.is_zero() {
         out.extend_from_slice(&result.to_be_bytes());
     }
@@ -169,12 +166,12 @@ mod tests {
     }
 
     impl ModexpAdvisor for ForgingAdvisor {
-        fn get_reduction_op_advice<A: Allocator + Clone>(
+        fn get_reduction_op_advice(
             &mut self,
-            _a: &BigintRepr<A>,
-            _m: &BigintRepr<A>,
-            _quotient_dst: &mut BigintRepr<A>,
-            _remainder_dst: &mut BigintRepr<A>,
+            _a: &BigintRepr,
+            _m: &BigintRepr,
+            _quotient_dst: &mut BigintRepr,
+            _remainder_dst: &mut BigintRepr,
         ) {
             panic!("the single-digit path asks for no reduction advice")
         }

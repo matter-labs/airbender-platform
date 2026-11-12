@@ -10,6 +10,7 @@
 /// index `n` in `Z⁴`, so about 64 bits each). The verification is then a multi-scalar
 /// multiplication whose variable-base scalars have about 64 bits instead of 128.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
 pub struct RecoveryWitness {
     /// The coordinates of the key, big-endian
     pub key_x: [u8; 32],

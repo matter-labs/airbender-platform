@@ -6,14 +6,15 @@ use airbender_crypto_c::*;
 use common::{recorded, take_recording};
 use core::ptr::{self, NonNull};
 
-fn inverse(value: u8) -> Bytes<32> {
-    let mut a = Bytes { data: [0; 32] };
-    a.data[31] = value;
-    let mut result = Bytes { data: [0; 32] };
-    assert_eq!(
-        unsafe { airbender_secp256k1_fe_inverse(&a, &mut result) },
-        EOK
-    );
+/// `value` times the generator of bn254 G1: a hinted multiplication
+fn multiple(value: u8) -> Bytes<64> {
+    let mut g = Bytes { data: [0; 64] };
+    g.data[31] = 1;
+    g.data[63] = 2;
+    let mut scalar = Bytes { data: [0; 32] };
+    scalar.data[31] = value;
+    let mut result = Bytes { data: [0; 64] };
+    assert_eq!(unsafe { zkvm_bn254_g1_mul(&g, &scalar, &mut result) }, EOK);
     result
 }
 
@@ -32,7 +33,7 @@ fn end(capacity: usize) -> usize {
 fn end_without_a_recording_returns_no_words() {
     assert_eq!(end(0), 0);
     // nor after a call made without a recording, which records nothing
-    inverse(3);
+    multiple(3);
     assert_eq!(end(16), 0);
     // a dangling pointer with a zero capacity is valid too
     let dangling = NonNull::dangling().as_ptr();
@@ -44,11 +45,11 @@ fn end_without_a_recording_returns_no_words() {
 #[test]
 fn ends_that_do_not_fit_keep_the_words() {
     let ((), alone) = recorded(|| {
-        inverse(3);
+        multiple(3);
     });
     assert!(!alone.is_empty());
     airbender_crypto_record_begin();
-    inverse(3);
+    multiple(3);
     assert_eq!(end(0), alone.len());
     let mut words = vec![0u32; alone.len()];
     let short = unsafe { airbender_crypto_record_end(words.as_mut_ptr(), alone.len() - 1) };
@@ -60,7 +61,7 @@ fn ends_that_do_not_fit_keep_the_words() {
     assert_eq!(end(0), 0);
 
     airbender_crypto_record_begin();
-    inverse(3);
+    multiple(3);
     assert_ne!(end(0), 0);
     airbender_crypto_record_begin();
     assert_eq!(end(0), 0);
@@ -69,24 +70,24 @@ fn ends_that_do_not_fit_keep_the_words() {
 #[test]
 fn a_nested_begin_restarts_the_recording() {
     let ((), only_b) = recorded(|| {
-        inverse(5);
+        multiple(5);
     });
     airbender_crypto_record_begin();
-    inverse(3);
+    multiple(3);
     airbender_crypto_record_begin();
-    inverse(5);
+    multiple(5);
     assert_eq!(take_recording(), only_b);
 }
 
 #[test]
 fn calls_after_end_are_not_recorded() {
     airbender_crypto_record_begin();
-    inverse(3);
+    multiple(3);
     let first = take_recording();
-    inverse(5);
+    multiple(5);
     assert_eq!(end(16), 0);
     let ((), again) = recorded(|| {
-        inverse(3);
+        multiple(3);
     });
     assert_eq!(first, again);
 }
@@ -94,13 +95,14 @@ fn calls_after_end_are_not_recorded() {
 #[test]
 fn failing_calls_record_nothing_and_keep_the_recording_usable() {
     let ((), alone) = recorded(|| {
-        inverse(3);
+        multiple(3);
     });
     airbender_crypto_record_begin();
-    let mut output = Bytes { data: [0xa5; 32] };
-    let status = unsafe { airbender_secp256k1_fe_inverse(&Bytes { data: [0; 32] }, &mut output) };
-    assert_eq!((status, output.data), (EFAIL, [0xa5; 32]));
-    inverse(3);
+    let mut output = Bytes { data: [0xa5; 64] };
+    let off_curve = Bytes { data: [0xff; 64] };
+    let status = unsafe { zkvm_bn254_g1_mul(&off_curve, &Bytes { data: [0; 32] }, &mut output) };
+    assert_eq!((status, output.data), (EFAIL, [0xa5; 64]));
+    multiple(3);
     assert_eq!(take_recording(), alone);
 }
 

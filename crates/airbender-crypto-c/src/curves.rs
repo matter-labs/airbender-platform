@@ -1,18 +1,11 @@
-//! C bindings of the curve precompile endpoints and of the subgroup, cofactor and normalization
-//! helpers.
-use crate::{commit, crypto, decode, input, point, point_bytes, read, with_active_oracle};
+//! C bindings of the curve precompile endpoints.
+use crate::{commit, crypto, input, point_bytes, read, with_active_oracle};
 use crate::{Bytes, Pair};
-use alloc::alloc::Global;
-use alloc::vec::Vec;
 use core::{mem, slice};
-use crypto::ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
-use crypto::ark_ec::{AffineRepr, CurveGroup};
-use crypto::precompiles;
-use crypto::{bls12_381 as bls, bn254 as bn};
-#[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
-use crypto::{
-    hinted_ops,
-    hints::{self, Bls12381Fq2Divider, Bls12381FqDivider},
+use crypto::bls12_381 as bls;
+use crypto::precompiles::{
+    self, MAX_BLS12_381_G1_MSM_PAIRS, MAX_BLS12_381_G2_MSM_PAIRS, MAX_BLS12_381_PAIRS,
+    MAX_BN254_PAIRS,
 };
 
 /// Compact BLS12-381 coordinates widened to EIP-2537's 64 bytes per base-field element
@@ -30,12 +23,6 @@ fn eip2537<const N: usize, const M: usize>(compact: &[u8; N]) -> [u8; M] {
     padded
 }
 
-fn bls_g1(bytes: &[u8; 96]) -> Option<bls::G1Affine> {
-    point(bytes)
-}
-fn bls_g2(bytes: &[u8; 192]) -> Option<bls::G2Affine> {
-    point(bytes)
-}
 fn bls_out1(p: bls::G1Affine) -> Bytes<96> {
     point_bytes(p)
 }
@@ -86,14 +73,17 @@ pub unsafe extern "C" fn zkvm_bn254_pairing(
     verified: *mut bool,
 ) -> i32 {
     commit(verified, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a check costs 45000 + 34000 per
+        // pair (EIP-1108), so it can pay for (2^24 - 45000) / 34000 = 492 pairs: more fail
+        // before the input is read.
+        if num_pairs > MAX_BN254_PAIRS {
+            return None;
+        }
         let pairs = input(pairs, num_pairs);
         // the EIP-197 encoding: `Pair` is two byte arrays with no padding between or after them
         const { assert!(mem::size_of::<Pair<64, 128>>() == 192) };
         let src = slice::from_raw_parts(pairs.as_ptr().cast::<u8>(), mem::size_of_val(pairs));
-        with_active_oracle(|oracle| {
-            precompiles::bn254_pairing_check(num_pairs, src, Global, oracle)
-        })
-        .ok()
+        with_active_oracle(|oracle| precompiles::bn254_pairing_check(num_pairs, src, oracle)).ok()
     })
 }
 
@@ -127,22 +117,21 @@ pub unsafe extern "C" fn zkvm_bls12_g2_add(
     })
 }
 
-/// The EIP-2537 MSM input of compact `(point, scalar)` pairs; `None` for none, which EIP-2537
-/// rejects
+/// The EIP-2537 MSM input of compact `(point, scalar)` pairs, widened one pair at a time; `None`
+/// for none, which EIP-2537 rejects
 fn msm_input<const P: usize, const Q: usize, const N: usize>(
     pairs: &[Pair<P, 32>],
-) -> Option<Vec<[u8; N]>> {
+) -> Option<impl ExactSizeIterator<Item = [u8; N]> + '_> {
     const { assert!(N == Q + 32) };
     if pairs.is_empty() {
         return None;
     }
-    let encoded = pairs.iter().map(|pair| {
+    Some(pairs.iter().map(|pair| {
         let mut bytes = [0; N];
         bytes[..Q].copy_from_slice(&eip2537::<P, Q>(&pair.first.data));
         bytes[Q..].copy_from_slice(&pair.second.data);
         bytes
-    });
-    Some(encoded.collect())
+    }))
 }
 
 #[no_mangle]
@@ -154,9 +143,14 @@ pub unsafe extern "C" fn zkvm_bls12_g1_msm(
     result: *mut Bytes<96>,
 ) -> i32 {
     commit(result, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a pair costs 12000 gas at the
+        // largest discount, 519/1000 from 128 pairs on (EIP-2537), so it can pay for
+        // 2^24 / (12000 * 519 / 1000) = 2693 pairs: more fail before the input is read.
+        if num_pairs > MAX_BLS12_381_G1_MSM_PAIRS {
+            return None;
+        }
         let input = msm_input::<96, 128, 160>(input(pairs, num_pairs))?;
-        let sum =
-            with_active_oracle(|oracle| precompiles::bls12_381_g1_msm(&input, Global, oracle));
+        let sum = with_active_oracle(|oracle| precompiles::bls12_381_g1_msm(input, oracle));
         sum.ok().map(bls_out1)
     })
 }
@@ -170,9 +164,14 @@ pub unsafe extern "C" fn zkvm_bls12_g2_msm(
     result: *mut Bytes<192>,
 ) -> i32 {
     commit(result, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a pair costs 22500 gas at the
+        // largest discount, 524/1000 from 128 pairs on (EIP-2537), so it can pay for
+        // 2^24 / (22500 * 524 / 1000) = 1423 pairs: more fail before the input is read.
+        if num_pairs > MAX_BLS12_381_G2_MSM_PAIRS {
+            return None;
+        }
         let input = msm_input::<192, 256, 288>(input(pairs, num_pairs))?;
-        let sum =
-            with_active_oracle(|oracle| precompiles::bls12_381_g2_msm(&input, Global, oracle));
+        let sum = with_active_oracle(|oracle| precompiles::bls12_381_g2_msm(input, oracle));
         sum.ok().map(bls_out2)
     })
 }
@@ -186,22 +185,25 @@ pub unsafe extern "C" fn zkvm_bls12_pairing(
     verified: *mut bool,
 ) -> i32 {
     commit(verified, || {
+        // A transaction has at most 2^24 gas (EIP-7825) and a check costs 37700 + 32600 per
+        // pair (EIP-2537), so it can pay for (2^24 - 37700) / 32600 = 513 pairs: more fail
+        // before the input is read.
+        if num_pairs > MAX_BLS12_381_PAIRS {
+            return None;
+        }
         let pairs = input(pairs, num_pairs);
         // EIP-2537 rejects an empty input; the endpoint leaves it to its caller
         if pairs.is_empty() {
             return None;
         }
-        let input: Vec<[u8; 384]> = pairs
-            .iter()
-            .map(|pair| {
-                let mut bytes = [0; 384];
-                bytes[..128].copy_from_slice(&eip2537::<96, 128>(&pair.first.data));
-                bytes[128..].copy_from_slice(&eip2537::<192, 256>(&pair.second.data));
-                bytes
-            })
-            .collect();
-        with_active_oracle(|oracle| precompiles::bls12_381_pairing_check(&input, Global, oracle))
-            .ok()
+        // widened to the EIP-2537 encoding one pair at a time
+        let input = pairs.iter().map(|pair| {
+            let mut bytes = [0; 384];
+            bytes[..128].copy_from_slice(&eip2537::<96, 128>(&pair.first.data));
+            bytes[128..].copy_from_slice(&eip2537::<192, 256>(&pair.second.data));
+            bytes
+        });
+        with_active_oracle(|oracle| precompiles::bls12_381_pairing_check(input, oracle)).ok()
     })
 }
 
@@ -249,159 +251,5 @@ pub unsafe extern "C" fn zkvm_kzg_point_eval(
             precompiles::kzg_verify_proof(&commitment.data, &proof.data, &z.data, &y.data, oracle)
         })
         .ok()
-    })
-}
-
-/// The point of Jacobian coordinates `X || Y || Z`, normalized by `normalize`, if it is on the
-/// curve (`Z = 0` is infinity, whatever `X` and `Y`)
-unsafe fn normalize<C: SWCurveConfig, const N: usize, const M: usize>(
-    point: *const Bytes<N>,
-    result: *mut Bytes<M>,
-    normalize: impl FnOnce(&Projective<C>) -> Affine<C>,
-) -> i32 {
-    commit(result, || {
-        let input = read(point).data;
-        let size = N / 3;
-        let p = Projective::<C>::new_unchecked(
-            decode(&input[..size])?,
-            decode(&input[size..2 * size])?,
-            decode(&input[2 * size..])?,
-        );
-        let p = normalize(&p);
-        p.is_on_curve().then(|| point_bytes(p))
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// See the crate-level pointer contract. Coordinates are X, Y, Z (Jacobian).
-pub unsafe extern "C" fn airbender_bn254_g1_to_affine(
-    point: *const Bytes<96>,
-    result: *mut Bytes<64>,
-) -> i32 {
-    normalize::<bn::g1::Config, 96, 64>(point, result, |p| {
-        hinted!(
-            |oracle| hinted_ops::to_affine_with_inverse(p, |z| hints::bn254_fq_inverse(oracle, z)),
-            p.into_affine(),
-        )
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// See the crate-level pointer contract. Coordinates are X, Y, Z (Jacobian).
-pub unsafe extern "C" fn airbender_bls12_g1_to_affine(
-    point: *const Bytes<144>,
-    result: *mut Bytes<96>,
-) -> i32 {
-    normalize::<bls::g1::Config, 144, 96>(point, result, |p| {
-        hinted!(
-            |oracle| bls::g1::into_affine_with_inverse(p, |z| hints::bls12_381_fq_inverse(
-                oracle, z
-            )),
-            p.into_affine(),
-        )
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// See the crate-level pointer contract. Coordinates are X, Y, Z (Jacobian).
-pub unsafe extern "C" fn airbender_bls12_g2_to_affine(
-    point: *const Bytes<288>,
-    result: *mut Bytes<192>,
-) -> i32 {
-    normalize::<bls::g2::Config, 288, 192>(point, result, |p| {
-        hinted!(
-            |oracle| bls::g2::into_affine_with_inverse(p, |z| hints::bls12_381_fq2_inverse(
-                oracle, z
-            )),
-            p.into_affine(),
-        )
-    })
-}
-
-// These take any on-curve point, inside the subgroup or not; cofactor clearing does not reduce its
-// scalar. With an oracle they are affine, with checked division hints.
-
-#[no_mangle]
-/// # Safety
-/// See the crate-level pointer contract.
-pub unsafe extern "C" fn airbender_bls12_g1_is_in_subgroup(
-    point: *const Bytes<96>,
-    result: *mut bool,
-) -> i32 {
-    commit(result, || {
-        let p = bls_g1(&read(point).data)?;
-        Some(
-            p.is_zero()
-                || hinted!(
-                    |oracle| bls::g1::is_in_subgroup_with_divider(
-                        &p,
-                        &mut Bls12381FqDivider::new(oracle)
-                    ),
-                    p.is_in_correct_subgroup_assuming_on_curve(),
-                ),
-        )
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// See the crate-level pointer contract.
-pub unsafe extern "C" fn airbender_bls12_g1_clear_cofactor(
-    point: *const Bytes<96>,
-    result: *mut Bytes<96>,
-) -> i32 {
-    commit(result, || {
-        let p = bls_g1(&read(point).data)?;
-        if p.is_zero() {
-            return Some(bls_out1(p));
-        }
-        Some(bls_out1(hinted!(
-            |oracle| bls::g1::clear_cofactor_with_divider(&p, &mut Bls12381FqDivider::new(oracle)),
-            p.clear_cofactor(),
-        )))
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// See the crate-level pointer contract.
-pub unsafe extern "C" fn airbender_bls12_g2_is_in_subgroup(
-    point: *const Bytes<192>,
-    result: *mut bool,
-) -> i32 {
-    commit(result, || {
-        let p = bls_g2(&read(point).data)?;
-        Some(
-            p.is_zero()
-                || hinted!(
-                    |oracle| bls::g2::is_in_subgroup_with_divider(
-                        &p,
-                        &mut Bls12381Fq2Divider::new(oracle)
-                    ),
-                    p.is_in_correct_subgroup_assuming_on_curve(),
-                ),
-        )
-    })
-}
-
-#[no_mangle]
-/// # Safety
-/// See the crate-level pointer contract.
-pub unsafe extern "C" fn airbender_bls12_g2_clear_cofactor(
-    point: *const Bytes<192>,
-    result: *mut Bytes<192>,
-) -> i32 {
-    commit(result, || {
-        let p = bls_g2(&read(point).data)?;
-        if p.is_zero() {
-            return Some(bls_out2(p));
-        }
-        Some(bls_out2(hinted!(
-            |oracle| bls::g2::clear_cofactor_with_divider(&p, &mut Bls12381Fq2Divider::new(oracle)),
-            p.clear_cofactor(),
-        )))
     })
 }

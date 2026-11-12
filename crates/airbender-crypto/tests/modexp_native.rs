@@ -1,10 +1,6 @@
 //! ModExp without `cfg(test)`, where the single-digit path runs on the naive `U256`: the vectors
 //! through both paths, with tapes that must match the unit tests' (delegated `U256`) and replay.
-#![cfg(all(feature = "alloc", target_pointer_width = "64"))]
-#![cfg_attr(
-    all(feature = "alloc", target_pointer_width = "64"),
-    feature(allocator_api)
-)]
+#![cfg(all(feature = "oracle_implementations", target_pointer_width = "64"))]
 
 #[path = "../src/modexp/test_vectors.rs"]
 mod test_vectors;
@@ -13,7 +9,6 @@ mod modexp {
     use super::test_vectors::MODEXP_VECTORS;
     use airbender_crypto::hints::{record_hints, HintError, MemoryOracle, NoHints};
     use airbender_crypto::modexp::{advice, modexp, software, write_modexp_output};
-    use std::alloc::Global;
     use std::collections::VecDeque;
 
     /// `modexp::tests::TAPES_DIGEST`
@@ -90,7 +85,7 @@ mod modexp {
         (base, exp, modulus, mod_len)
     }
 
-    fn padded(output: Vec<u8, Global>, mod_len: usize) -> Vec<u8> {
+    fn padded(output: &[u8], mod_len: usize) -> Vec<u8> {
         let mut dst = Vec::new();
         write_modexp_output(output, mod_len, &mut dst).unwrap();
         dst
@@ -103,17 +98,16 @@ mod modexp {
             let (base, exp, modulus, mod_len) = parse_input(&decode(input));
             let expected = decode(expected);
 
-            let software = modexp(&base, &exp, &modulus, Global, None::<&mut NoHints>);
-            assert_eq!(software, software::modexp(&base, &exp, &modulus, Global));
-            assert_eq!(padded(software, mod_len), expected, "{name}: software");
+            let software = modexp(&base, &exp, &modulus, None::<&mut NoHints>);
+            assert_eq!(software, software::modexp(&base, &exp, &modulus));
+            assert_eq!(padded(&software, mod_len), expected, "{name}: software");
 
-            let (advice, tape) =
-                record_hints(|oracle| modexp(&base, &exp, &modulus, Global, Some(oracle)));
-            assert_eq!(padded(advice.clone(), mod_len), expected, "{name}: advice");
+            let (advice, tape) = record_hints(|oracle| modexp(&base, &exp, &modulus, Some(oracle)));
+            assert_eq!(padded(&advice, mod_len), expected, "{name}: advice");
             digest_tape(&mut digest, &tape);
 
             let mut guest = Tape(tape.into());
-            let replayed = advice::modexp(&base, &exp, &modulus, &mut guest, Global);
+            let replayed = advice::modexp(&base, &exp, &modulus, &mut guest);
             assert_eq!(replayed, advice, "{name}: replay");
             assert!(guest.0.is_empty(), "{name}: the replay takes the tape");
         }

@@ -9,52 +9,54 @@
 
 mod answer;
 mod encoding;
-// The bn254 and bls12-381 hints answer straight into the guest's delegated representation, so on
-// RV32 they need `bigint_ops` (which `proving` turns on).
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+// The hinted operations (`hinted_operations`): the answers are read in the representation of
+// the fields of the build.
+#[cfg(any(feature = "hinted_operations", test))]
 mod fields;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
 pub mod guest_layout;
-// The oracle side reads the requests of a querier in this process as `FieldOpsHint64`.
-#[cfg(all(any(feature = "alloc", test), target_pointer_width = "64"))]
-mod host;
 mod oracle;
 mod pairing;
 mod request;
 mod secp256k1;
 #[cfg(test)]
 pub(crate) mod test_support;
-#[cfg(any(feature = "alloc", test))]
 pub(crate) mod wide_div;
 
 pub use self::answer::{read_hint_answer, HintAnswer, HintTarget};
 pub use self::encoding::HintEncoding;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 pub use self::fields::{
     bls12_381_fq12_inverse, bls12_381_fq2_inverse, bls12_381_fq2_sqrt, bls12_381_fq_inverse,
     bls12_381_fq_sqrt, bn254_fq12_inverse, bn254_fq_inverse, Bls12381Fq2Divider, Bls12381FqDivider,
     Bn254FqDivider,
 };
-#[cfg(all(any(feature = "alloc", test), target_pointer_width = "64"))]
-pub use self::host::{
-    answer_query, not_identity_claim, read_querier_u32_words, record_hints, NativeQuerierMemory,
-    RecordingHintOracle,
-};
+// The oracle side (`oracle_common`), kept here for the callers of the hints
 pub use self::oracle::{HintError, NoHints};
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 pub use self::pairing::{
     bls12_381_kzg_residue_witness, bls12_381_pairing_residue_witness, bn254_g2_pairing_slopes,
     bn254_pairing_residue_witness, G2SlopeHints, HintedChain,
 };
 pub use self::pairing::{checked_inverse, Bls12381Pair, PairingClaim};
 pub use self::request::{
-    query_field_hint, query_field_hint_into, read_field_hint_request, read_querier_word,
-    send_field_hint_query, FieldHintOp, FieldOpsHint, FieldOpsHint64, GenericFieldOpsHint,
-    QuerierMemory,
+    query_field_hint, query_field_hint_into, read_field_hint_request, send_field_hint_query,
+    FieldHintOp, FieldOpsHint, FieldOpsHint64, GenericFieldOpsHint,
 };
 pub use self::secp256k1::{RecoveryRequest, Secp256k1Element, Secp256k1HooksWithOracle};
+#[cfg(all(feature = "oracle_processor", target_pointer_width = "64"))]
+pub use crate::oracle_common::CryptoHints;
+#[cfg(all(
+    any(feature = "oracle_implementations", test),
+    target_pointer_width = "64"
+))]
+pub use crate::oracle_common::{
+    answer_query, not_identity_claim, read_querier_u32_words, record_hints, NativeQuerierMemory,
+    RecordingHintOracle,
+};
 
-pub use airbender_oracle::{MemoryOracle, OracleError};
+pub use airbender_oracle::{
+    read_querier_word, MemoryOracle, OracleError, QuerierMemory, QuerierMemoryError,
+};
 
 pub use airbender_oracle::query_ids::{
     ADVICE_SUBSPACE_MASK, FIELD_OPS_ADVISE_QUERY_ID, MODEXP_ADVICE_QUERY_ID,
@@ -156,7 +158,7 @@ mod tests {
             self.0
         }
 
-        fn read_u32(&self, _address: usize) -> Result<u32, HintError> {
+        fn read_u32(&self, _address: usize) -> Result<u32, QuerierMemoryError> {
             Ok(0)
         }
     }
@@ -169,7 +171,7 @@ mod tests {
         );
         assert_eq!(
             read_querier_word(&Zeroes(2), 0x1000),
-            Err(HintError("unsupported querier word size"))
+            Err(QuerierMemoryError("unsupported querier word size"))
         );
         assert_eq!(
             read_field_hint_request(&Zeroes(4), usize::MAX - 3),

@@ -334,7 +334,7 @@ pub fn prepare_with_slopes(
 
 /// The lines of `Q` exactly as a verifier with hints computes them: the affine ones, or the
 /// projective ones for an exceptional chain. A prover that computes a residue witness
-/// (`crate::residue_witness`) for a verifier's Miller loop output must use these lines: the
+/// (`crate::oracle_common::residue_witness`) for a verifier's Miller loop output must use these lines: the
 /// affine and the projective lines differ by factors in `Fq2`, which the pairing check is
 /// invariant to but the witness equation `f s = c^λ` is not.
 pub fn prepare_as_verifier(q: &G2Affine) -> G2PreparedNoAlloc {
@@ -510,7 +510,10 @@ mod tests {
                 let d = Fq12::rand(&mut rng);
                 let c = d.inverse().unwrap();
                 let l = Bn254::multi_miller_loop_normalized(Some((&d, &c)), pairs());
-                assert_eq!(l, f * d.pow(crate::residue_witness::bn254::SIX_X_PLUS_2));
+                assert_eq!(
+                    l,
+                    f * d.pow(crate::oracle_common::residue_witness::bn254::SIX_X_PLUS_2)
+                );
             }
         }
     }

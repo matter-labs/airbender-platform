@@ -1,4 +1,5 @@
 //! Host harness for the real C guest, run by `crates/airbender-crypto-c/tests/rv32-runtime.py`.
+//! It lives here because the crypto crates do not depend on host tooling.
 //!
 //! The guest reads a scenario word, then (in `csr-oracle` builds) the hint tape that a native build
 //! of the same fixture recorded. Each CSR read takes the next input word, so the tape must be
@@ -272,13 +273,6 @@ fn c_runtime_image() {
     );
     assert!(accepted(&extended), "{extended:?}");
     assert_eq!(log.read, 1 + tape.len());
-
-    // Duplicate heap initialization traps
-    let outcome = run(&runner, &input(1, &tape), &mut Log::default(), false);
-    assert!(
-        trapped(&outcome),
-        "duplicate heap initialization: {outcome:?}"
-    );
 
     let (mut tampered, mut unchanged) = (0, 0);
     if reads_hints {
