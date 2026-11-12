@@ -1,11 +1,12 @@
 //! The responder for this crate's hints as an [`OracleQueryProcessor`] of
-//! `airbender_oracle::processor::QueryDispatcher` (the `oracle_processor` feature).
+//! `airbender_oracle::processor::QueryDispatcher` (the `oracle_processor` feature). Only the
+//! trait is needed here (`airbender_oracle::query_processor`), so no host tooling is pulled in.
 
 use super::answer_query;
 use crate::hints::{
     FIELD_OPS_ADVISE_QUERY_ID, MODEXP_ADVICE_QUERY_ID, U256_WIDE_DIV_REM_ADVICE_QUERY_ID,
 };
-use airbender_oracle::processor::{OracleQueryProcessor, RunMode};
+use airbender_oracle::query_processor::{OracleQueryProcessor, RunMode};
 use airbender_oracle::QuerierMemory;
 use alloc::vec::Vec;
 
@@ -73,17 +74,62 @@ impl OracleQueryProcessor for CryptoHints {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hints::{record_hints, HintError, NoHints};
+    use crate::hints::{record_hints, HintError, MemoryOracle, NativeQuerierMemory, NoHints};
     use crate::modexp::modexp;
     use crate::precompiles::secp256k1_ecrecover;
-    use airbender_oracle::processor::QueryDispatcher;
+    use alloc::collections::VecDeque;
     use hex_literal::hex;
 
-    /// The dispatcher with the responder, for a run in `mode`
-    fn oracle(mode: RunMode) -> QueryDispatcher<HintError> {
-        let mut oracle = QueryDispatcher::new(mode);
-        oracle.add_external_processor(CryptoHints);
-        oracle
+    /// A native run's oracle over the responder alone, as a dispatcher serves it: each query
+    /// goes to the processor, and the querier reads the native response
+    #[derive(Default)]
+    struct NativeRun {
+        response: VecDeque<u32>,
+        queries: usize,
+    }
+
+    impl MemoryOracle for NativeRun {
+        type Error = HintError;
+
+        unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), HintError> {
+            assert!(CryptoHints.supported_memory_query_ids().contains(&query_id));
+            assert!(self.response.is_empty(), "the previous answer was read");
+            let (mut native, mut guest) = (Vec::new(), Vec::new());
+            // SAFETY: the querier exposes the request during this call
+            let memory = unsafe { NativeQuerierMemory::new() };
+            CryptoHints.process_memory_query(
+                query_id,
+                input_word,
+                &memory,
+                RunMode::NativeRunOnly,
+                &mut native,
+                &mut guest,
+            );
+            assert!(guest.is_empty(), "a native run only has no guest response");
+            self.response = native.into();
+            self.queries += 1;
+            Ok(())
+        }
+
+        fn read_word(&mut self) -> Result<u32, HintError> {
+            self.response
+                .pop_front()
+                .ok_or(HintError("oracle response is shorter than expected"))
+        }
+
+        unsafe fn write_words(&mut self, dst: *mut u32, num_words: usize) -> Result<(), HintError> {
+            for i in 0..num_words {
+                let word = self.read_word()?;
+                // SAFETY: `i < num_words`, guaranteed by the caller
+                unsafe { dst.add(i).write(word) };
+            }
+            Ok(())
+        }
+
+        fn finish_query(&mut self) -> Result<(), HintError> {
+            assert!(self.response.is_empty(), "the answer was read in full");
+            Ok(())
+        }
     }
 
     #[test]
@@ -94,9 +140,10 @@ mod tests {
         let digest = hex!("38d18acb67d25c8bb9942764b62f18e17054f66a817bd4295423adf9ed98873e");
         let s = hex!("789d1dd423d25f0772d2748d60f7e4b81bb14d086eba8e8e8efb6dcff8a4ae02");
 
-        let mut oracle = oracle(RunMode::NativeRunOnly);
+        let mut oracle = NativeRun::default();
         let power = modexp(&base, &exp, &modulus, Some(&mut oracle));
         let key = secp256k1_ecrecover(&digest, &digest, &s, false, Some(&mut oracle)).unwrap();
+        assert!(oracle.queries > 0);
 
         assert_eq!(*power, *modexp(&base, &exp, &modulus, None::<&mut NoHints>));
         let plain = secp256k1_ecrecover(&digest, &digest, &s, false, None::<&mut NoHints>);

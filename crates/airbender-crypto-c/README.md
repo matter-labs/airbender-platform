@@ -114,7 +114,7 @@ python3 crates/airbender-crypto-c/tests/rv32-runtime.py --all
 `c-abi.sh` links `tests/abi.c` as C11 and C++11 against the native archive and checks the
 RV32 struct layouts. `rv32-runtime.py` records the tape of `tests/runtime.c` natively, then
 builds the fixture for each RV32 configuration and runs it on the FullUnsigned machine through
-`airbender-crypto/tests/rv32_runtime.rs`: the results must match the native ones, the tape must
+`airbender-host/tests/crypto_c_rv32_runtime.rs`: the results must match the native ones, the tape must
 be read exactly, and a tampered tape must trap or change nothing. Linking the guest also checks
 that none of its live code can allocate (see `c-runtime`). Both need clang; the RV32
 test also needs the pinned toolchain's `llvm-tools-preview`.

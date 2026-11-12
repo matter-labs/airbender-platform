@@ -52,7 +52,6 @@ num-traits = { workspace = true }
 # ark-bls12-381 = { path = "../../git_copies/algebra/curves/bls12_381", default-features = false, features = ["curve", "scalar_field"] }
 
 [dev-dependencies]
-airbender-host = { path = "../airbender-host", default-features = false }
 ruint = { workspace = true }
 ark-std = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }
@@ -84,9 +83,10 @@ hinted_operations = []
 # (`*/oracle_implementations`, `oracle_common`), which allocate, and the recorder of the hint
 # tape.
 oracle_implementations = ["hinted_operations", "alloc"]
-# The oracle side as a processor of `airbender_oracle::processor::QueryDispatcher`, the oracle of
-# the guest in Airbender's simulators (`CryptoHints`): `std`, and the simulators' CSR trait.
-oracle_processor = ["oracle_implementations", "airbender-oracle/oracle_processor"]
+# The oracle side as a responder of the oracle protocol (`CryptoHints`, an
+# `airbender_oracle::query_processor::OracleQueryProcessor`), which a host registers with its
+# `QueryDispatcher`. Only the trait is pulled in: no simulator or prover crate.
+oracle_processor = ["oracle_implementations", "airbender-oracle/query_processor"]
 # bigint_ops = ["zeroize", "num-bigint", "num-traits", "num-integer"]
 # The bigint delegation of the RV32 guest for the field arithmetic
 bigint_ops = []

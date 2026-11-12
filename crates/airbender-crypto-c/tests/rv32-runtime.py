@@ -123,8 +123,9 @@ SECTIONS {
                 str(out / 'guest.elf'), str(out / ('guest.' + extension)))
         env.update(CRYPTO_C_IMAGE=str(out / 'guest.bin'), CRYPTO_C_TAPE=str(out / 'tape.hex'),
                    CRYPTO_C_DIGEST=digest, CRYPTO_C_FEATURES=features)
-        selection = ['--release', '--test', 'rv32_runtime', 'c_runtime_image']
-        run('cargo', 'test', '-p', 'airbender-crypto', *selection, '--', '--ignored', '--nocapture', env=env)
+        # the simulator harness is a test of the host crate (without its GPU prover)
+        selection = ['--no-default-features', '--release', '--test', 'crypto_c_rv32_runtime', 'c_runtime_image']
+        run('cargo', 'test', '-p', 'airbender-host', *selection, '--', '--ignored', '--nocapture', env=env)
 
 
 if __name__ == '__main__':

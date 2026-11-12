@@ -28,7 +28,7 @@ pub fn modexp<O: MemoryOracle>(
 }
 
 /// [`modexp`] with hints computed natively instead of by an oracle, for fuzzing.
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 pub fn delegated_modexp_with_naive_advisor(
     base: &[u8],
     exp: &[u8],
@@ -290,5 +290,22 @@ mod test {
             next_response: 0,
         };
         modexp_with_advisor(&base, &[2], &modulus, &mut advisor);
+    }
+
+    #[test]
+    fn naive_advisor_reduces_a_513_byte_square() {
+        use super::delegated_modexp_with_naive_advisor;
+
+        let mut base = vec![0u8; 513];
+        base[0] = 1;                    // 2^4096
+
+        let mut modulus = base.clone();
+        modulus[512] = 1;              // 2^4096 + 1
+
+        let result = delegated_modexp_with_naive_advisor(
+            &base,
+            &[2],
+            &modulus,
+        );
     }
 }

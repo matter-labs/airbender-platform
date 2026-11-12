@@ -99,7 +99,9 @@ cargo test -p airbender-crypto --features oracle_implementations
 ```
 
 Debug builds run fewer property-test cases for the hint-heavy endpoints; `--release` runs them all.
-The two blake2s tests need the RISC-V program built by `blake2s/test_program/dump_bin.sh`.
+The crate depends on no host tooling (simulator, prover): the tests that run a RISC-V guest
+live in `airbender-host/tests`. `crypto_blake2s_guest.rs` there needs the program built by
+`blake2s/test_program/dump_bin.sh`.
 
 ## License
 

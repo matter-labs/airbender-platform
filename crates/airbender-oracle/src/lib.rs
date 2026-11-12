@@ -15,7 +15,9 @@
 //!
 //! The oracle side reads the inputs of a query from the memory of the querier through
 //! [`QuerierMemory`] ([`NativeQuerierMemory`] for a querier in this process). With the
-//! `oracle_processor` feature (`std`), [`processor`] has the oracle of the host:
+//! `query_processor` feature (`alloc`), [`query_processor`] has the responder trait that a crate
+//! implements for its queries, free of any host tooling. With the
+//! `oracle_processor` feature (`std`, and the simulators' CSR trait), [`processor`] has the oracle of the host:
 //! [`QueryDispatcher`](processor::QueryDispatcher) dispatches queries to
 //! [`OracleQueryProcessor`](processor::OracleQueryProcessor)s, serves a querier in this process
 //! as a [`MemoryOracle`] and the RISC-V guest of Airbender's simulators (transpiler-based and
@@ -28,6 +30,9 @@
 
 #![cfg_attr(not(feature = "oracle_processor"), no_std)]
 
+#[cfg(feature = "query_processor")]
+extern crate alloc;
+
 #[cfg(target_arch = "riscv32")]
 mod csr;
 mod error;
@@ -36,6 +41,8 @@ mod oracle;
 pub mod processor;
 mod querier_memory;
 pub mod query_ids;
+#[cfg(feature = "query_processor")]
+pub mod query_processor;
 mod word_channel;
 
 #[cfg(test)]
