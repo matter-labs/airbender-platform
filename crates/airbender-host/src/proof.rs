@@ -99,9 +99,9 @@ impl RealProof {
     pub(crate) fn debug_info(&self) -> String {
         let counts = &self.inner.proof_counts;
         format!(
-            "level={:?}, backend={:?}, cycles={}, layers={}, riscv_proofs={}, inits_and_teardowns_proofs={}, delegation_proofs={}, total_ms={}",
+            "level={:?}, soundness={:?}, cycles={}, layers={}, riscv_proofs={}, inits_and_teardowns_proofs={}, delegation_proofs={}, total_ms={}",
             self.level,
-            self.inner.backend,
+            self.inner.soundness_mode,
             self.inner.cycles,
             self.inner.chain_end_params.len(),
             counts.riscv_proof_count,

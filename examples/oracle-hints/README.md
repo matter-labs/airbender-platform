@@ -45,6 +45,6 @@ Native run with hints:
   power: fad09d7ffb443a9f781660d4dbe4b763beef23f28a108645eaa703bb88b126d5
   key:   861254a4cf8dfd2d60e2a33e3143eac6285886f0aed91711ab7e2c013f265c55fd456667f3b08657795fe6754b6fbc11186714c4e4f48d5b856800e3e81c30c8
 
-Guest execution: cycles=150099, output=0xa372daf8
+Guest execution: cycles=148514, output=0xa372daf8
 Host verification: matches.
 ```

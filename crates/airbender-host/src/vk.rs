@@ -2,7 +2,7 @@ use crate::error::{HostError, Result};
 use crate::prover::ProverLevel;
 use crate::security::SecurityLevel;
 use airbender_core::guest::Commit;
-use prover_pipeline::{verify_artifact, ProgramSource, ProofArtifact};
+use prover_pipeline::{verify_artifact_in_mode, ProgramSource, ProofArtifact, SoundnessMode};
 use sha3::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,7 +84,9 @@ pub fn verify_proof(
         path_to_string(&resolved_bin_path)?,
         path_to_string(&resolved_text_path)?,
     );
-    let verifier_output = verify_artifact(proof, &source)
+    // the soundness mode the host's provers produce proofs in: a proof made in another mode is
+    // rejected before anything is loaded
+    let verifier_output = verify_artifact_in_mode(proof, &source, SoundnessMode::DEFAULT)
         .map_err(|err| HostError::Verification(format!("proof verification failed: {err}")))?;
     verify_expected_output(expected_output, verifier_output)?;
     Ok(verifier_output)
