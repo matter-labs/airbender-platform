@@ -12,24 +12,44 @@ use crate::hints::{HintTarget, RecoveryRequest, Secp256k1Element};
 use crate::oracle_common::Operand;
 
 /// `(candidate, is_quadratic_non_residue)`: `candidate² == input` for a square, `-input` otherwise
-pub fn base_field_sqrt(operand: &Operand) -> (FieldElement, bool) {
-    let el: FieldElement = operand.secp256k1_element();
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a `FieldElement`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn base_field_sqrt(operand: &Operand) -> (FieldElement, bool) {
+    // SAFETY: the caller's obligation
+    let el: FieldElement = unsafe { operand.secp256k1_element() };
     assert!(!el.is_zero());
     let mut candidate = el;
     let is_quadratic_residue = candidate.sqrt_in_place();
     (candidate, !is_quadratic_residue)
 }
 
-pub fn base_field_inverse(operand: &Operand) -> FieldElement {
-    let mut el: FieldElement = operand.secp256k1_element();
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a `FieldElement`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn base_field_inverse(operand: &Operand) -> FieldElement {
+    // SAFETY: the caller's obligation
+    let mut el: FieldElement = unsafe { operand.secp256k1_element() };
     assert!(!el.is_zero());
     el.invert_in_place();
     el
 }
 
 /// The quotient of the numerator and the (non-zero) denominator, two adjacent elements
-pub fn base_field_division(operand: &Operand) -> FieldElement {
-    let [numerator, denominator]: [FieldElement; 2] = operand.secp256k1_elements();
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a `[FieldElement; 2]`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn base_field_division(operand: &Operand) -> FieldElement {
+    // SAFETY: the caller's obligation
+    let [numerator, denominator]: [FieldElement; 2] = unsafe { operand.secp256k1_elements() };
     assert!(!denominator.is_zero());
     let mut quotient = denominator;
     quotient.invert_in_place();
@@ -37,8 +57,14 @@ pub fn base_field_division(operand: &Operand) -> FieldElement {
     quotient
 }
 
-pub fn scalar_field_inverse(operand: &Operand) -> Scalar {
-    let el: Scalar = operand.secp256k1_element();
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a `Scalar`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn scalar_field_inverse(operand: &Operand) -> Scalar {
+    // SAFETY: the caller's obligation
+    let el: Scalar = unsafe { operand.secp256k1_element() };
     assert!(!el.is_zero());
     el.invert_vartime()
 }
@@ -46,9 +72,16 @@ pub fn scalar_field_inverse(operand: &Operand) -> Scalar {
 /// The witness of the key recovery the operand (a `RecoveryRequest`) asks for, if there is one:
 /// none for a key at infinity, for which the recovery fails as computed. Without the static
 /// context there is no witness either, and the querier computes the key.
-pub fn recovery_witness(operand: &Operand) -> Option<RecoveryWitness> {
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a `RecoveryRequest`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn recovery_witness(operand: &Operand) -> Option<RecoveryWitness> {
     let request: RecoveryRequest = match operand.querier() {
-        HintTarget::Native => operand.native_value(),
+        // SAFETY: the caller's obligation
+        HintTarget::Native => unsafe { operand.native_value() },
         HintTarget::Guest => {
             assert_eq!(operand.size(), 5 * 32, "the operand is a recovery request");
             let words = |i: usize| -> [u32; 8] {

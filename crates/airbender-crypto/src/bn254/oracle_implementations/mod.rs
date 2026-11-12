@@ -15,13 +15,20 @@ use ark_ff::{AdditiveGroup, Field, One};
 
 /// The claim about the bn254 pairing product (see `hints::PairingClaim`). `claim_not_identity`
 /// forces a non-identity claim (for tests of the exact path).
-pub fn pairing_residue_witness(
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, `(G1Affine, G2Affine)` pairs
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn pairing_residue_witness(
     operand: &Operand,
     claim_not_identity: bool,
     responses: &mut Responses,
 ) {
     let pairs: Vec<(G1Affine, G2Affine)> = match operand.querier() {
-        HintTarget::Native => operand.native_values(),
+        // SAFETY: the caller's obligation
+        HintTarget::Native => unsafe { operand.native_values() },
         HintTarget::Guest => {
             let size = BN254_PAIR_SIZE;
             assert!(
@@ -66,9 +73,16 @@ pub fn pairing_residue_witness(
 
 /// The slopes of the two affine `G2` chains of the operand (see `hints::G2SlopeHints`); an
 /// exceptional chain is a cleared flag and zeros
-pub fn g2_pairing_slopes(operand: &Operand, responses: &mut Responses) {
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a `G2Affine`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn g2_pairing_slopes(operand: &Operand, responses: &mut Responses) {
     let q: G2Affine = match operand.querier() {
-        HintTarget::Native => operand.native_value(),
+        // SAFETY: the caller's obligation
+        HintTarget::Native => unsafe { operand.native_value() },
         HintTarget::Guest => {
             assert_eq!(
                 operand.size(),

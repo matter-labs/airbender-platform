@@ -53,50 +53,63 @@ unsafe fn read_request<'m>(
 }
 
 /// The answer to the hint `op` on `operand`
-fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) {
-    match op {
-        FieldHintOp::Secp256k1BaseFieldSqrt => {
-            responses.write(&secp256k1::base_field_sqrt(operand))
-        }
-        FieldHintOp::Secp256k1BaseFieldInverse => {
-            responses.write(&secp256k1::base_field_inverse(operand))
-        }
-        FieldHintOp::Secp256k1ScalarFieldInverse => {
-            responses.write(&secp256k1::scalar_field_inverse(operand))
-        }
-        FieldHintOp::Secp256k1BaseFieldDivision => {
-            responses.write(&secp256k1::base_field_division(operand))
-        }
-        FieldHintOp::Secp256k1RecoveryWitness => match secp256k1::recovery_witness(operand) {
-            Some(witness) => responses.write(&(true, witness)),
-            None => responses.write(&false),
-        },
-        FieldHintOp::Bn254BaseFieldInverse => {
-            responses.write(&inverse::<crate::bn254::Fq>(operand))
-        }
-        FieldHintOp::Bn254BaseFieldDivision => {
-            responses.write(&division::<crate::bn254::Fq>(operand))
-        }
-        FieldHintOp::Bn254Fq12Inverse => responses.write(&inverse::<crate::bn254::Fq12>(operand)),
-        FieldHintOp::Bls12381BaseFieldSqrt => responses.write(&bls12_381::base_field_sqrt(operand)),
-        FieldHintOp::Bls12381BaseFieldInverse => {
-            responses.write(&inverse::<crate::bls12_381::Fq>(operand))
-        }
-        FieldHintOp::Bls12381BaseFieldDivision => {
-            responses.write(&division::<crate::bls12_381::Fq>(operand))
-        }
-        FieldHintOp::Bls12381Fq12Inverse => {
-            responses.write(&inverse::<crate::bls12_381::Fq12>(operand))
-        }
-        FieldHintOp::Bn254PairingResidueWitness => {
-            bn254::pairing_residue_witness(operand, false, responses)
-        }
-        FieldHintOp::Bn254G2PairingSlopes => bn254::g2_pairing_slopes(operand, responses),
-        FieldHintOp::Bls12381KzgResidueWitness => {
-            bls12_381::kzg_residue_witness(operand, false, responses)
-        }
-        FieldHintOp::Bls12381PairingResidueWitness => {
-            bls12_381::pairing_residue_witness(operand, false, responses)
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of `op`: live values of the
+/// operand type of that op (what `Operand::new` was promised).
+unsafe fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) {
+    // SAFETY: each op goes to its own handler, which reads the operand as the operand type of
+    // that op; that the operand is one is the caller's obligation
+    unsafe {
+        match op {
+            FieldHintOp::Secp256k1BaseFieldSqrt => {
+                responses.write(&secp256k1::base_field_sqrt(operand))
+            }
+            FieldHintOp::Secp256k1BaseFieldInverse => {
+                responses.write(&secp256k1::base_field_inverse(operand))
+            }
+            FieldHintOp::Secp256k1ScalarFieldInverse => {
+                responses.write(&secp256k1::scalar_field_inverse(operand))
+            }
+            FieldHintOp::Secp256k1BaseFieldDivision => {
+                responses.write(&secp256k1::base_field_division(operand))
+            }
+            FieldHintOp::Secp256k1RecoveryWitness => match secp256k1::recovery_witness(operand) {
+                Some(witness) => responses.write(&(true, witness)),
+                None => responses.write(&false),
+            },
+            FieldHintOp::Bn254BaseFieldInverse => {
+                responses.write(&inverse::<crate::bn254::Fq>(operand))
+            }
+            FieldHintOp::Bn254BaseFieldDivision => {
+                responses.write(&division::<crate::bn254::Fq>(operand))
+            }
+            FieldHintOp::Bn254Fq12Inverse => {
+                responses.write(&inverse::<crate::bn254::Fq12>(operand))
+            }
+            FieldHintOp::Bls12381BaseFieldSqrt => {
+                responses.write(&bls12_381::base_field_sqrt(operand))
+            }
+            FieldHintOp::Bls12381BaseFieldInverse => {
+                responses.write(&inverse::<crate::bls12_381::Fq>(operand))
+            }
+            FieldHintOp::Bls12381BaseFieldDivision => {
+                responses.write(&division::<crate::bls12_381::Fq>(operand))
+            }
+            FieldHintOp::Bls12381Fq12Inverse => {
+                responses.write(&inverse::<crate::bls12_381::Fq12>(operand))
+            }
+            FieldHintOp::Bn254PairingResidueWitness => {
+                bn254::pairing_residue_witness(operand, false, responses)
+            }
+            FieldHintOp::Bn254G2PairingSlopes => bn254::g2_pairing_slopes(operand, responses),
+            FieldHintOp::Bls12381KzgResidueWitness => {
+                bls12_381::kzg_residue_witness(operand, false, responses)
+            }
+            FieldHintOp::Bls12381PairingResidueWitness => {
+                bls12_381::pairing_residue_witness(operand, false, responses)
+            }
         }
     }
 }
@@ -118,18 +131,21 @@ pub unsafe fn not_identity_claim(memory: &dyn QuerierMemory, input_word: usize) 
         native_run: Some(&mut response),
         guest_run: None,
     };
-    // SAFETY: guaranteed by the caller
-    match unsafe { read_request(memory, input_word, HintTarget::Native) } {
-        (FieldHintOp::Bn254PairingResidueWitness, operand) => {
-            bn254::pairing_residue_witness(&operand, true, &mut responses)
+    // SAFETY: guaranteed by the caller: the request is live, and so its operand is that of its
+    // op, which each handler below is the one of
+    unsafe {
+        match read_request(memory, input_word, HintTarget::Native) {
+            (FieldHintOp::Bn254PairingResidueWitness, operand) => {
+                bn254::pairing_residue_witness(&operand, true, &mut responses)
+            }
+            (FieldHintOp::Bls12381KzgResidueWitness, operand) => {
+                bls12_381::kzg_residue_witness(&operand, true, &mut responses)
+            }
+            (FieldHintOp::Bls12381PairingResidueWitness, operand) => {
+                bls12_381::pairing_residue_witness(&operand, true, &mut responses)
+            }
+            (op, _) => panic!("not a pairing request: {op:?}"),
         }
-        (FieldHintOp::Bls12381KzgResidueWitness, operand) => {
-            bls12_381::kzg_residue_witness(&operand, true, &mut responses)
-        }
-        (FieldHintOp::Bls12381PairingResidueWitness, operand) => {
-            bls12_381::pairing_residue_witness(&operand, true, &mut responses)
-        }
-        (op, _) => panic!("not a pairing request: {op:?}"),
     }
     response
 }
@@ -164,20 +180,31 @@ pub(super) unsafe fn process_field_hint_query(
     };
     // SAFETY: a native querier's request is live (the caller's obligation)
     let (op, operand) = unsafe { read_request(memory, input_word, querier) };
-    answer(op, &operand, &mut responses);
+    // SAFETY: the operand of a live request is that of its op (the caller's obligation)
+    unsafe { answer(op, &operand, &mut responses) };
 }
 
 /// The inverse of a non-zero field element
-pub(crate) fn inverse<F: HintEncoding + Copy>(operand: &Operand) -> F {
-    let el: F = operand.element();
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be an `F` (see `Operand::native_value`).
+pub(crate) unsafe fn inverse<F: HintEncoding + Copy>(operand: &Operand) -> F {
+    // SAFETY: the caller's obligation
+    let el: F = unsafe { operand.element() };
     crate::field_inverse::inverse(&el).expect("the operand is non-zero")
 }
 
 /// The quotient of the numerator and the (non-zero) denominator, two adjacent elements of a
 /// base prime field
-pub(crate) fn division<F: HintEncoding + PrimeField>(operand: &Operand) -> F {
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be an `[F; 2]` (see `Operand::native_value`).
+pub(crate) unsafe fn division<F: HintEncoding + PrimeField>(operand: &Operand) -> F {
     let [numerator, denominator]: [F; 2] = match operand.querier() {
-        HintTarget::Native => operand.native_value(),
+        // SAFETY: the caller's obligation
+        HintTarget::Native => unsafe { operand.native_value() },
         HintTarget::Guest => {
             assert_eq!(operand.size(), 16 * F::LIMBS, "the operand is two elements");
             // Montgomery limbs, any representatives: their factor `R` cancels in the quotient

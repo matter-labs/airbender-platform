@@ -38,6 +38,8 @@ impl<'m> Operand<'m> {
     ///
     /// For a native querier, `address` must point to `len_u32_words` words of live values of the
     /// op's operand types, alive and unchanged while the operand is used: they are read in place.
+    /// This says where the values are, not what they are: each read that names a type
+    /// ([`native_value`](Self::native_value) and the readers over it) is `unsafe` for that.
     pub unsafe fn new(
         memory: &'m dyn QuerierMemory,
         querier: HintTarget,
@@ -63,31 +65,61 @@ impl<'m> Operand<'m> {
         self.len_u32_words as usize * size_of::<u32>()
     }
 
-    /// The operand of a querier in this process, values of `T`
-    pub fn native_values<T: Copy>(&self) -> Vec<T> {
-        assert_eq!(self.querier, HintTarget::Native);
-        assert!(
-            self.size().is_multiple_of(size_of::<T>()),
-            "the operand is values of the type"
+    /// The address of the operand of a querier in this process as values of `T`, checked to be
+    /// aligned for them
+    fn native_ptr<T>(&self) -> *const T {
+        const { assert!(size_of::<T>() != 0, "operands are not zero-sized") };
+        assert_eq!(
+            self.querier,
+            HintTarget::Native,
+            "the querier is in this process"
         );
         assert!(
             self.address.is_multiple_of(align_of::<T>()),
             "the operand is aligned for the type"
         );
-        let values = core::ptr::with_exposed_provenance::<T>(self.address);
-        // SAFETY: the operand is live values of `T` (see `Operand::new`); size and alignment are
-        // checked above
+        core::ptr::with_exposed_provenance::<T>(self.address)
+    }
+
+    /// The operand of a querier in this process, a copy of its values of `T`.
+    ///
+    /// # Safety
+    ///
+    /// The whole operand must be live, initialized, valid values of `T`: the type the querier
+    /// wrote there, which is the operand type of the op (the promise made to [`new`](Self::new),
+    /// for the type named here). Its size and alignment are checked, its content cannot be: a
+    /// `bool`, an enum or a pointer inside `T` is taken at the querier's word.
+    ///
+    /// `T: 'static` keeps a borrow from being copied out of the querier's memory with a lifetime
+    /// that nothing ties to it. It does not make a `'static` reference inside `T` any safer than
+    /// the promise above.
+    pub unsafe fn native_values<T: Copy + 'static>(&self) -> Vec<T> {
+        let values = self.native_ptr::<T>();
+        assert!(
+            self.size().is_multiple_of(size_of::<T>()),
+            "the operand is values of the type"
+        );
+        // SAFETY: the operand is live values of `T` (the caller's obligation), aligned (checked
+        // by `native_ptr`), and this many of them fill its size
         unsafe { core::slice::from_raw_parts(values, self.size() / size_of::<T>()) }.to_vec()
     }
 
-    /// The operand of a querier in this process, a `T`
-    pub fn native_value<T: Copy>(&self) -> T {
+    /// The operand of a querier in this process, a copy of its one `T`, read in place (no
+    /// intermediate vector).
+    ///
+    /// # Safety
+    ///
+    /// As for [`native_values`](Self::native_values), for an operand that is one `T`.
+    pub unsafe fn native_value<T: Copy + 'static>(&self) -> T {
+        let value = self.native_ptr::<T>();
         assert_eq!(
             self.size(),
             size_of::<T>(),
             "the operand is a value of the type"
         );
-        self.native_values::<T>()[0]
+        // SAFETY: the operand is a live `T` (the caller's obligation), aligned (checked by
+        // `native_ptr`) and of its size (checked above)
+        unsafe { value.read() }
     }
 
     /// `len` words at `offset` bytes into the operand of the RISC-V guest
@@ -133,9 +165,15 @@ impl<'m> Operand<'m> {
     }
 
     /// A field element operand
-    pub fn element<F: HintEncoding + Copy>(&self) -> F {
+    ///
+    /// # Safety
+    ///
+    /// For a querier in this process, as for [`native_value`](Self::native_value): the operand
+    /// must be an `F`. A guest operand is read through the guest's memory only.
+    pub unsafe fn element<F: HintEncoding + Copy>(&self) -> F {
         match self.querier {
-            HintTarget::Native => self.native_value(),
+            // SAFETY: the caller's obligation
+            HintTarget::Native => unsafe { self.native_value() },
             HintTarget::Guest => {
                 assert_eq!(self.size(), 8 * F::TOTAL_LIMBS, "the operand is an element");
                 self.guest_element(0)
@@ -144,9 +182,15 @@ impl<'m> Operand<'m> {
     }
 
     /// A secp256k1 element operand (see `Secp256k1Element`)
-    pub fn secp256k1_element<T: Secp256k1Element>(&self) -> T {
+    ///
+    /// # Safety
+    ///
+    /// For a querier in this process, as for [`native_value`](Self::native_value): the operand
+    /// must be a `T`. A guest operand is read through the guest's memory only.
+    pub unsafe fn secp256k1_element<T: Secp256k1Element + 'static>(&self) -> T {
         match self.querier {
-            HintTarget::Native => self.native_value(),
+            // SAFETY: the caller's obligation
+            HintTarget::Native => unsafe { self.native_value() },
             HintTarget::Guest => {
                 assert_eq!(self.size(), 32, "the operand is an element");
                 let words: [u32; 8] = self.guest_words(0, 8).try_into().expect("8 words");
@@ -156,9 +200,17 @@ impl<'m> Operand<'m> {
     }
 
     /// `N` adjacent secp256k1 elements (see `Secp256k1Element`)
-    pub fn secp256k1_elements<T: Secp256k1Element, const N: usize>(&self) -> [T; N] {
+    ///
+    /// # Safety
+    ///
+    /// For a querier in this process, as for [`native_value`](Self::native_value): the operand
+    /// must be a `[T; N]`. A guest operand is read through the guest's memory only.
+    pub unsafe fn secp256k1_elements<T: Secp256k1Element + 'static, const N: usize>(
+        &self,
+    ) -> [T; N] {
         match self.querier {
-            HintTarget::Native => self.native_value(),
+            // SAFETY: the caller's obligation
+            HintTarget::Native => unsafe { self.native_value() },
             HintTarget::Guest => {
                 assert_eq!(self.size(), 32 * N, "the operand is {N} elements");
                 core::array::from_fn(|i| {

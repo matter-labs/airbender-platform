@@ -16,8 +16,15 @@ use ark_ff::{Field, One, Zero};
 
 /// `(candidate, is_quadratic_non_residue)`: `candidate² == input` for a square, `-input`
 /// otherwise (`p = 3 mod 4`, so exactly one of `±input` is a square)
-pub fn base_field_sqrt(operand: &Operand) -> (Fq, bool) {
-    let el: Fq = operand.element();
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, an `Fq`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn base_field_sqrt(operand: &Operand) -> (Fq, bool) {
+    // SAFETY: the caller's obligation
+    let el: Fq = unsafe { operand.element() };
     assert!(!el.is_zero());
     match el.sqrt() {
         Some(root) => (root, false),
@@ -30,9 +37,20 @@ pub fn base_field_sqrt(operand: &Operand) -> (Fq, bool) {
 
 /// The claim about `e(p1, G2) e(p2, tau G2)` (see `hints::PairingClaim`). `claim_not_identity`
 /// forces a non-identity claim (for tests of the exact path).
-pub fn kzg_residue_witness(operand: &Operand, claim_not_identity: bool, responses: &mut Responses) {
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a `[G1Affine; 2]`
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn kzg_residue_witness(
+    operand: &Operand,
+    claim_not_identity: bool,
+    responses: &mut Responses,
+) {
     let [p1, p2]: [G1Affine; 2] = match operand.querier() {
-        HintTarget::Native => operand.native_value(),
+        // SAFETY: the caller's obligation
+        HintTarget::Native => unsafe { operand.native_value() },
         HintTarget::Guest => {
             let size = BLS12_381_G1_AFFINE.size;
             assert_eq!(operand.size(), 2 * size, "the operand is two affine points");
@@ -68,13 +86,20 @@ pub fn kzg_residue_witness(operand: &Operand, claim_not_identity: bool, response
 }
 
 /// The claim about the bls12-381 pairing product, from the verifier's projective lines
-pub fn pairing_residue_witness(
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, `Bls12381Pair`s
+/// (what `Operand::new` was promised): it is read in place as that type. A guest operand is read
+/// through the guest's memory only.
+pub unsafe fn pairing_residue_witness(
     operand: &Operand,
     claim_not_identity: bool,
     responses: &mut Responses,
 ) {
     let pairs: Vec<Bls12381Pair> = match operand.querier() {
-        HintTarget::Native => operand.native_values(),
+        // SAFETY: the caller's obligation
+        HintTarget::Native => unsafe { operand.native_values() },
         HintTarget::Guest => {
             assert!(
                 operand.size().is_multiple_of(BLS12_381_PAIR_SIZE),
