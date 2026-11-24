@@ -4,7 +4,15 @@
 //! path ([`software::modexp`]) otherwise. Both agree after [`write_modexp_output`]. The operands
 //! are bounded by EIP-7823 ([`MAX_OPERAND_BYTES`]), so every working value lives on the stack
 //! ([`FixedVec`]): nothing is allocated.
+//!
+//! Two independent choices shape a build. The hinted path exists with the hints
+//! (`hinted_operations`), on every target; without them [`modexp`] panics when given an oracle,
+//! as the precompiles do. The arithmetic under the hinted path is selected by `cfg(bigint_ops)`
+//! alone: the bigint delegation with it (RV32, and the hosts that emulate it), plain `u64`
+//! limbs without it (RV64 and the other hosts). The queries and their answers are the same on
+//! either, so one hint tape serves both.
 
+#[cfg(any(feature = "hinted_operations", test))]
 pub mod advice;
 pub mod fixed_vec;
 #[cfg(all(
@@ -13,13 +21,17 @@ pub mod fixed_vec;
 ))]
 pub mod oracle_implementations;
 pub mod software;
+// The 256-bit values of the hinted single-digit path and of `hints::wide_div`
+#[cfg(any(feature = "hinted_operations", test))]
 pub(crate) mod u256;
 
 #[cfg(all(test, target_pointer_width = "64"))]
 mod test_vectors;
 
 pub use self::fixed_vec::FixedVec;
-use crate::hints::{read_querier_word, HintError, MemoryOracle, QuerierMemory};
+use crate::hints::MemoryOracle;
+#[cfg(any(feature = "oracle_implementations", test))]
+use crate::hints::{read_querier_word, HintError, QuerierMemory};
 
 /// The most bytes of a base, an exponent or a modulus. EIP-7823 bounds the three declared
 /// lengths of the precompile's input (leading zeroes included) by this, and the caller enforces
@@ -27,16 +39,14 @@ use crate::hints::{read_querier_word, HintError, MemoryOracle, QuerierMemory};
 /// buffers hold, so an operand allowed by the EIP always fits, and a longer one panics.
 pub const MAX_OPERAND_BYTES: usize = 1024;
 
-/// The most 256-bit digits of an operand
-pub(crate) const MAX_DIGITS: usize = MAX_OPERAND_BYTES / 32;
-
-/// The result of [`modexp`]: at most [`MAX_OPERAND_BYTES`] big-endian bytes, without leading
-/// zeroes on the advice path (see [`write_modexp_output`])
+/// The result of [`modexp`]: at most [`MAX_OPERAND_BYTES`] big-endian bytes. Its leading zero
+/// bytes depend on the path and on the arithmetic (the advice path returns whole digits, none
+/// for zero): only [`write_modexp_output`] gives the bytes of the precompile.
 pub type ModExpOutput = FixedVec<u8, MAX_OPERAND_BYTES>;
 
 /// `base^exp mod modulus` for big-endian operands: the advice path with an oracle, the software
 /// path without one. The base and the modulus must have at most [`MAX_OPERAND_BYTES`]
-/// significant bytes.
+/// significant bytes. The advice path needs `hinted_operations`: without it an oracle panics.
 pub fn modexp<O: MemoryOracle>(
     base: &[u8],
     exp: &[u8],
@@ -44,7 +54,10 @@ pub fn modexp<O: MemoryOracle>(
     oracle: Option<&mut O>,
 ) -> ModExpOutput {
     match oracle {
+        #[cfg(any(feature = "hinted_operations", test))]
         Some(oracle) => advice::modexp(base, exp, modulus, oracle),
+        #[cfg(not(any(feature = "hinted_operations", test)))]
+        Some(_) => panic!("the hints need the `hinted_operations` feature"),
         None => software::modexp(base, exp, modulus),
     }
 }
@@ -127,7 +140,9 @@ pub type ModExpAdviceParams = ModExpAdviceParamsGeneric<u32>;
 /// The request as laid out on 64-bit hosts.
 pub type ModExpAdviceParams64 = ModExpAdviceParamsGeneric<u64>;
 
-/// Reads the request at `address` in querier memory, one querier word per field.
+/// Reads the request at `address` in querier memory, one querier word per field. The oracle
+/// side (`oracle_implementations`).
+#[cfg(any(feature = "oracle_implementations", test))]
 pub fn read_modexp_advice_params<M: QuerierMemory + ?Sized>(
     memory: &M,
     address: usize,
@@ -187,9 +202,12 @@ pub(crate) mod hex {
 mod tests {
     use super::test_vectors::MODEXP_VECTORS;
     use super::*;
+    #[cfg(bigint_ops)]
     use crate::bigint_delegation::delegation::DELEGATION_CALLS;
     use crate::hints::test_support::TapeOracle;
-    use crate::hints::{record_hints, NoHints, RecordingHintOracle};
+    #[cfg(bigint_ops)]
+    use crate::hints::RecordingHintOracle;
+    use crate::hints::{record_hints, NoHints};
     use std::vec;
     use std::vec::Vec;
 
@@ -225,8 +243,9 @@ mod tests {
         dst
     }
 
-    /// FNV-1a of all vector tapes (each as its length, then its words, little-endian).
-    /// `tests/modexp_native.rs` checks that the naive `U256` records the same tapes.
+    /// FNV-1a of all vector tapes (each as its length, then its words, little-endian): the same
+    /// on either arithmetic (this test runs on the one of the build, `tests/modexp_native.rs`
+    /// too, without `cfg(test)`).
     const TAPES_DIGEST: u64 = 0x3b18_d4f1_fabf_8ba6;
 
     fn digest_tape(digest: &mut u64, tape: &[u32]) {
@@ -327,6 +346,7 @@ mod tests {
     }
 
     /// Bigint delegations of one advice-path call with honest hints.
+    #[cfg(bigint_ops)]
     fn delegations(base: &[u8], exp: &[u8], modulus: &[u8]) -> u64 {
         let mut oracle = RecordingHintOracle::new();
         DELEGATION_CALLS.with(|calls| calls.set(0));
@@ -334,11 +354,12 @@ mod tests {
         DELEGATION_CALLS.with(|calls| calls.get())
     }
 
-    /// Delegations the single-digit path's `debug_assert!`s add (2, then 6 per product); the
-    /// golden counts are of release builds.
-    fn single_digit_debug_delegations(products: usize) -> u64 {
+    /// Delegations the single-digit path's `debug_assert!`s add (2, then a comparison, 3, per
+    /// factor: 6 per multiplication and 3 per squaring); the golden counts are of release builds.
+    #[cfg(bigint_ops)]
+    fn single_digit_debug_delegations(multiplications: usize, squarings: usize) -> u64 {
         if cfg!(debug_assertions) {
-            2 + 6 * products as u64
+            2 + 6 * multiplications as u64 + 3 * squarings as u64
         } else {
             0
         }
@@ -359,6 +380,7 @@ mod tests {
 
     /// Bigint delegations per call against zksync-os's RV32 counts, for moduli of 1 to 8 digits
     /// and exponents on both walks. These keep the guest's cost equal to zksync-os's.
+    #[cfg(bigint_ops)]
     #[test]
     fn delegation_counts_match_zksync_os() {
         const DIGITS: [usize; 5] = [1, 2, 3, 4, 8];
@@ -374,17 +396,17 @@ mod tests {
             (exp[0], exp[8]) = (top, bottom);
             exp
         };
-        // each exponent and its number of modular products: binary walk below 64 bits, else 14
-        // table products and 4 squarings per nibble
-        let exps: [(Vec<u8>, usize); 8] = [
-            (vec![2], 1),
-            (vec![3], 2),
-            (vec![4], 2),
-            (vec![5], 3),
-            (vec![7], 4),
-            (windowed(0x01, 0), 14 + 64),
-            (windowed(0x10, 0), 14 + 68),
-            (windowed(0x01, 1), 14 + 64 + 1),
+        // each exponent and its modular multiplications and squarings: binary walk below 64
+        // bits, else 14 table products and 4 squarings per nibble
+        let exps: [(Vec<u8>, usize, usize); 8] = [
+            (vec![2], 0, 1),
+            (vec![3], 1, 1),
+            (vec![4], 0, 2),
+            (vec![5], 1, 2),
+            (vec![7], 2, 2),
+            (windowed(0x01, 0), 14, 64),
+            (windowed(0x10, 0), 14, 68),
+            (windowed(0x01, 1), 14 + 1, 64),
         ];
         for (digits, golden) in DIGITS.into_iter().zip(PER_CALL) {
             let len = 32 * digits;
@@ -393,10 +415,10 @@ mod tests {
             modulus[len - 1] |= 1;
             let mut base = pseudo_random(2000 + digits as u64, len);
             base[0] &= 0x7f;
-            let counts = exps.each_ref().map(|(exp, products)| {
+            let counts = exps.each_ref().map(|(exp, multiplications, squarings)| {
                 let calls = delegations(&base, exp, &modulus);
                 if digits == 1 {
-                    calls - single_digit_debug_delegations(*products)
+                    calls - single_digit_debug_delegations(*multiplications, *squarings)
                 } else {
                     calls
                 }
@@ -407,6 +429,7 @@ mod tests {
 
     /// As above, for zksync-os's `bench_modexp_shapes`: bases as long as the modulus (so an
     /// initial reduction), up to 32 digits.
+    #[cfg(bigint_ops)]
     #[test]
     fn delegation_counts_of_the_benchmark_shapes_match_zksync_os() {
         let exp_256 = pseudo_random(42, 32);

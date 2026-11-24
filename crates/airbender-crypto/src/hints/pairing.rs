@@ -138,7 +138,13 @@ impl<'a, O: MemoryOracle> G2SlopeHints<'a, O> {
 
     fn skip(&mut self, words: usize) {
         self.remaining_words -= words;
-        for _ in 0..words {
+        // two at a time: one advice word on the packed transport
+        for _ in 0..words / 2 {
+            self.oracle
+                .read_u64()
+                .expect("the hint response has the words of the chain");
+        }
+        if words % 2 == 1 {
             self.oracle
                 .read_word()
                 .expect("the hint response has the words of the chain");

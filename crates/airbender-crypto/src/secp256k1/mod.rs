@@ -12,7 +12,7 @@ pub mod oracle_implementations;
 mod points;
 mod recover;
 mod recover_affine;
-#[cfg(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"))]
+#[cfg(all(feature = "secp256k1-shamir-msm", bigint_ops))]
 mod recover_shamir;
 mod recover_witnessed;
 pub mod scalars;

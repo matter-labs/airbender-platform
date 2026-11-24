@@ -1,5 +1,5 @@
-//! Smoke tests of the hinted precompile endpoints in a build without `cfg(test)`, whose fields
-//! are the arkworks ones (unless `proving` is on), not the guest representation of the unit tests.
+//! Smoke tests of the hinted precompile endpoints through the public API, on the fields of the
+//! build: the arkworks ones, or the emulated delegation's with `bigint_ops`.
 #![cfg(all(feature = "oracle_implementations", target_pointer_width = "64"))]
 
 use airbender_crypto::ark_ec::{AffineRepr, CurveGroup};
@@ -7,24 +7,55 @@ use airbender_crypto::ark_ff::{BigInteger, PrimeField};
 use airbender_crypto::bls12_381::eip2537::{
     serialize_fq2_bytes, serialize_fq_bytes, serialize_g1_bytes, serialize_g2_bytes,
 };
-use airbender_crypto::hints::{record_hints, NoHints};
+use airbender_crypto::hints::{record_hints, record_hints_packed, HintError, NoHints};
 use airbender_crypto::precompiles::{
     bls12_381_g1_add, bls12_381_g1_msm, bls12_381_g2_add, bls12_381_g2_msm,
     bls12_381_map_fp2_to_g2, bls12_381_map_fp_to_g1, bls12_381_pairing_check, bn254_g1_add,
     bn254_g1_mul, bn254_pairing_check, kzg_verify_proof,
 };
 use airbender_crypto::{bls12_381, bn254};
-use core::fmt::Debug;
+use airbender_oracle::{PackedWordChannelOracle, WordChannel};
 use hex_literal::hex;
+use std::collections::VecDeque;
 
-/// Checks that the hinted call took hints, and that it and the plain one succeed alike
-fn agrees<T: PartialEq + Debug, E: PartialEq + Debug>(
-    (hinted, tape): (Result<T, E>, Vec<u32>),
-    plain: Result<T, E>,
-) {
-    assert!(!tape.is_empty());
-    assert!(plain.is_ok());
-    assert_eq!(hinted, plain);
+/// Checks that the hinted call takes hints and that it and the plain one succeed alike: with
+/// the recorder of the guest with the delegation, and on the packed transport of the 64-bit
+/// guests, whose advice words (the native answers, two to a word wherever the call reads two at
+/// once) are recorded as the call reads and then replayed to it, all of them and no more
+macro_rules! agrees {
+    (|$oracle:ident| $call:expr, $plain:expr $(,)?) => {{
+        let plain = $plain;
+        assert!(plain.is_ok());
+        let (hinted, tape) = record_hints(|$oracle| $call);
+        assert!(!tape.is_empty());
+        assert_eq!(hinted, plain);
+
+        let (hinted, packed) = record_hints_packed(|$oracle| $call);
+        assert_eq!(hinted, plain);
+        // fewer advice words than response words: at most one for a word, at least one for two
+        assert!(packed.len() < tape.len() && 2 * packed.len() >= tape.len());
+        const NEXT_ADVICE: u64 = 0x5eed_5eed_5eed_5eed;
+        let mut guest = PackedWordChannelOracle::<_, HintError>::new(Tape(
+            packed.into_iter().chain([NEXT_ADVICE]).collect(),
+        ));
+        let replayed = {
+            let $oracle = &mut guest;
+            $call
+        };
+        assert_eq!(replayed, plain);
+        assert_eq!(guest.channel().0, [NEXT_ADVICE]);
+    }};
+}
+
+/// The advice tape of a packed guest: queries are not answered
+struct Tape(VecDeque<u64>);
+
+impl WordChannel for Tape {
+    fn write_word(&mut self, _word: usize) {}
+
+    fn read_word(&mut self) -> usize {
+        self.0.pop_front().expect("the advice tape is exhausted") as usize
+    }
 }
 
 fn bn254_point(k: u64) -> [u8; 64] {
@@ -52,9 +83,9 @@ fn g2(k: u64) -> [u8; 256] {
 #[test]
 fn bn254_endpoints_with_hints_match() {
     let points = [bn254_point(1), bn254_point(2)];
-    agrees(
-        record_hints(|oracle| bn254_g1_add(&points, Some(oracle))),
-        bn254_g1_add(&points, None::<&mut NoHints>),
+    agrees!(
+        |oracle| bn254_g1_add(&points, Some(oracle)),
+        bn254_g1_add(&points, None::<&mut NoHints>)
     );
     let point = bn254_point(3);
     let (x, y) = (
@@ -62,37 +93,37 @@ fn bn254_endpoints_with_hints_match() {
         point[32..].try_into().unwrap(),
     );
     let scalar = [0x5a; 32];
-    agrees(
-        record_hints(|oracle| bn254_g1_mul(x, y, &scalar, Some(oracle))),
-        bn254_g1_mul(x, y, &scalar, None::<&mut NoHints>),
+    agrees!(
+        |oracle| bn254_g1_mul(x, y, &scalar, Some(oracle)),
+        bn254_g1_mul(x, y, &scalar, None::<&mut NoHints>)
     );
 }
 
 #[test]
 fn bls12_381_endpoints_with_hints_match() {
     let (a, b) = (g1(1), g1(2));
-    agrees(
-        record_hints(|oracle| bls12_381_g1_add(&a, &b, Some(oracle))),
-        bls12_381_g1_add(&a, &b, None::<&mut NoHints>),
+    agrees!(
+        |oracle| bls12_381_g1_add(&a, &b, Some(oracle)),
+        bls12_381_g1_add(&a, &b, None::<&mut NoHints>)
     );
     let (a, b) = (g2(1), g2(2));
-    agrees(
-        record_hints(|oracle| bls12_381_g2_add(&a, &b, Some(oracle))),
-        bls12_381_g2_add(&a, &b, None::<&mut NoHints>),
+    agrees!(
+        |oracle| bls12_381_g2_add(&a, &b, Some(oracle)),
+        bls12_381_g2_add(&a, &b, None::<&mut NoHints>)
     );
 
     let mut fp = [0u8; 64];
     serialize_fq_bytes(bls12_381::Fq::from(7u64), &mut fp);
-    agrees(
-        record_hints(|oracle| bls12_381_map_fp_to_g1(&fp, Some(oracle))),
-        bls12_381_map_fp_to_g1(&fp, None::<&mut NoHints>),
+    agrees!(
+        |oracle| bls12_381_map_fp_to_g1(&fp, Some(oracle)),
+        bls12_381_map_fp_to_g1(&fp, None::<&mut NoHints>)
     );
     let mut fp2 = [0u8; 128];
     let value = bls12_381::Fq2::new(bls12_381::Fq::from(7u64), bls12_381::Fq::from(11u64));
     serialize_fq2_bytes(value, &mut fp2);
-    agrees(
-        record_hints(|oracle| bls12_381_map_fp2_to_g2(&fp2, Some(oracle))),
-        bls12_381_map_fp2_to_g2(&fp2, None::<&mut NoHints>),
+    agrees!(
+        |oracle| bls12_381_map_fp2_to_g2(&fp2, Some(oracle)),
+        bls12_381_map_fp2_to_g2(&fp2, None::<&mut NoHints>)
     );
 }
 
@@ -112,11 +143,9 @@ fn ecrecover_with_hints_matches() {
     let plain = secp256k1_ecrecover(&digest, &r, &s, odd, None::<&mut NoHints>).map(|key| key.0);
     let public_key = key.verifying_key().to_encoded_point(false);
     assert_eq!(plain.unwrap()[..], public_key.as_bytes()[1..]);
-    agrees(
-        record_hints(|oracle| {
-            secp256k1_ecrecover(&digest, &r, &s, odd, Some(oracle)).map(|key| key.0)
-        }),
-        plain,
+    agrees!(
+        |oracle| secp256k1_ecrecover(&digest, &r, &s, odd, Some(oracle)).map(|key| key.0),
+        plain
     );
 }
 
@@ -141,10 +170,7 @@ fn bn254_pairing_with_hints_matches() {
         let n = pairs.len();
         let plain = bn254_pairing_check(n, &src, None::<&mut NoHints>);
         assert_eq!(plain, Ok(expected));
-        agrees(
-            record_hints(|oracle| bn254_pairing_check(n, &src, Some(oracle))),
-            plain,
-        );
+        agrees!(|oracle| bn254_pairing_check(n, &src, Some(oracle)), plain);
     }
 }
 
@@ -156,16 +182,16 @@ fn bls12_381_msm_and_pairing_with_hints_match() {
             .flat_map(|k| [g1(k).as_slice(), &[0xa5; 32]].concat())
             .collect();
         let input = input.as_chunks::<160>().0;
-        agrees(
-            record_hints(|oracle| bls12_381_g1_msm(input.iter().copied(), Some(oracle))),
-            bls12_381_g1_msm(input.iter().copied(), None::<&mut NoHints>),
+        agrees!(
+            |oracle| bls12_381_g1_msm(input.iter().copied(), Some(oracle)),
+            bls12_381_g1_msm(input.iter().copied(), None::<&mut NoHints>)
         );
     }
     let input = [g2(3).as_slice(), &[0xa5; 32]].concat();
     let input = input.as_chunks::<288>().0;
-    agrees(
-        record_hints(|oracle| bls12_381_g2_msm(input.iter().copied(), Some(oracle))),
-        bls12_381_g2_msm(input.iter().copied(), None::<&mut NoHints>),
+    agrees!(
+        |oracle| bls12_381_g2_msm(input.iter().copied(), Some(oracle)),
+        bls12_381_g2_msm(input.iter().copied(), None::<&mut NoHints>)
     );
 
     let mut negated = [0u8; 128];
@@ -177,9 +203,9 @@ fn bls12_381_msm_and_pairing_with_hints_match() {
         let input = input.as_chunks::<384>().0;
         let plain = bls12_381_pairing_check(input.iter().copied(), None::<&mut NoHints>);
         assert_eq!(plain, Ok(expected));
-        agrees(
-            record_hints(|oracle| bls12_381_pairing_check(input.iter().copied(), Some(oracle))),
-            plain,
+        agrees!(
+            |oracle| bls12_381_pairing_check(input.iter().copied(), Some(oracle)),
+            plain
         );
     }
 }
@@ -197,9 +223,33 @@ fn kzg_with_hints_matches() {
     ] {
         let plain = kzg_verify_proof(&commitment, &proof, &z, &y, None::<&mut NoHints>);
         assert_eq!(plain, Ok(expected));
-        agrees(
-            record_hints(|oracle| kzg_verify_proof(&commitment, &proof, &z, &y, Some(oracle))),
-            plain,
+        agrees!(|oracle| kzg_verify_proof(&commitment, &proof, &z, &y, Some(oracle)), plain);
+    }
+}
+
+/// ModExp with a modulus of one 256-bit digit (the wide quotients) and longer ones (the
+/// reductions, whose quotients and remainders also have odd numbers of words)
+#[test]
+fn modexp_with_hints_matches() {
+    use airbender_crypto::modexp::modexp;
+
+    // the significant bytes: either path may pad its result with leading zeroes
+    fn significant(bytes: &[u8]) -> Result<Vec<u8>, ()> {
+        let zeroes = bytes.iter().take_while(|byte| **byte == 0).count();
+        Ok(bytes[zeroes..].to_vec())
+    }
+    let bytes = |seed: u8, len: usize| -> Vec<u8> {
+        (0..len)
+            .map(|i| (i as u8).wrapping_mul(0x9d).wrapping_add(seed) | 1)
+            .collect()
+    };
+    for (base_len, exp_len, modulus_len) in [(32, 3, 32), (20, 32, 31), (64, 5, 64), (100, 3, 99)] {
+        let base = bytes(0x11, base_len);
+        let exp = bytes(0x35, exp_len);
+        let modulus = bytes(0x57, modulus_len);
+        agrees!(
+            |oracle| significant(&modexp(&base, &exp, &modulus, Some(oracle))),
+            significant(&modexp(&base, &exp, &modulus, None::<&mut NoHints>)),
         );
     }
 }

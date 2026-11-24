@@ -51,7 +51,8 @@ pub fn bn254_g1_add<O: MemoryOracle>(
 
 /// `scalar` (big-endian, any 256-bit integer, not reduced) times the point `(x, y)` (both zero
 /// for the point at infinity), in the EVM encoding. Fails unless the point is on the curve. With
-/// an oracle, multiplies in affine coordinates with checked hinted divisions.
+/// an oracle, checks the product the oracle witnesses (see `affine_glv::MulWitness`) in affine
+/// coordinates with checked hinted divisions, or computes it so if the oracle has no witness.
 // The caller maps every failure to its invalid-point error
 #[allow(clippy::result_unit_err)]
 pub fn bn254_g1_mul<O: MemoryOracle>(
@@ -71,10 +72,10 @@ pub fn bn254_g1_mul<O: MemoryOracle>(
 
     let result = match oracle {
         #[cfg(any(feature = "hinted_operations", test))]
-        Some(oracle) => serialize_affine(&crate::bn254::g1::mul_affine_with_divider(
+        Some(oracle) => serialize_affine(&crate::bn254::g1::mul_affine_with_oracle(
             &affine_point,
             &scalar.0,
-            &mut Bn254FqDivider::new(oracle),
+            oracle,
         )),
         #[cfg(not(any(feature = "hinted_operations", test)))]
         Some(_) => super::hints_unavailable(),
@@ -249,6 +250,96 @@ mod tests {
                     assert_eq!(hinted, plain);
                 }
             }
+        }
+    }
+
+    /// An oracle that answers honestly, or without a witness of the multiplication if not
+    /// `witnessed`, and counts the queries of each op into `ops`
+    fn counting_oracle(
+        witnessed: bool,
+        ops: &core::cell::RefCell<std::vec::Vec<crate::hints::FieldHintOp>>,
+    ) -> impl MemoryOracle + '_ {
+        use crate::hints::{answer_query, read_field_hint_request, FieldHintOp, QuerierMemory};
+
+        crate::hints::test_support::InProcessMemoryOracle::new(
+            move |query_id: u32, input_word: usize, memory: &dyn QuerierMemory| {
+                let (op, _, _) = read_field_hint_request(memory, input_word).unwrap();
+                let op = FieldHintOp::parse_u32(op).unwrap();
+                ops.borrow_mut().push(op);
+                if op == FieldHintOp::Bn254G1MulWitness && !witnessed {
+                    return std::vec![0];
+                }
+                let mut words = std::vec::Vec::new();
+                // SAFETY: the handler runs during the query, while its request is live
+                let answered =
+                    unsafe { answer_query(query_id, input_word, memory, Some(&mut words), None) };
+                assert_eq!(answered, Ok(true));
+                words
+            },
+        )
+    }
+
+    /// The multiplication asks for one witness and checks it with fewer divisions than it
+    /// computes the product with, which it does if the oracle has no witness
+    #[test]
+    fn mul_is_witnessed_or_computed() {
+        use crate::hints::FieldHintOp;
+
+        let point = multiple(3);
+        let (x, y) = xy(&point);
+        let mut scalars = edge_scalars()[2..].to_vec();
+        scalars.push([0x5a; 32]);
+        for scalar in &scalars {
+            let plain = bn254_g1_mul(x, y, scalar, None::<&mut NoHints>);
+            let divisions = [true, false].map(|witnessed| {
+                let ops = core::cell::RefCell::new(std::vec::Vec::new());
+                let hinted =
+                    bn254_g1_mul(x, y, scalar, Some(&mut counting_oracle(witnessed, &ops)));
+                assert_eq!(hinted, plain);
+                let count = |op| ops.borrow().iter().filter(|o| **o == op).count();
+                assert_eq!(count(FieldHintOp::Bn254G1MulWitness), 1);
+                let divisions = count(FieldHintOp::Bn254BaseFieldDivision);
+                assert_eq!(ops.borrow().len(), 1 + divisions);
+                divisions
+            });
+            assert!(divisions[0] > 0 && divisions[1] > 0);
+            // the scalars of the full length: about 125 divisions against about 180
+            if *scalar == [0xff; 32] || *scalar == [0x5a; 32] {
+                assert!(divisions[0] < 140 && divisions[1] > 160, "{divisions:?}");
+            }
+        }
+    }
+
+    /// A wrong witness stops the multiplication, as a wrong hint does
+    #[test]
+    fn wrong_mul_witnesses_are_rejected() {
+        use crate::hints::test_support::{lying_oracle, lying_oracle_last_word};
+        use crate::hints::FieldHintOp;
+
+        fn mul_panics_with<O: MemoryOracle>(mut oracle: O) -> std::string::String {
+            let point = multiple(3);
+            let (x, y) = xy(&point);
+            let failed = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+                let _ = bn254_g1_mul(x, y, &[0x5a; 32], Some(&mut oracle));
+            }));
+            let payload = failed.unwrap_err();
+            payload
+                .downcast_ref::<std::string::String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).into()))
+                .unwrap_or_default()
+        }
+
+        let ops = [FieldHintOp::Bn254G1MulWitness];
+        // a coordinate of the product, then the top word of the last coefficient
+        for message in [
+            mul_panics_with(lying_oracle(&ops)),
+            mul_panics_with(lying_oracle_last_word(&ops)),
+        ] {
+            assert!(
+                message.contains("the scalar multiplication witness is wrong"),
+                "{message}"
+            );
         }
     }
 

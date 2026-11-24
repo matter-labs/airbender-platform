@@ -125,13 +125,13 @@ impl<F: Field + CopyAssign> Point<F> {
     #[inline(always)]
     fn apply_slope(&mut self, slope: &F, x2: Option<&F>) {
         fp_tmp!(x3 = slope);
-        *x3 *= slope;
-        *x3 -= &self.x;
+        x3.mul_assign_inline(slope);
+        x3.sub_assign_inline(&self.x);
         *x3 -= x2.unwrap_or(&self.x);
 
-        self.x -= &*x3;
-        self.x *= slope;
-        self.x -= &self.y;
+        self.x.sub_assign_inline(&*x3);
+        self.x.mul_assign_inline(slope);
+        self.x.sub_assign_inline(&self.y);
         self.y.copy_assign(&self.x);
         self.x.copy_assign(x3);
     }
@@ -144,7 +144,7 @@ impl<F: Field + CopyAssign> Point<F> {
         // the slope is 3 x² / 2 y
         let mut fraction = Fraction::uninit();
         let (numerator, denominator) = fraction.set(&self.x, &self.y);
-        *numerator *= &self.x;
+        numerator.mul_assign_inline(&self.x);
         fp_tmp!(square = &*numerator);
         numerator.double_in_place();
         *numerator += &*square;
@@ -168,12 +168,12 @@ impl<F: Field + CopyAssign> Point<F> {
             // (-y - y_r) / (x - x_r) = (y + y_r) / (x_r - x)
             let (numerator, denominator) = fraction.set(p.y, &self.x);
             *numerator += &self.y;
-            *denominator -= p.x;
+            denominator.sub_assign_inline(p.x);
             (numerator, denominator)
         } else {
             let (numerator, denominator) = fraction.set(p.y, p.x);
-            *numerator -= &self.y;
-            *denominator -= &self.x;
+            numerator.sub_assign_inline(&self.y);
+            denominator.sub_assign_inline(&self.x);
             (numerator, denominator)
         };
         if denominator.is_zero() {
@@ -226,14 +226,14 @@ impl<F: Field + CopyAssign> Point<F> {
 
         // x_t = slope² - x_r - x, the coordinate of self + p
         fp_tmp!(x_t = &*slope);
-        *x_t *= &*slope;
-        *x_t -= &self.x;
-        *x_t -= p.x;
+        x_t.mul_assign_inline(&*slope);
+        x_t.sub_assign_inline(&self.x);
+        x_t.sub_assign_inline(p.x);
 
         // the slope of (self + p) + self is -(slope + 2 y_r / (x_t - x_r))
         let (numerator, denominator) = fraction.set(&self.y, x_t);
         numerator.double_in_place();
-        *denominator -= &self.x;
+        denominator.sub_assign_inline(&self.x);
         if denominator.is_zero() {
             self.double(divider);
             self.add(p, divider);
@@ -246,14 +246,14 @@ impl<F: Field + CopyAssign> Point<F> {
 
         // x3 = slope_2² - x_r - x_t, y3 = slope_2 (x_r - x3) - y_r = -slope_2 (x3 - x_r) - y_r
         fp_tmp!(x3 = &*negated_slope);
-        *x3 *= &*negated_slope;
-        *x3 -= &self.x;
-        *x3 -= &*x_t;
+        x3.mul_assign_inline(&*negated_slope);
+        x3.sub_assign_inline(&self.x);
+        x3.sub_assign_inline(&*x_t);
 
         x_t.copy_assign(x3);
-        *x_t -= &self.x;
-        *x_t *= &*negated_slope;
-        *x_t -= &self.y;
+        x_t.sub_assign_inline(&self.x);
+        x_t.mul_assign_inline(&*negated_slope);
+        x_t.sub_assign_inline(&self.y);
         self.y.copy_assign(x_t);
         self.x.copy_assign(x3);
     }
@@ -269,11 +269,13 @@ const TABLE_SIZE: usize = 1 << (WINDOW - 2);
 /// more
 const DIGITS: usize = 129;
 
-/// The non-adjacent form of `k` with the window `WINDOW`: digits from the lowest, zero or odd
-/// with a magnitude below `2^(WINDOW - 1)`, with at least `WINDOW - 1` zeros after a non-zero
-/// one, into `digits`, which must be zeros. Returns the position after the highest non-zero
-/// one.
-fn wnaf(digits: &mut [i8; DIGITS], k: u128) -> usize {
+/// The non-adjacent form of `k` with the window `W`: digits from the lowest, zero or odd with a
+/// magnitude below `2^(W - 1)`, with at least `W - 1` zeros after a non-zero one, into
+/// `digits`, which must be zeros. `k` must be below `2^(N - 1)`: the last digit is for the
+/// carry. Returns the position after the highest non-zero one.
+fn wnaf<const N: usize, const W: usize>(digits: &mut [i8; N], k: u128) -> usize {
+    const { assert!(N <= DIGITS && 2 <= W && W <= 8) };
+    debug_assert!(N == DIGITS || k >> (N - 1) == 0);
     // as 32-bit words, with zeros above: a bit test is one shift on a 32-bit target, and a
     // window is read from a pair of words
     let mut words = [0u32; 6];
@@ -283,17 +285,17 @@ fn wnaf(digits: &mut [i8; DIGITS], k: u128) -> usize {
     let mut len = 0;
     let mut carry = 0u32;
     let mut bit = 0;
-    while bit < DIGITS {
+    while bit < N {
         if (words[bit >> 5] >> (bit & 31)) & 1 == carry {
             bit += 1;
             continue;
         }
         let pair = words[bit >> 5] as u64 | ((words[(bit >> 5) + 1] as u64) << 32);
-        let window = ((pair >> (bit & 31)) as u32 & ((1 << WINDOW) - 1)) + carry;
-        carry = window >> (WINDOW - 1);
-        digits[bit] = (window as i32 - ((carry as i32) << WINDOW)) as i8;
+        let window = ((pair >> (bit & 31)) as u32 & ((1 << W) - 1)) + carry;
+        carry = window >> (W - 1);
+        digits[bit] = (window as i32 - ((carry as i32) << W)) as i8;
         len = bit + 1;
-        bit += WINDOW;
+        bit += W;
     }
     debug_assert_eq!(carry, 0);
     len
@@ -301,12 +303,12 @@ fn wnaf(digits: &mut [i8; DIGITS], k: u128) -> usize {
 
 /// The odd multiples `1, 3, ...` of a point `P`, and the `x` coordinates of their images under
 /// the endomorphism (`φ(x, y) = (β x, y)`)
-struct Table<F> {
-    multiples: [Point<F>; TABLE_SIZE],
-    images: [F; TABLE_SIZE],
+struct Table<F, const SIZE: usize> {
+    multiples: [Point<F>; SIZE],
+    images: [F; SIZE],
 }
 
-impl<F: Field + CopyAssign> Table<F> {
+impl<F: Field + CopyAssign, const SIZE: usize> Table<F, SIZE> {
     /// Initializes `slot` with the table of `(x, y)`, which is not the point at infinity
     fn init<'a, D: Divider<F>>(
         slot: &'a mut MaybeUninit<Self>,
@@ -332,7 +334,7 @@ impl<F: Field + CopyAssign> Table<F> {
             first.set(p);
             first
         };
-        for i in 0..TABLE_SIZE {
+        for i in 0..SIZE {
             if i > 0 {
                 // SAFETY: as above
                 let multiple =
@@ -358,7 +360,7 @@ impl<F: Field + CopyAssign> Table<F> {
             }
             // SAFETY: as above
             let image = unsafe { fp_init(&mut *(&raw mut (*this).images[i]).cast(), beta) };
-            *image *= &previous.x;
+            image.mul_assign_inline(&previous.x);
         }
         // SAFETY: all the multiples and the images were written
         unsafe { slot.assume_init_ref() }
@@ -402,13 +404,14 @@ where
     };
     let mut digits_1 = [0i8; DIGITS];
     let mut digits_2 = [0i8; DIGITS];
-    let len = wnaf(&mut digits_1, k1).max(wnaf(&mut digits_2, k2));
+    let len =
+        wnaf::<DIGITS, WINDOW>(&mut digits_1, k1).max(wnaf::<DIGITS, WINDOW>(&mut digits_2, k2));
     if len == 0 {
         return Affine::identity();
     }
 
     let mut table = MaybeUninit::uninit();
-    let table = Table::init(&mut table, &p.x, &p.y, &C::ENDO_COEFFS[0], divider);
+    let table = Table::<_, TABLE_SIZE>::init(&mut table, &p.x, &p.y, &C::ENDO_COEFFS[0], divider);
 
     let mut slot = MaybeUninit::uninit();
     let r = Point::init_infinity(&mut slot);
@@ -470,6 +473,7 @@ where
     };
     let mut digits = [[0i8; DIGITS]; 4];
     let [digits_p1, digits_p2, digits_q1, digits_q2] = &mut digits;
+    let wnaf = wnaf::<DIGITS, WINDOW>;
     let len = wnaf(digits_p1, halves_p.0 .1)
         .max(wnaf(digits_p2, halves_p.1 .1))
         .max(wnaf(digits_q1, halves_q.0 .1))
@@ -479,9 +483,9 @@ where
     }
     let beta = &C::ENDO_COEFFS[0];
     let mut table_p = MaybeUninit::uninit();
-    let table_p = Table::init(&mut table_p, &p.x, &p.y, beta, divider);
+    let table_p = Table::<_, TABLE_SIZE>::init(&mut table_p, &p.x, &p.y, beta, divider);
     let mut table_q = MaybeUninit::uninit();
-    let table_q = Table::init(&mut table_q, &q.x, &q.y, beta, divider);
+    let table_q = Table::<_, TABLE_SIZE>::init(&mut table_q, &q.x, &q.y, beta, divider);
 
     let mut slot = MaybeUninit::uninit();
     let r = Point::init_infinity(&mut slot);
@@ -518,6 +522,167 @@ where
     } else {
         Affine::new_unchecked(r.x, r.y)
     }
+}
+
+/// The bits a coefficient of a [`MulWitness`] may have in absolute value. A short vector of the
+/// lattice has coordinates of about a quarter of the bits of the group order (64 for the 254
+/// and 255 bits of bn254 and bls12-381), and the lattice reduction of the host returns one
+/// within a few bits of that, so the bound never rejects an honest witness; the digits of the
+/// check cover all of its bits, so a coefficient within it is computed with as it is checked.
+pub const WITNESS_COEFFICIENT_BITS: usize = 80;
+
+/// Digits of the non-adjacent form of a witnessed coefficient: its bits, and one for a carry
+#[cfg(any(feature = "hinted_operations", test))]
+const WITNESS_DIGITS: usize = WITNESS_COEFFICIENT_BITS + 1;
+/// Width of the windows of the non-adjacent forms of the witnessed coefficients. Their 64 bits
+/// are half of those of a half of a scalar, over two tables: an entry of a table (an addition
+/// and its image) costs more than the addition a wider window saves in the loop, most of
+/// which go together with a doubling, so the narrower window is the cheaper one here.
+#[cfg(any(feature = "hinted_operations", test))]
+const WITNESS_WINDOW: usize = 4;
+#[cfg(any(feature = "hinted_operations", test))]
+const WITNESS_TABLE_SIZE: usize = 1 << (WITNESS_WINDOW - 2);
+
+/// The witness of a scalar multiplication `Q = k P` on a curve of prime order with the
+/// endomorphism `φ` of eigenvalue `λ`: the product `(x, y)`, and coefficients `(a, b, c, d)`
+/// with `(a + b λ) k = c + d λ` modulo the group order and `a + b λ` not zero. Then
+/// `c P + d φ(P) - a Q - b φ(Q) = (a + b λ)(k P - Q)`, which is the point at infinity for the
+/// product only: `check_mul_witness` computes that sum, of four scalars of a quarter of the
+/// length of `k` over shared doublings, instead of `k P`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MulWitness<F> {
+    pub x: F,
+    pub y: F,
+    pub coefficients: [i128; 4],
+}
+
+/// `k p` as `witness` has it, if the witness is right: `None` otherwise. `p` is a point of the
+/// curve other than the point at infinity, and `k` is not zero.
+///
+/// The checks, for a curve whose points are a group of prime order `r` (cofactor 1, required
+/// at compile time), so that `φ` multiplies every point by `λ`:
+///
+/// 1. `(x, y)` is a point `Q` of the curve, hence of the group.
+/// 2. Every coefficient is within [`WITNESS_COEFFICIENT_BITS`] bits, the bits step 5 computes
+///    with.
+/// 3. `a + b λ` is not zero modulo `r`.
+/// 4. `(a + b λ) k = c + d λ` modulo `r`.
+/// 5. `c P + d φ(P) - a Q - b φ(Q)` is the point at infinity.
+///
+/// By 4 the sum of 5 is `(a + b λ)(k P - Q)`; by 3 and the prime order it is the point at
+/// infinity only if `Q = k P`.
+#[cfg(any(feature = "hinted_operations", test))]
+pub(crate) fn check_mul_witness<C, D>(
+    p: &Affine<C>,
+    k: C::ScalarField,
+    witness: &MulWitness<C::BaseField>,
+    divider: &mut D,
+) -> Option<Affine<C>>
+where
+    C: SWCurveConfig + GLVConfig,
+    C::BaseField: CopyAssign,
+    D: Divider<C::BaseField>,
+{
+    // on-curve is in-group only then, and `φ` is the multiplication by `λ` on that group only
+    const { assert!(C::COFACTOR.len() == 1 && C::COFACTOR[0] == 1) };
+    debug_assert!(C::COEFF_A.is_zero());
+    debug_assert!(!p.infinity && !k.is_zero());
+
+    // 1: y² = x³ + b
+    fp_tmp!(lhs = &witness.y);
+    lhs.mul_assign_inline(&witness.y);
+    fp_tmp!(rhs = &witness.x);
+    rhs.mul_assign_inline(&witness.x);
+    rhs.mul_assign_inline(&witness.x);
+    *rhs += &C::COEFF_B;
+    if *lhs != *rhs {
+        return None;
+    }
+
+    // 2
+    let bound = 1i128 << WITNESS_COEFFICIENT_BITS;
+    if witness
+        .coefficients
+        .iter()
+        .any(|coefficient| !(-bound < *coefficient && *coefficient < bound))
+    {
+        return None;
+    }
+
+    // 3 and 4
+    let scalar = |coefficient: i128| {
+        let magnitude = C::ScalarField::from(coefficient.unsigned_abs());
+        if coefficient < 0 {
+            -magnitude
+        } else {
+            magnitude
+        }
+    };
+    let [a, b, c, d] = witness.coefficients;
+    let mut multiplier = scalar(b);
+    multiplier *= &C::LAMBDA;
+    multiplier += &scalar(a);
+    if multiplier.is_zero() {
+        return None;
+    }
+    let mut product = scalar(d);
+    product *= &C::LAMBDA;
+    product += &scalar(c);
+    multiplier *= &k;
+    if multiplier != product {
+        return None;
+    }
+
+    // 5: the streams of `c`, `d` over the table of `P` and of `-a`, `-b` over that of `Q`
+    let mut digits = [[0i8; WITNESS_DIGITS]; 4];
+    let mut len = 0;
+    for (digits, coefficient) in digits.iter_mut().zip([c, d, a, b]) {
+        len = len.max(wnaf::<WITNESS_DIGITS, WITNESS_WINDOW>(
+            digits,
+            coefficient.unsigned_abs(),
+        ));
+    }
+    let negate = [c < 0, d < 0, a > 0, b > 0];
+    let beta = &C::ENDO_COEFFS[0];
+    let mut table_p = MaybeUninit::uninit();
+    let table_p = Table::<_, WITNESS_TABLE_SIZE>::init(&mut table_p, &p.x, &p.y, beta, divider);
+    let mut table_q = MaybeUninit::uninit();
+    let table_q =
+        Table::<_, WITNESS_TABLE_SIZE>::init(&mut table_q, &witness.x, &witness.y, beta, divider);
+
+    let mut slot = MaybeUninit::uninit();
+    let r = Point::init_infinity(&mut slot);
+    for i in (0..len).rev() {
+        // zero digits are the most of them
+        let column = [digits[0][i], digits[1][i], digits[2][i], digits[3][i]];
+        if column == [0; 4] {
+            r.double(divider);
+            continue;
+        }
+        // the first addition after a doubling goes together with it
+        let mut doubled = false;
+        for (stream, digit) in column.into_iter().enumerate() {
+            if digit == 0 {
+                continue;
+            }
+            let table = if stream < 2 { table_p } else { table_q };
+            let Some(addend) = table.addend(digit, stream & 1 == 1, negate[stream]) else {
+                continue;
+            };
+            if doubled {
+                r.add(addend, divider);
+            } else {
+                r.double_and_add(addend, divider);
+                doubled = true;
+            }
+        }
+        if !doubled {
+            r.double(divider);
+        }
+    }
+
+    r.infinity
+        .then(|| Affine::new_unchecked(witness.x, witness.y))
 }
 
 /// `k p` for a small `k`, by double-and-add, with the divisions of `divider`
@@ -713,7 +878,7 @@ mod tests {
         }
         for k in scalars {
             let mut digits = [0i8; DIGITS];
-            let len = wnaf(&mut digits, k);
+            let len = wnaf::<DIGITS, WINDOW>(&mut digits, k);
             assert!(digits[len..].iter().all(|digit| *digit == 0));
             assert!(len == 0 || digits[len - 1] != 0);
             // evaluated from the top modulo 2^128, with the digit at 2^128 dropping out
@@ -782,5 +947,299 @@ mod tests {
         check_steps::<crate::bls12_381::curves::g1::Config>();
         check_multiplication::<crate::bls12_381::curves::g1::Config>();
         check_two_and_small::<crate::bls12_381::curves::g1::Config>();
+    }
+
+    /// The witnessed multiplication, with the witnesses of the host side (64-bit hosts)
+    #[cfg(target_pointer_width = "64")]
+    mod witnessed {
+        use super::*;
+        use crate::bn254::curves::g1::Config;
+        use crate::bn254::{Fq, Fr, G1Affine};
+        use crate::oracle_common::mul_witness;
+
+        /// Non-zero scalars: small ones (the product is in the table of the point, so the sum
+        /// of the check meets its exceptional cases), the eigenvalue and its neighbours, powers
+        /// of two and random ones
+        fn scalars() -> Vec<Fr> {
+            let mut rng = ark_std::test_rng();
+            let mut scalars: Vec<Fr> = (1..=17u64).map(Fr::from).collect();
+            scalars.extend((1..=17u64).map(|k| -Fr::from(k)));
+            scalars.extend([
+                Config::LAMBDA,
+                -Config::LAMBDA,
+                Config::LAMBDA + Fr::ONE,
+                Config::LAMBDA - Fr::ONE,
+                Config::LAMBDA.square(),
+                Fr::from(1u128 << 64),
+                Fr::from(1u128 << 127),
+                Fr::from(u128::MAX),
+                Fr::from(2u64).pow([253]),
+            ]);
+            scalars.extend((0..24).map(|_| Fr::rand(&mut rng)));
+            scalars
+        }
+
+        fn product(p: &G1Affine, k: Fr) -> G1Affine {
+            p.into_group().mul_bigint(k.into_bigint()).into_affine()
+        }
+
+        fn signed(coefficient: i128) -> Fr {
+            let magnitude = Fr::from(coefficient.unsigned_abs());
+            if coefficient < 0 {
+                -magnitude
+            } else {
+                magnitude
+            }
+        }
+
+        /// `(a + b λ, c + d λ)`
+        fn sides(coefficients: &[i128; 4]) -> (Fr, Fr) {
+            let [a, b, c, d] = coefficients.map(signed);
+            (a + b * Config::LAMBDA, c + d * Config::LAMBDA)
+        }
+
+        fn check(p: &G1Affine, k: Fr, witness: &MulWitness<Fq>) -> Option<G1Affine> {
+            check_mul_witness::<Config, _>(p, k, witness, &mut Counting(0))
+        }
+
+        /// The witness is rejected by the checks before the sum: no division is taken
+        fn assert_rejected_early(p: &G1Affine, k: Fr, witness: &MulWitness<Fq>) {
+            let mut divider = Counting(0);
+            assert_eq!(
+                check_mul_witness::<Config, _>(p, k, witness, &mut divider),
+                None
+            );
+            assert_eq!(divider.0, 0);
+        }
+
+        /// The witness passes the checks before the sum, which rejects it
+        fn assert_rejected_by_the_sum(p: &G1Affine, k: Fr, witness: &MulWitness<Fq>) {
+            let mut divider = Counting(0);
+            assert_eq!(
+                check_mul_witness::<Config, _>(p, k, witness, &mut divider),
+                None
+            );
+            assert!(divider.0 > 0);
+        }
+
+        #[test]
+        fn a_witnessed_product_is_the_computed_one() {
+            let (mut witnessed, mut computed) = (0, 0);
+            for p in multiples::<Config>(2).into_iter().filter(|p| !p.infinity) {
+                for k in scalars() {
+                    let witness = mul_witness(&p, k).expect("a product other than infinity");
+                    let expected = product(&p, k);
+                    assert_eq!((witness.x, witness.y), (expected.x, expected.y));
+                    let mut divider = Counting(0);
+                    assert_eq!(
+                        check_mul_witness::<Config, _>(&p, k, &witness, &mut divider),
+                        Some(expected),
+                        "{k}"
+                    );
+                    // one division per digit and per addition, and those of the two tables
+                    assert!(
+                        divider.0
+                            <= WITNESS_DIGITS
+                                + 4 * WITNESS_DIGITS.div_ceil(WITNESS_WINDOW)
+                                + 2 * WITNESS_TABLE_SIZE
+                    );
+                    witnessed += divider.0;
+                    let mut divider = Counting(0);
+                    assert_eq!(glv_mul_affine(&p, k, &mut divider), expected);
+                    computed += divider.0;
+                }
+            }
+            // about 125 divisions instead of about 180 for a scalar of the full length; the
+            // small scalars of the sample take few either way
+            assert!(4 * witnessed < 3 * computed, "{witnessed} {computed}");
+        }
+
+        #[test]
+        fn witness_coefficients_are_short_vectors_of_the_lattice() {
+            let p = Config::GENERATOR;
+            for k in scalars() {
+                let witness = mul_witness(&p, k).unwrap();
+                // a quarter of the 254 bits of the order, and the slack of the reduction
+                assert!(
+                    witness
+                        .coefficients
+                        .iter()
+                        .all(|coefficient| coefficient.unsigned_abs() < 1 << 66),
+                    "{:?}",
+                    witness.coefficients
+                );
+                let (multiplier, product) = sides(&witness.coefficients);
+                assert!(!multiplier.is_zero());
+                assert_eq!(multiplier * k, product);
+            }
+        }
+
+        #[test]
+        fn wrong_witnesses_are_rejected() {
+            let mut rng = ark_std::test_rng();
+            let p = product(&Config::GENERATOR, Fr::from(7u64));
+            let k = Fr::rand(&mut rng);
+            let honest = mul_witness(&p, k).unwrap();
+            let q = product(&p, k);
+            assert_eq!(check(&p, k, &honest), Some(q));
+            let with_point = |point: G1Affine| MulWitness {
+                x: point.x,
+                y: point.y,
+                ..honest
+            };
+            let with_coefficients = |coefficients: [i128; 4]| MulWitness {
+                coefficients,
+                ..honest
+            };
+
+            // not a point of the curve
+            for (dx, dy) in [(Fq::ONE, Fq::ZERO), (Fq::ZERO, Fq::ONE), (Fq::ONE, Fq::ONE)] {
+                let witness = MulWitness {
+                    x: honest.x + dx,
+                    y: honest.y + dy,
+                    ..honest
+                };
+                assert_rejected_early(&p, k, &witness);
+            }
+            assert_rejected_early(&p, k, &with_point(G1Affine::identity()));
+
+            // another point of the curve, with the coefficients of the scalar: only the sum
+            // tells
+            let others = [
+                -q,
+                p,
+                Config::GENERATOR,
+                (q + p).into_affine(),
+                (q + q).into_affine(),
+                Config::endomorphism_affine(&q),
+                product(&p, k + Fr::ONE),
+                product(&p, -k),
+            ];
+            for other in others {
+                assert!(other.is_on_curve() && other != q);
+                assert_rejected_by_the_sum(&p, k, &with_point(other));
+            }
+
+            // the zero vector passes the congruence, and its sum is empty: only `a + b λ != 0`
+            // rejects it, with the product or with any point
+            assert_rejected_early(&p, k, &with_coefficients([0; 4]));
+            let zeros = MulWitness {
+                coefficients: [0; 4],
+                ..with_point(others[0])
+            };
+            assert_rejected_early(&p, k, &zeros);
+
+            // vectors off the lattice
+            for i in 0..4 {
+                let changes: [fn(i128) -> i128; 5] =
+                    [|c| -c, |c| c + 1, |c| c - 1, |c| c ^ (1 << 40), |_| 0];
+                for change in changes {
+                    let mut coefficients = honest.coefficients;
+                    coefficients[i] = change(coefficients[i]);
+                    if coefficients == honest.coefficients {
+                        continue;
+                    }
+                    assert_rejected_early(&p, k, &with_coefficients(coefficients));
+                }
+            }
+            let [a, b, c, d] = honest.coefficients;
+            for coefficients in [[c, d, a, b], [b, a, d, c], [a, b, d, c], [-a, -b, c, d]] {
+                assert_rejected_early(&p, k, &with_coefficients(coefficients));
+            }
+
+            // the vector of another scalar, with either product
+            let other = mul_witness(&p, k + Fr::ONE).unwrap();
+            assert_rejected_early(&p, k, &other);
+            assert_rejected_early(&p, k, &with_coefficients(other.coefficients));
+        }
+
+        /// The multiples of the witness are vectors of the lattice too: they pass up to the
+        /// bound on the coefficients (their digits cover it), and the bound alone rejects the
+        /// longer ones
+        #[test]
+        fn the_coefficients_are_bounded() {
+            let mut rng = ark_std::test_rng();
+            let p = product(&Config::GENERATOR, Fr::from(5u64));
+            for _ in 0..4 {
+                let k = Fr::rand(&mut rng);
+                let honest = mul_witness(&p, k).unwrap();
+                let q = product(&p, k);
+                let longest = honest
+                    .coefficients
+                    .iter()
+                    .map(|coefficient| coefficient.abs())
+                    .max()
+                    .unwrap();
+                let bound = 1i128 << WITNESS_COEFFICIENT_BITS;
+                // the largest multiple within the bound
+                let within = (bound - 1) / longest;
+                for (multiple, expected) in [
+                    (-1, Some(q)),
+                    (3, Some(q)),
+                    (within, Some(q)),
+                    (-within, Some(q)),
+                    (within + 1, None),
+                    (-within - 1, None),
+                    (1 << 40, None),
+                ] {
+                    let witness = MulWitness {
+                        coefficients: honest
+                            .coefficients
+                            .map(|coefficient| coefficient * multiple),
+                        ..honest
+                    };
+                    // on the lattice, with a non-zero multiplier
+                    let (multiplier, product) = sides(&witness.coefficients);
+                    assert!(!multiplier.is_zero() && multiplier * k == product);
+                    assert_eq!(check(&p, k, &witness), expected, "{multiple}");
+                    if expected.is_none() {
+                        assert_rejected_early(&p, k, &witness);
+                    }
+                }
+                // the extremes of the type
+                for extreme in [i128::MIN, i128::MAX, bound, -bound] {
+                    for i in 0..4 {
+                        let mut coefficients = honest.coefficients;
+                        coefficients[i] = extreme;
+                        let witness = MulWitness {
+                            coefficients,
+                            ..honest
+                        };
+                        assert_rejected_early(&p, k, &witness);
+                    }
+                }
+            }
+        }
+
+        /// The form of a coefficient at the bound: its last digit is the carry
+        #[test]
+        fn non_adjacent_form_of_a_coefficient() {
+            let bound = 1u128 << WITNESS_COEFFICIENT_BITS;
+            for k in [
+                0,
+                1,
+                bound - 1,
+                bound - 15,
+                bound >> 1,
+                0x9e37_79b9_7f4a_7c15_d1b5,
+            ] {
+                let mut digits = [0i8; WITNESS_DIGITS];
+                let len = wnaf::<WITNESS_DIGITS, WITNESS_WINDOW>(&mut digits, k);
+                let mut value = 0i128;
+                let mut zeros = WITNESS_WINDOW;
+                for digit in digits[..len].iter().rev() {
+                    value = 2 * value + i128::from(*digit);
+                    if *digit == 0 {
+                        zeros += 1;
+                    } else {
+                        // an entry of the table of the window
+                        assert!(digit & 1 == 1 && digit.unsigned_abs() < 1 << (WITNESS_WINDOW - 1));
+                        assert!(zeros >= WITNESS_WINDOW - 1);
+                        zeros = 0;
+                    }
+                }
+                assert_eq!(value as u128, k);
+            }
+        }
     }
 }

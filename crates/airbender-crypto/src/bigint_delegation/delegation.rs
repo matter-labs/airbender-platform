@@ -1,7 +1,7 @@
 use super::u256::U256;
 use crate::BigIntOps;
 
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 const CARRY_BIT_IDX: usize = 6;
 
 #[inline(always)]
@@ -71,7 +71,7 @@ pub(super) fn sub_and_negate_with_carry_bit(a: &mut U256, b: &U256, carry: bool)
 //   operands in x10/x11 (so they can be produced right there), change them by hand, and also
 //   end with `a` in x10.
 
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 #[inline(always)]
 fn bigint_op_delegation_chained<'a>(
     a: &'a mut U256,
@@ -101,7 +101,7 @@ fn bigint_op_delegation_chained<'a>(
     }
 }
 
-#[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+#[cfg(not(all(target_arch = "riscv32", bigint_ops)))]
 #[inline(always)]
 fn bigint_op_delegation_chained<'a>(
     a: &'a mut U256,
@@ -148,7 +148,7 @@ pub(super) fn mul_high_chained<'a>(a: &'a mut U256, b: &U256) -> &'a mut U256 {
 
 /// `a * b = high * 2^256 + low`: `a` becomes `low`, and `high` (its content is ignored) is `high`.
 /// The same as `memcpy(high, a); mul_high(high, b); mul_low(a, b)`. Gives `a` back (see above).
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 #[inline(always)]
 pub(super) fn widening_mul<'a>(a: &'a mut U256, high: &mut U256, b: &U256) -> &'a mut U256 {
     let a: *mut U256 = a;
@@ -187,7 +187,7 @@ pub(super) fn widening_mul<'a>(a: &'a mut U256, high: &mut U256, b: &U256) -> &'
     }
 }
 
-#[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+#[cfg(not(all(target_arch = "riscv32", bigint_ops)))]
 #[inline(always)]
 pub(super) fn widening_mul<'a>(a: &'a mut U256, high: &mut U256, b: &U256) -> &'a mut U256 {
     memcpy(high, a);
@@ -199,7 +199,7 @@ pub(super) fn widening_mul<'a>(a: &'a mut U256, high: &mut U256, b: &U256) -> &'
 /// `a * a = high * 2^256 + low`: `a` becomes `low`, and `high` (its content is ignored) is `high`.
 /// A call can not have the same input twice, so it needs a place for a copy of `a`.
 /// Gives `a` back (see above).
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 #[inline(always)]
 pub(super) fn widening_square<'a>(
     a: &'a mut U256,
@@ -247,7 +247,7 @@ pub(super) fn widening_square<'a>(
     }
 }
 
-#[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+#[cfg(not(all(target_arch = "riscv32", bigint_ops)))]
 #[inline(always)]
 pub(super) fn widening_square<'a>(
     a: &'a mut U256,
@@ -266,7 +266,7 @@ fn bigint_op_delegation(a: *mut U256, b: *const U256, op: BigIntOps) -> u32 {
     bigint_op_delegation_with_carry_bit(a, b, false, op)
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 #[inline(always)]
 pub(crate) fn bigint_op_delegation_with_carry_bit(
     a: *mut U256,
@@ -306,7 +306,7 @@ thread_local! {
     pub(crate) static DELEGATION_CALLS_BY_OP: core::cell::RefCell<[u64; 8]> = const { core::cell::RefCell::new([0; 8]) };
 }
 
-#[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+#[cfg(not(all(target_arch = "riscv32", bigint_ops)))]
 #[inline(always)]
 pub(crate) fn bigint_op_delegation_with_carry_bit(
     a_ptr: *mut U256,

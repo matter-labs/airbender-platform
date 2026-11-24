@@ -10,17 +10,9 @@ use ark_ec::{
 use ark_ff::{AdditiveGroup, Field, One, PrimeField, Zero};
 use ruint::aliases::U512;
 
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+#[cfg(bigint_ops)]
 use crate::ark_ff_delegation::{BigIntMacro as BigInt, MontFp};
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-)))]
+#[cfg(not(bigint_ops))]
 use ark_ff::{BigInt, MontFp};
 use ark_serialize::{Compress, SerializationError};
 use core::ops::Neg;
@@ -259,11 +251,7 @@ pub fn is_in_subgroup_with_divider<D: crate::affine_glv::Divider<Fq>>(
 /// subtraction makes it canonical), where `from_sign_and_limbs` would run arkworks' software
 /// multiplication. Longer inputs take `from_sign_and_limbs`.
 pub fn scalar_from_limbs(scalar: &[u64]) -> Fr {
-    #[cfg(any(
-        all(target_arch = "riscv32", feature = "bigint_ops"),
-        test,
-        feature = "proving"
-    ))]
+    #[cfg(bigint_ops)]
     if scalar.len() <= 4 {
         let mut repr = <Fr as PrimeField>::BigInt::default();
         repr.as_mut()[..scalar.len()].copy_from_slice(scalar);
@@ -560,11 +548,11 @@ mod tests {
         use ark_ec::AffineRepr;
         use ark_ff::{PrimeField, UniformRand};
         // random values through the reference field: `Fq::rand` of the 512-bit representation
-        // rejects almost every sample
+        // of the delegation rejects almost every sample
         let from_ref = |x: ark_bls12_381::Fq| {
-            let mut limbs = [0u64; 8];
-            limbs[..6].copy_from_slice(&x.into_bigint().0);
-            Fq::from_bigint(crate::BigInt(limbs)).unwrap()
+            let mut limbs = <Fq as PrimeField>::BigInt::from(0u64);
+            limbs.0[..6].copy_from_slice(&x.into_bigint().0);
+            Fq::from_bigint(limbs).unwrap()
         };
         let mut rng = ark_std::test_rng();
         let mut checked_outside = 0;

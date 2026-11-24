@@ -16,7 +16,9 @@ struct ScratchSpace {
     scratch: U256,
 }
 
-#[cfg(not(test))]
+// One scratch space for the single thread of the guest. On a host that emulates the delegation
+// several threads compute at once, so each has its own (below).
+#[cfg(not(any(test, emulated_delegation)))]
 static mut SCRATCH_SPACE: ScratchSpace = ScratchSpace {
     copy_place_0: U256::zero(),
     copy_place_1: U256::zero(),
@@ -25,12 +27,12 @@ static mut SCRATCH_SPACE: ScratchSpace = ScratchSpace {
     scratch: U256::zero(),
 };
 
-#[cfg(test)]
+#[cfg(any(test, emulated_delegation))]
 use std::cell::UnsafeCell;
 
-#[cfg(test)]
-thread_local! {
-    static SCRATCH_SPACE: UnsafeCell<Box<ScratchSpace>> = UnsafeCell::new(Box::new(ScratchSpace {
+#[cfg(any(test, emulated_delegation))]
+std::thread_local! {
+    static SCRATCH_SPACE: UnsafeCell<std::boxed::Box<ScratchSpace>> = UnsafeCell::new(std::boxed::Box::new(ScratchSpace {
         copy_place_0: U256::zero(),
         copy_place_1: U256::zero(),
         copy_place_2: U256::zero(),
@@ -39,7 +41,7 @@ thread_local! {
     }))
 }
 
-#[cfg(test)]
+#[cfg(any(test, emulated_delegation))]
 macro_rules! with_scratch {
     ($scratch:ident => $($body:tt)*) => {
         SCRATCH_SPACE.with(|cell| unsafe {
@@ -49,7 +51,7 @@ macro_rules! with_scratch {
     };
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, emulated_delegation)))]
 macro_rules! with_scratch {
     ($scratch:ident => $($body:tt)*) => {
         unsafe {
@@ -775,7 +777,8 @@ impl<T: DelegatedModParams<4> + Debug> proptest::arbitrary::Arbitrary for U256Wr
     type Strategy = proptest::arbitrary::Mapped<[u64; 4], Self>;
 }
 
-#[cfg(test)]
+// the delegated representation only
+#[cfg(all(test, bigint_ops))]
 mod tests {
     use super::*;
     use crate::ark_ff_delegation::BigInt;

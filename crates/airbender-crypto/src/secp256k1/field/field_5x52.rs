@@ -509,6 +509,12 @@ impl FieldElement5x52 {
         ])
     }
 
+    /// The stored form, by a name that the debug wrapper of the constants has too
+    #[inline(always)]
+    pub(super) const fn to_storage_5x52(self) -> FieldStorage5x52 {
+        self.to_storage()
+    }
+
     #[inline(always)]
     pub(crate) fn invert_in_place(&mut self) {
         *self = self
@@ -539,7 +545,7 @@ impl FieldElement5x52 {
 
 #[derive(Debug, Clone, Copy)]
 
-pub(super) struct FieldStorage5x52([u64; 4]);
+pub(super) struct FieldStorage5x52(pub(super) [u64; 4]);
 
 impl FieldStorage5x52 {
     pub(super) const DEFAULT: Self = Self([0; 4]);

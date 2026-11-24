@@ -164,6 +164,24 @@ mod tests {
         )
     }
 
+    /// On the packed transport of the 64-bit guests, which read the answers of this process
+    #[test]
+    fn packed_tape_replays() {
+        let (digest, odd, r, s) = fields(&GETH_INPUT);
+        let recovered = assert_packed_tape_replays!(|oracle| key(secp256k1_ecrecover(
+            digest,
+            r,
+            s,
+            odd,
+            Some(oracle)
+        )));
+        assert!(recovered.is_ok());
+        assert_eq!(
+            recovered,
+            key(secp256k1_ecrecover(digest, r, s, odd, None::<&mut NoHints>))
+        );
+    }
+
     /// The secp256k1 answers of this process (canonical integers) differ from the guest's
     /// (Montgomery words) but have the same length, so replaying this process's answers through a
     /// tape reader checks that the guest reads the whole tape and no more.
@@ -171,7 +189,6 @@ mod tests {
     fn recorded_tape_replays() {
         const NEXT_ANSWER: u32 = 0x5eed_5eed;
         let (digest, odd, r, s) = fields(&GETH_INPUT);
-
         let (recorded, tape) =
             record_hints(|oracle| key(secp256k1_ecrecover(digest, r, s, odd, Some(oracle))));
         assert!(recorded.is_ok());

@@ -1,4 +1,4 @@
-#[cfg(feature = "bigint_ops")]
+#[cfg(secp256k1_weak_field)]
 use crate::secp256k1::field::FieldElement;
 use crate::secp256k1::field::FieldStorage;
 
@@ -27,7 +27,7 @@ impl AffineStorage {
     }
 
     /// The coordinates in place, with the delegated field (no conversion, no copy)
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(secp256k1_weak_field)]
     #[inline(always)]
     pub(crate) fn coordinates(&self) -> (&FieldElement, &FieldElement) {
         (self.x.as_field_elem(), self.y.as_field_elem())

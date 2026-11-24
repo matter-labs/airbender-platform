@@ -11,7 +11,7 @@ categories.workspace = true
 description = "The oracle protocol of Airbender guests: query IDs and the querier side of the memory-based protocol"
 
 [dependencies]
-# The simulator's CSR source trait, for the oracle side on the host (`oracle_processor`)
+# The oracle side on the host (`oracle_processor`), which Airbender's simulator crate defines
 riscv_transpiler = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "riscv32")'.dependencies]
@@ -19,10 +19,8 @@ riscv_common = { workspace = true }
 
 [features]
 default = []
-# The oracle side on the host (`std`): `QueryDispatcher`, which dispatches memory-based queries
-# to `OracleQueryProcessor`s, serves a querier in this process and the RISC-V guest of the
-# simulators (transpiler-based and JIT)
-oracle_processor = ["query_processor", "dep:riscv_transpiler"]
-# The responder side alone (`alloc`): `OracleQueryProcessor` and `RunMode`, for crates that
-# answer queries without depending on the simulators
-query_processor = []
+# The oracle side on the host (`std`), re-exported from `riscv_transpiler::oracle`: the
+# dispatcher, the responder trait, the querier's memory and the system query IDs, and
+# `MemoryOracle` for a querier in this process on top of them. Not for guests: it pulls in the
+# simulator crate.
+oracle_processor = ["dep:riscv_transpiler"]

@@ -284,11 +284,11 @@ impl<const SHA3: bool> MiniDigest for Keccak256Core<SHA3> {
     }
 }
 
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 static ZERO_WORD: crate::BigInt<4> = crate::BigInt::<4>::zero();
 
 impl<const SHA3: bool> Keccak256Core<SHA3> {
-    #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+    #[cfg(all(target_arch = "riscv32", bigint_ops))]
     #[inline(always)]
     fn reset_state(&mut self) {
         // We know that our state is overaligned, so we can do memcpy via precompile.
@@ -307,7 +307,7 @@ impl<const SHA3: bool> Keccak256Core<SHA3> {
 
     /// Zero the state with inline stores: a plain loop (or `fill`) is recognized as `memset`
     /// and becomes a call, that costs more than the stores themselves
-    #[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+    #[cfg(not(all(target_arch = "riscv32", bigint_ops)))]
     #[inline(always)]
     fn reset_state(&mut self) {
         for dst in self.state.0.iter_mut() {

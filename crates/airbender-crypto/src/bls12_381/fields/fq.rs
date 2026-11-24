@@ -1,4 +1,4 @@
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+#[cfg(all(target_arch = "riscv32", not(bigint_ops)))]
 compile_error!("feature `bigint_ops` must be activated for RISC-V target");
 
 // partially reused cargo expand of derived FqConfig with multiplication updated

@@ -36,7 +36,7 @@ pub struct BigInt<const N: usize>(pub [u64; N]);
 impl<const N: usize> PartialEq for BigInt<N> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
-        #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+        #[cfg(all(target_arch = "riscv32", bigint_ops))]
         if N == 4 {
             // SAFETY: `N == 4`, so both are `BigInt<4>` (same layout, 32-byte aligned)
             let (a, b) = unsafe {

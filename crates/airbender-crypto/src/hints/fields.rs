@@ -9,7 +9,9 @@ pub use self::bls12_381_extension::{
 };
 
 use super::answer::HintAnswer;
-use super::request::{query_field_hint, query_field_hint_into, FieldHintOp};
+#[cfg(not(fp_lazy_reduction))]
+use super::request::query_field_hint_into;
+use super::request::{query_field_hint, FieldHintOp};
 use airbender_oracle::MemoryOracle;
 use ark_ff::{Field, PrimeField, Zero};
 use core::mem::MaybeUninit;
@@ -44,6 +46,46 @@ pub fn bn254_fq_inverse<O: MemoryOracle>(
     unsafe { inverse_from_hint(oracle, FieldHintOp::Bn254BaseFieldInverse, a) }
 }
 
+/// `fraction[0] / fraction[1]` from the hint `op`, for the base fields of the 64-bit targets
+/// without the bigint delegation (arkworks' `Fp`): the limbs of the quotient are read into
+/// registers, checked to be canonical, and `quotient * denominator` is compared with the
+/// numerator as it comes out of its reduction. The denominator is non-zero (the caller's
+/// obligation), so only the quotient passes.
+///
+/// # Safety
+///
+/// `[Fp; 2]` must be the operand type of `op` (see `send_field_hint_query`).
+#[cfg(fp_lazy_reduction)]
+#[inline(always)]
+unsafe fn divide_on_limbs<'q, O: MemoryOracle, T: ark_ff::MontConfig<N>, const N: usize>(
+    oracle: &mut O,
+    op: FieldHintOp,
+    fraction: &[ark_ff::Fp<ark_ff::MontBackend<T, N>, N>; 2],
+    quotient: &'q mut MaybeUninit<ark_ff::Fp<ark_ff::MontBackend<T, N>, N>>,
+) -> &'q mut ark_ff::Fp<ark_ff::MontBackend<T, N>, N> {
+    use crate::lazy_fp::towers::{from_limbs, is_product};
+
+    // SAFETY: guaranteed by the caller
+    unsafe { super::request::send_field_hint_query(oracle, op, fraction) }
+        .expect("must send the field hint query");
+    // the answer: the limbs of the quotient, each as its low and high words (one advice word
+    // on the packed transport)
+    let mut limbs = [0u64; N];
+    for limb in &mut limbs {
+        *limb = oracle.read_u64().expect("the hint answer is well-formed");
+    }
+    oracle
+        .finish_query()
+        .expect("the hint answer has no excess data");
+    let value = from_limbs(limbs).expect("the hint is a canonical field element");
+    let [numerator, denominator] = fraction;
+    assert!(
+        is_product(&value, denominator, numerator),
+        "the field division hint is wrong"
+    );
+    quotient.write(value)
+}
+
 /// Divisions in the bn254 base field from hints, for the curve arithmetic in affine coordinates
 /// (`crate::affine_glv`)
 pub struct Bn254FqDivider<'a, O: MemoryOracle> {
@@ -64,6 +106,17 @@ impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bn254::Fq> for Bn254FqDi
         quotient: &'q mut MaybeUninit<crate::bn254::Fq>,
     ) -> &'q mut crate::bn254::Fq {
         // SAFETY: `[bn254::Fq; 2]` is the operand type of the bn254 base field division
+        #[cfg(fp_lazy_reduction)]
+        return unsafe {
+            divide_on_limbs(
+                self.oracle,
+                FieldHintOp::Bn254BaseFieldDivision,
+                fraction,
+                quotient,
+            )
+        };
+        // SAFETY: as above
+        #[cfg(not(fp_lazy_reduction))]
         let quotient = unsafe {
             query_field_hint_into(
                 self.oracle,
@@ -74,11 +127,14 @@ impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bn254::Fq> for Bn254FqDi
         };
         // quotient * denominator == numerator: the denominator is non-zero (the caller's
         // obligation), so only the quotient passes. The fraction is ours to overwrite.
-        let [numerator, denominator] = fraction;
-        *denominator *= &*quotient;
-        *denominator -= &*numerator;
-        assert!(denominator.is_zero(), "the field division hint is wrong");
-        quotient
+        #[cfg(not(fp_lazy_reduction))]
+        {
+            let [numerator, denominator] = fraction;
+            *denominator *= &*quotient;
+            *denominator -= &*numerator;
+            assert!(denominator.is_zero(), "the field division hint is wrong");
+            quotient
+        }
     }
 }
 
@@ -103,6 +159,17 @@ impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bls12_381::Fq>
         quotient: &'q mut MaybeUninit<crate::bls12_381::Fq>,
     ) -> &'q mut crate::bls12_381::Fq {
         // SAFETY: `[bls12_381::Fq; 2]` is the operand type of the bls12-381 base field division
+        #[cfg(fp_lazy_reduction)]
+        return unsafe {
+            divide_on_limbs(
+                self.oracle,
+                FieldHintOp::Bls12381BaseFieldDivision,
+                fraction,
+                quotient,
+            )
+        };
+        // SAFETY: as above
+        #[cfg(not(fp_lazy_reduction))]
         let quotient = unsafe {
             query_field_hint_into(
                 self.oracle,
@@ -112,11 +179,14 @@ impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bls12_381::Fq>
             )
         };
         // as for bn254: only the quotient passes
-        let [numerator, denominator] = fraction;
-        *denominator *= &*quotient;
-        *denominator -= &*numerator;
-        assert!(denominator.is_zero(), "the field division hint is wrong");
-        quotient
+        #[cfg(not(fp_lazy_reduction))]
+        {
+            let [numerator, denominator] = fraction;
+            *denominator *= &*quotient;
+            *denominator -= &*numerator;
+            assert!(denominator.is_zero(), "the field division hint is wrong");
+            quotient
+        }
     }
 }
 

@@ -957,7 +957,8 @@ impl<P: FpConfig<N>, const N: usize> From<BigInt<N>> for Fp<P, N> {
     }
 }
 
-#[cfg(test)]
+// the delegated representation only
+#[cfg(all(test, bigint_ops))]
 mod tests {
     use super::*;
     use ark_ec::short_weierstrass::SWFlags;

@@ -6,7 +6,9 @@ pub(crate) trait ModMul {
 
     /// A placeholder value, only ever assigned over (a cheap value, not a residue)
     fn placeholder(&mut self) -> Self::Elem;
-    fn clone_elem(&mut self, x: &Self::Elem) -> Self::Elem;
+    /// `dst = x`, in place: a residue of the longest modulus is kilobytes with its buffer, and
+    /// is not moved
+    fn clone_into(&mut self, dst: &mut Self::Elem, x: &Self::Elem);
     fn is_zero(&self, x: &Self::Elem) -> bool;
     /// `x = x^2 mod m`
     fn square_assign(&mut self, x: &mut Self::Elem);
@@ -36,7 +38,8 @@ pub(crate) fn exponentiate<M: ModMul>(m: &mut M, base: &M::Elem, exp: &[u8]) -> 
 /// Left-to-right binary exponentiation: after the leading set bit, a squaring per bit and
 /// a multiplication per set bit
 fn exponentiate_binary<M: ModMul>(m: &mut M, base: &M::Elem, exp: &[u8]) -> M::Elem {
-    let mut acc = m.clone_elem(base);
+    let mut acc = m.placeholder();
+    m.clone_into(&mut acc, base);
     let mut started = false;
     for &byte in exp {
         for i in (0..8).rev() {
@@ -63,12 +66,11 @@ fn exponentiate_binary<M: ModMul>(m: &mut M, base: &M::Elem, exp: &[u8]) -> M::E
 fn exponentiate_windowed<M: ModMul>(m: &mut M, base: &M::Elem, exp: &[u8]) -> M::Elem {
     // table[i] = base^i for i >= 1 (table[0] is unused)
     let mut table: [M::Elem; TABLE_SIZE] = core::array::from_fn(|_| m.placeholder());
-    table[1] = m.clone_elem(base);
+    m.clone_into(&mut table[1], base);
     for i in 2..TABLE_SIZE {
         let (lower, upper) = table.split_at_mut(i);
-        let mut power = m.clone_elem(&lower[i - 1]);
-        m.mul_assign(&mut power, base);
-        upper[0] = power;
+        m.clone_into(&mut upper[0], &lower[i - 1]);
+        m.mul_assign(&mut upper[0], base);
     }
 
     let mut acc = m.placeholder();
@@ -78,7 +80,7 @@ fn exponentiate_windowed<M: ModMul>(m: &mut M, base: &M::Elem, exp: &[u8]) -> M:
             if !started {
                 if window != 0 {
                     started = true;
-                    acc = m.clone_elem(&table[window as usize]);
+                    m.clone_into(&mut acc, &table[window as usize]);
                 }
                 continue;
             }

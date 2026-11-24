@@ -100,6 +100,10 @@ unsafe fn answer(op: FieldHintOp, operand: &Operand, responses: &mut Responses) 
             FieldHintOp::Bls12381Fq12Inverse => {
                 responses.write(&inverse::<crate::bls12_381::Fq12>(operand))
             }
+            FieldHintOp::Bn254G1MulWitness => match bn254::g1_mul_witness(operand) {
+                Some(witness) => responses.write(&(true, witness)),
+                None => responses.write(&false),
+            },
             FieldHintOp::Bn254PairingResidueWitness => {
                 bn254::pairing_residue_witness(operand, false, responses)
             }
@@ -539,5 +543,56 @@ mod native_query_tests {
         assert_eq!(expected.len(), 1 + 8 + 8 + 16);
         assert_eq!(native, expected);
         assert_eq!(guest, expected);
+    }
+
+    #[test]
+    fn the_g1_mul_witness_answers_every_target() {
+        use crate::hints::Bn254G1MulRequest;
+        use crate::{bn254, oracle_common::mul_witness};
+
+        let point: bn254::G1Affine = (bn254::G1Affine::generator() * bn254::Fr::from(5u64)).into();
+        let scalar = bn254::Fr::from(0x1234_5678_9abc_def1u64).pow([5]);
+        let operand = Bn254G1MulRequest {
+            scalar,
+            x: point.x,
+            y: point.y,
+        };
+        // the guest's request: the three elements as their Montgomery limbs, any representative
+        for extra in [0, 1] {
+            let guest = [
+                guest_limbs(scalar, 4, extra),
+                guest_limbs(point.x, 4, 1 - extra),
+                guest_limbs(point.y, 4, extra),
+            ]
+            .concat();
+            assert_same_guest_answers(FieldHintOp::Bn254G1MulWitness, &operand, &guest);
+        }
+
+        let (native, guest) = process(
+            &request(FieldHintOp::Bn254G1MulWitness, &operand),
+            true,
+            true,
+        );
+        let witness = mul_witness(&point, scalar).unwrap();
+        for (target, words) in [(HintTarget::Native, native), (HintTarget::Guest, guest)] {
+            let mut expected = Vec::new();
+            (true, witness).write(target, &mut expected);
+            assert_eq!(expected.len(), 1 + 8 + 8 + 16);
+            assert_eq!(words, expected);
+        }
+
+        // nothing to witness: a zero scalar, a point off the curve
+        let zero = Bn254G1MulRequest {
+            scalar: bn254::Fr::from(0u64),
+            ..operand
+        };
+        let off_curve = Bn254G1MulRequest {
+            y: point.y + bn254::Fq::from(1u64),
+            ..operand
+        };
+        for operand in [zero, off_curve] {
+            let hint = request(FieldHintOp::Bn254G1MulWitness, &operand);
+            assert_eq!(process(&hint, true, true), (vec![0], vec![0]));
+        }
     }
 }

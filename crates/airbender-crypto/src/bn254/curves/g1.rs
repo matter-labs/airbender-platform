@@ -1,14 +1,6 @@
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+#[cfg(bigint_ops)]
 use crate::ark_ff_delegation::BigInt as ScalarBigInt;
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+#[cfg(bigint_ops)]
 use crate::ark_ff_delegation::MontFp;
 use ark_ec::{
     bn,
@@ -17,17 +9,9 @@ use ark_ec::{
     short_weierstrass::{Affine, Projective},
     AffineRepr,
 };
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-)))]
+#[cfg(not(bigint_ops))]
 use ark_ff::BigInt as ScalarBigInt;
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-)))]
+#[cfg(not(bigint_ops))]
 use ark_ff::MontFp;
 use ark_ff::{AdditiveGroup, Field, PrimeField, Zero};
 use ruint::aliases::U512;
@@ -105,6 +89,39 @@ pub fn mul_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
     crate::affine_glv::glv_mul_affine::<Config, D>(base, scalar_from_limbs(scalar), divider)
 }
 
+/// `scalar * base` (little-endian limbs, any value below 2^256) with the hints of `oracle`:
+/// the product is the oracle's, checked with its witness (`affine_glv::check_mul_witness`,
+/// about two thirds of the group operations of the multiplication), or computed with hinted
+/// divisions ([`mul_affine_with_divider`]) if the oracle has no witness.
+///
+/// # Panics
+///
+/// If the witness is wrong.
+#[cfg(any(feature = "hinted_operations", test))]
+pub fn mul_affine_with_oracle<O: airbender_oracle::MemoryOracle>(
+    base: &G1Affine,
+    scalar: &[u64; 4],
+    oracle: &mut O,
+) -> G1Affine {
+    use crate::hints::{bn254_g1_mul_witness, Bn254FqDivider};
+
+    let k = scalar_from_limbs(scalar);
+    // the cases without a witness: the product is the point at infinity (the group has prime
+    // order, so of no other point and scalar)
+    if base.infinity || k.is_zero() {
+        return G1Affine::identity();
+    }
+    let witness = bn254_g1_mul_witness(oracle, base, &k);
+    let divider = &mut Bn254FqDivider::new(oracle);
+    match witness {
+        Some(witness) => {
+            crate::affine_glv::check_mul_witness::<Config, _>(base, k, &witness, divider)
+                .expect("the scalar multiplication witness is wrong")
+        }
+        None => crate::affine_glv::glv_mul_affine::<Config, _>(base, k, divider),
+    }
+}
+
 /// `a + b` in affine coordinates, with the field division of `divider`
 pub fn add_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
     a: &G1Affine,
@@ -121,11 +138,7 @@ pub fn add_affine_with_divider<D: crate::affine_glv::Divider<Fq>>(
 /// canonical), where `from_sign_and_limbs` would run arkworks' software multiplication.
 #[inline(always)]
 fn scalar_from_limbs(scalar: &[u64]) -> Fr {
-    #[cfg(any(
-        all(target_arch = "riscv32", feature = "bigint_ops"),
-        test,
-        feature = "proving"
-    ))]
+    #[cfg(bigint_ops)]
     if scalar.len() <= 4 {
         let mut repr = <Fr as PrimeField>::BigInt::default();
         repr.as_mut()[..scalar.len()].copy_from_slice(scalar);
@@ -297,12 +310,8 @@ mod mul_tests {
         if p.infinity {
             return G1Affine::identity();
         }
-        let x =
-            crate::bn254::Fq::from_bigint(crate::ark_ff_delegation::BigInt(p.x.into_bigint().0))
-                .unwrap();
-        let y =
-            crate::bn254::Fq::from_bigint(crate::ark_ff_delegation::BigInt(p.y.into_bigint().0))
-                .unwrap();
+        let x = crate::bn254::Fq::from_bigint(crate::BigInt(p.x.into_bigint().0)).unwrap();
+        let y = crate::bn254::Fq::from_bigint(crate::BigInt(p.y.into_bigint().0)).unwrap();
         G1Affine::new_unchecked(x, y)
     }
 

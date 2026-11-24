@@ -3,10 +3,7 @@
 //! so these tests check bit identity with the Miller loop of each pair on its own (one
 //! single-pair call per pair, multiplied), and agreement with arkworks.
 // the forward representation only (the delegated one has other limb counts and conversions)
-#![cfg(not(any(
-    feature = "proving",
-    all(target_arch = "riscv32", feature = "bigint_ops")
-)))]
+#![cfg(not(bigint_ops))]
 
 use airbender_crypto::ark_ec::pairing::{MillerLoopOutput, Pairing};
 use airbender_crypto::ark_ec::{AffineRepr, CurveGroup, PrimeGroup};

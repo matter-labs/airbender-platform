@@ -1093,7 +1093,7 @@ pub struct FieldStorage10x26(pub(super) [u32; 8]);
 impl FieldStorage10x26 {
     pub(super) const DEFAULT: Self = Self([0; 8]);
 
-    #[cfg(not(feature = "bigint_ops"))]
+    #[cfg(not(bigint_ops))]
     #[inline(always)]
     pub(super) fn to_field_elem(self) -> FieldElement10x26 {
         FieldElement10x26([
@@ -1110,7 +1110,7 @@ impl FieldStorage10x26 {
         ])
     }
 
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(bigint_ops)]
     #[inline(always)]
     pub(super) fn to_field_elem(self) -> crate::secp256k1::field::field_8x32::FieldElement8x32 {
         let mut res = [0; 4];

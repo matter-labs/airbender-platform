@@ -1,10 +1,15 @@
 //! The request of a field hint query, how the oracle reads it, and the query itself.
 
 use super::answer::HintAnswer;
+#[cfg(any(feature = "oracle_implementations", test))]
 use super::oracle::HintError;
 use super::FIELD_OPS_ADVISE_QUERY_ID;
-use airbender_oracle::{read_querier_word, MemoryOracle, QuerierMemory};
-use core::mem::{offset_of, MaybeUninit};
+use airbender_oracle::MemoryOracle;
+#[cfg(any(feature = "oracle_implementations", test))]
+use airbender_oracle::{read_querier_word, QuerierMemory};
+#[cfg(any(feature = "oracle_implementations", test))]
+use core::mem::offset_of;
+use core::mem::MaybeUninit;
 
 /// The request of a field hint query: the op, and the address and length (in `u32` words) of
 /// the operand. `W` is the querier's word.
@@ -68,11 +73,16 @@ pub enum FieldHintOp {
     /// bls12-381 pairing claim: `hints::Bls12381Pair`s in; an identity flag, then `d, s`, or else
     /// the conjugated Miller loop inverse
     Bls12381PairingResidueWitness = 15,
+    /// The witness of a bn254 `G1` scalar multiplication (`affine_glv::MulWitness`, checked by
+    /// the multiplication): a `hints::Bn254G1MulRequest` in; a flag out (cleared: no witness,
+    /// nothing more), then the coordinates of the product (`Fq` each) and the four coefficients
+    /// (`i128`, 4 little-endian words each, the same words on every target)
+    Bn254G1MulWitness = 16,
 }
 
 impl FieldHintOp {
     pub fn parse_u32(value: u32) -> Option<Self> {
-        const ALL: [FieldHintOp; 16] = [
+        const ALL: [FieldHintOp; 17] = [
             FieldHintOp::Secp256k1BaseFieldSqrt,
             FieldHintOp::Secp256k1BaseFieldInverse,
             FieldHintOp::Secp256k1ScalarFieldInverse,
@@ -89,6 +99,7 @@ impl FieldHintOp {
             FieldHintOp::Bls12381BaseFieldDivision,
             FieldHintOp::Secp256k1RecoveryWitness,
             FieldHintOp::Bls12381PairingResidueWitness,
+            FieldHintOp::Bn254G1MulWitness,
         ];
         ALL.into_iter().find(|op| *op as u32 == value)
     }
@@ -96,6 +107,8 @@ impl FieldHintOp {
 
 /// Reads the `GenericFieldOpsHint<usize>` at `address` of the querier ([`FieldOpsHint`] on the
 /// guest, [`FieldOpsHint64`] in this process): the op, and the operand's address and length.
+/// The oracle side (`oracle_implementations`).
+#[cfg(any(feature = "oracle_implementations", test))]
 pub fn read_field_hint_request<M: QuerierMemory + ?Sized>(
     memory: &M,
     address: usize,

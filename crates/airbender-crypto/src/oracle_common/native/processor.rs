@@ -1,6 +1,6 @@
-//! The responder for this crate's hints as an [`OracleQueryProcessor`] of
-//! `airbender_oracle::processor::QueryDispatcher` (the `oracle_processor` feature). Only the
-//! trait is needed here (`airbender_oracle::query_processor`), so no host tooling is pulled in.
+//! The responder for this crate's hints as an [`OracleQueryProcessor`] of Airbender's
+//! `QueryDispatcher` (`riscv_transpiler::oracle`, re-exported by
+//! `airbender_oracle::processor`), with the `oracle_processor` feature.
 
 use super::answer_query;
 use crate::hints::{
@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 /// fields of the RISC-V guest, or the native fields of a querier in this process.
 ///
 /// ```ignore
-/// let mut oracle = QueryDispatcher::<HintError>::new(RunMode::RiscVRun);
+/// let mut oracle = QueryDispatcher::new(RunMode::RiscVRun);
 /// oracle.add_external_processor(CryptoHints);
 /// // `oracle` is the non-determinism CSR source of the guest, or with `RunMode::NativeRunOnly`
 /// // the `MemoryOracle` of the hinted operations run in this process
@@ -68,6 +68,50 @@ impl OracleQueryProcessor for CryptoHints {
             Ok(true),
             "the dispatcher sends this processor the query IDs it declared"
         );
+    }
+}
+
+/// As [`CryptoHints`], for a RISC-V guest that reads the hints in the native representation
+/// (`HintTarget::Native`): a `riscv64` guest, which has no bigint delegation, or a `riscv32` one
+/// without `bigint_ops`. Such a guest is the twin of the native run, so a recording run
+/// ([`RunMode::NativeRunSavingForRiscV`]) saves for it the words its own querier reads.
+///
+/// It does not serve the guest itself ([`RunMode::RiscVRun`]): the requests of a guest are read
+/// in the layout of the `riscv32` guest with `bigint_ops`. Such a guest replays the recording.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NativeGuestCryptoHints;
+
+impl OracleQueryProcessor for NativeGuestCryptoHints {
+    fn supported_memory_query_ids(&self) -> Vec<u32> {
+        CryptoHints.supported_memory_query_ids()
+    }
+
+    fn process_memory_query(
+        &mut self,
+        query_id: u32,
+        input_word: usize,
+        memory: &dyn QuerierMemory,
+        mode: RunMode,
+        native_run_responses: &mut Vec<u32>,
+        guest_run_responses: &mut Vec<u32>,
+    ) {
+        assert!(
+            mode.produces_native_run_responses(),
+            "a guest with the native representation of the hints is not served in the simulator: \
+             it replays the hints that a native run records"
+        );
+        let answered_from = native_run_responses.len();
+        CryptoHints.process_memory_query(
+            query_id,
+            input_word,
+            memory,
+            RunMode::NativeRunOnly,
+            native_run_responses,
+            guest_run_responses,
+        );
+        if mode.produces_guest_run_responses() {
+            guest_run_responses.extend_from_slice(&native_run_responses[answered_from..]);
+        }
     }
 }
 
@@ -153,6 +197,103 @@ mod tests {
             assert_eq!(*modexp(&base, &exp, &modulus, Some(recorder)), *power);
         });
         assert!(!tape.is_empty());
+    }
+
+    /// With Airbender's dispatcher itself: it serves a native run as its `MemoryOracle`, and a
+    /// recording one saves the words the guest reads, the tape of the recorder
+    #[test]
+    fn registers_with_the_dispatcher() {
+        use airbender_oracle::processor::{QueryDispatcher, ReadWitnessSource};
+
+        let base = hex!("0000000000000000000000000000000000000000000000000000000000c0ffee");
+        let exp = hex!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        let modulus = hex!("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+        let digest = hex!("38d18acb67d25c8bb9942764b62f18e17054f66a817bd4295423adf9ed98873e");
+        let s = hex!("789d1dd423d25f0772d2748d60f7e4b81bb14d086eba8e8e8efb6dcff8a4ae02");
+        let plain_power = modexp(&base, &exp, &modulus, None::<&mut NoHints>);
+        let plain_key = secp256k1_ecrecover(&digest, &digest, &s, false, None::<&mut NoHints>)
+            .unwrap()
+            .0;
+
+        let mut oracle = QueryDispatcher::new(RunMode::NativeRunOnly);
+        oracle.add_external_processor(CryptoHints);
+        assert_eq!(
+            *modexp(&base, &exp, &modulus, Some(&mut oracle)),
+            *plain_power
+        );
+        let key = secp256k1_ecrecover(&digest, &digest, &s, false, Some(&mut oracle)).unwrap();
+        assert_eq!(key.0, plain_key);
+
+        let mut oracle = QueryDispatcher::new(RunMode::NativeRunSavingForRiscV);
+        oracle.add_external_processor(CryptoHints);
+        let mut source = ReadWitnessSource::new(oracle);
+        assert_eq!(
+            *modexp(&base, &exp, &modulus, Some(&mut source)),
+            *plain_power
+        );
+        let key = secp256k1_ecrecover(&digest, &digest, &s, false, Some(&mut source)).unwrap();
+        assert_eq!(key.0, plain_key);
+        let ((), tape) = record_hints(|recorder| {
+            modexp(&base, &exp, &modulus, Some(&mut *recorder));
+            secp256k1_ecrecover(&digest, &digest, &s, false, Some(recorder)).unwrap();
+        });
+        assert!(!tape.is_empty());
+        assert_eq!(*source.get_read_items().borrow(), tape);
+    }
+
+    /// For a guest with the native representation, a recording run saves the words of the
+    /// native answers: the tape of a recorder for that target
+    #[test]
+    fn a_native_guest_is_recorded_its_native_answers() {
+        use crate::hints::{HintTarget, RecordingHintOracle};
+        use airbender_oracle::processor::{QueryDispatcher, ReadWitnessSource};
+
+        let digest = hex!("38d18acb67d25c8bb9942764b62f18e17054f66a817bd4295423adf9ed98873e");
+        let s = hex!("789d1dd423d25f0772d2748d60f7e4b81bb14d086eba8e8e8efb6dcff8a4ae02");
+        let base = hex!("0000000000000000000000000000000000000000000000000000000000c0ffee");
+        let modulus = hex!("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+
+        let mut oracle = QueryDispatcher::new(RunMode::NativeRunSavingForRiscV);
+        oracle.add_external_processor(NativeGuestCryptoHints);
+        let mut source = ReadWitnessSource::new(oracle);
+        let key = secp256k1_ecrecover(&digest, &digest, &s, false, Some(&mut source)).unwrap();
+        let power = modexp(&base, &digest, &modulus, Some(&mut source));
+
+        let mut recorder = RecordingHintOracle::recording_for(HintTarget::Native);
+        let recorded = secp256k1_ecrecover(&digest, &digest, &s, false, Some(&mut recorder));
+        assert_eq!(recorded.map(|key| key.0), Ok(key.0));
+        assert_eq!(
+            *modexp(&base, &digest, &modulus, Some(&mut recorder)),
+            *power
+        );
+        assert_eq!(*source.get_read_items().borrow(), recorder.tape());
+        // which is not the tape of the guest with the bigint delegation
+        let ((), delegated) = record_hints(|recorder| {
+            secp256k1_ecrecover(&digest, &digest, &s, false, Some(recorder)).unwrap();
+        });
+        assert_ne!(recorder.tape()[..delegated.len()], delegated[..]);
+
+        // a native run alone is served as by `CryptoHints`
+        let mut oracle = QueryDispatcher::new(RunMode::NativeRunOnly);
+        oracle.add_external_processor(NativeGuestCryptoHints);
+        let alone = secp256k1_ecrecover(&digest, &digest, &s, false, Some(&mut oracle));
+        assert_eq!(alone.map(|key| key.0), Ok(key.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "is not served in the simulator")]
+    fn a_native_guest_is_not_served_in_the_simulator() {
+        let (mut native, mut guest) = (Vec::new(), Vec::new());
+        // SAFETY: nothing is read before the mode is rejected
+        let memory = unsafe { NativeQuerierMemory::new() };
+        NativeGuestCryptoHints.process_memory_query(
+            crate::hints::FIELD_OPS_ADVISE_QUERY_ID,
+            0,
+            &memory,
+            RunMode::RiscVRun,
+            &mut native,
+            &mut guest,
+        );
     }
 
     #[test]

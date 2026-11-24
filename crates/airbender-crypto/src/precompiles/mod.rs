@@ -10,13 +10,47 @@
 //! (`crate::scratch`) whose capacity is the most pairs a transaction can pay for under the gas
 //! cap of EIP-7825 ([`MAX_TX_GAS`]); more pairs fail before anything is parsed.
 
+/// Records the hints of `$call` for the packed transport of the 64-bit guests, checks that the
+/// advice words are the native answers under the packing rule, as the reads of the call take
+/// them, and that a guest reading them gets the same result from exactly those words; evaluates
+/// to the result
+#[cfg(all(test, target_pointer_width = "64"))]
+macro_rules! assert_packed_tape_replays {
+    (|$oracle:ident| $call:expr) => {{
+        let mut logged = $crate::hints::test_support::ReadLog::new(
+            $crate::hints::RecordingHintOracle::recording_packed_native(),
+        );
+        let recorded = {
+            let $oracle = &mut logged;
+            $call
+        };
+        let packed_tape = logged.inner.packed_tape().to_vec();
+        assert_eq!(
+            packed_tape,
+            $crate::hints::test_support::pack(logged.inner.tape(), &logged.reads)
+        );
+        assert!(packed_tape.len() < logged.inner.tape().len());
+        const NEXT_ADVICE: u64 = 0x5eed_5eed_5eed_5eed;
+        let mut guest = $crate::hints::test_support::packed_tape_oracle(
+            packed_tape.into_iter().chain([NEXT_ADVICE]),
+        );
+        let replayed = {
+            let $oracle = &mut guest;
+            $call
+        };
+        assert_eq!(replayed, recorded);
+        assert_eq!(guest.channel().words, [NEXT_ADVICE]);
+        recorded
+    }};
+}
+
 /// Records the hints of `$call`, replays the tape through a tape reader as the guest does, and
 /// checks the same result and that exactly the whole tape is read; evaluates to the result
 #[cfg(all(test, target_pointer_width = "64"))]
 macro_rules! assert_tape_replays {
     (|$oracle:ident| $call:expr) => {{
         const NEXT_ANSWER: u32 = 0x5eed_5eed;
-        let (recorded, tape) = $crate::hints::record_hints(|$oracle| $call);
+        let (recorded, tape) = $crate::hints::test_support::record_build_tape(|$oracle| $call);
         assert!(!tape.is_empty(), "the call takes hints");
         let mut guest =
             $crate::hints::test_support::TapeOracle::new(tape.iter().copied().chain([NEXT_ANSWER]));
@@ -26,6 +60,9 @@ macro_rules! assert_tape_replays {
         };
         assert_eq!(replayed, recorded);
         assert_eq!(guest.words, [NEXT_ANSWER]);
+
+        let packed = assert_packed_tape_replays!(|$oracle| $call);
+        assert_eq!(packed, recorded);
         recorded
     }};
 }
@@ -123,5 +160,59 @@ mod bounds {
         assert_eq!(MAX_BLS12_381_PAIRS, 513);
         assert_eq!(MAX_BLS12_381_G1_MSM_PAIRS, 2693);
         assert_eq!(MAX_BLS12_381_G2_MSM_PAIRS, 1423);
+    }
+}
+
+/// ModExp with hints through a tape reader and on the packed transport: a modulus of one 256-bit
+/// digit (the wide quotients) and longer ones (the quotients and remainders of the reductions,
+/// with lengths that are odd numbers of words too)
+#[cfg(all(test, target_pointer_width = "64"))]
+mod modexp_tape_tests {
+    use crate::hints::NoHints;
+    use crate::modexp::modexp;
+    use std::vec::Vec;
+
+    /// `len` bytes of a fixed pseudo-random stream (SplitMix64), the first of them not zero
+    fn bytes(seed: u64, len: usize) -> Vec<u8> {
+        let mut state = seed;
+        let mut bytes: Vec<u8> = (0..len)
+            .map(|_| {
+                state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                (z ^ (z >> 31)) as u8
+            })
+            .collect();
+        bytes[0] |= 1;
+        bytes
+    }
+
+    #[test]
+    fn recorded_tapes_replay() {
+        for (i, (base_len, exp_len, modulus_len)) in [
+            (32, 3, 32),
+            (20, 32, 31),
+            (64, 5, 64),
+            (70, 2, 37),
+            (100, 3, 99),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let base = bytes(3 * i as u64 + 1, base_len);
+            let exp = bytes(3 * i as u64 + 2, exp_len);
+            let mut modulus = bytes(3 * i as u64 + 3, modulus_len);
+            // odd, so that the reductions are general
+            modulus[modulus_len - 1] |= 1;
+            let result = assert_tape_replays!(|oracle| modexp(&base, &exp, &modulus, Some(oracle)));
+            // either path may pad its result with leading zeroes
+            let plain = modexp(&base, &exp, &modulus, None::<&mut NoHints>);
+            let significant = |bytes: &[u8]| {
+                let zeroes = bytes.iter().take_while(|byte| **byte == 0).count();
+                bytes[zeroes..].to_vec()
+            };
+            assert_eq!(significant(&result), significant(&plain));
+        }
     }
 }

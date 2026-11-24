@@ -5,21 +5,18 @@ use cfg_if::cfg_if;
 
 mod invert;
 
-#[cfg(all(target_pointer_width = "64", not(feature = "bigint_ops")))]
+#[cfg(all(target_pointer_width = "64", not(bigint_ops)))]
 mod scalar64;
 
-#[cfg(all(target_pointer_width = "32", not(feature = "bigint_ops")))]
+#[cfg(all(target_pointer_width = "32", not(bigint_ops)))]
 mod scalar32;
 
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+// never on `riscv64`: its guest has no delegation, and does not emulate one
+#[cfg(bigint_ops)]
 pub(crate) mod scalar32_delegation;
 
 cfg_if! {
-    if #[cfg(feature = "bigint_ops")] {
+    if #[cfg(bigint_ops)] {
         use scalar32_delegation::ScalarInner;
     } else if #[cfg(target_pointer_width = "32")] {
         use scalar32::ScalarInner;
@@ -53,11 +50,11 @@ impl Scalar {
 
     /// The scalar of a big-endian integer, `None` if it is not below the order
     pub fn from_be_bytes_checked(bytes: &[u8; 32]) -> Option<Self> {
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(bigint_ops)]
         {
             ScalarInner::from_be_bytes_checked(bytes).map(Self)
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(bigint_ops))]
         {
             use crate::k256::elliptic_curve::PrimeField;
 
@@ -72,11 +69,11 @@ impl Scalar {
         let mut bytes = [0u8; 32];
         bytes[16..].copy_from_slice(&x.to_be_bytes());
         let inner = ScalarInner::from_be_bytes_unchecked(&bytes);
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(bigint_ops)]
         {
             Self(inner.to_representation())
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(bigint_ops))]
         {
             Self(inner)
         }
@@ -85,6 +82,7 @@ impl Scalar {
     /// A non-negative integer below `2^128` in the form `recover::wnaf` reads: the integer form
     /// of the representation (what `decompose_128` returns), which the delegated scalars use
     /// only for the digit recoding
+    #[cfg(any(not(secp256k1_field_4x64), test))]
     pub(crate) fn wnaf_form_u128(x: u128) -> Self {
         let mut bytes = [0u8; 32];
         bytes[16..].copy_from_slice(&x.to_be_bytes());
@@ -93,11 +91,11 @@ impl Scalar {
 
     /// The scalar of a big-endian integer, reduced modulo the order
     pub fn from_be_bytes_reduced(bytes: &[u8; 32]) -> Self {
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(bigint_ops)]
         {
             Self(ScalarInner::from_be_bytes(bytes))
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(bigint_ops))]
         {
             use crate::k256::elliptic_curve::ops::Reduce;
 
@@ -152,11 +150,11 @@ impl Scalar {
     /// Whether the scalar is one: in the delegated representation one comparison, otherwise a
     /// subtraction and a zero check
     pub fn is_one(&self) -> bool {
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(bigint_ops)]
         {
             self.0.is_one()
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(bigint_ops))]
         {
             (*self - Self::ONE).is_zero()
         }
@@ -165,11 +163,11 @@ impl Scalar {
     /// Whether the scalar is minus one: in the delegated representation one comparison, otherwise
     /// an addition and a zero check
     pub fn is_minus_one(&self) -> bool {
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(bigint_ops)]
         {
             self.0.is_minus_one()
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(bigint_ops))]
         {
             (*self + Self::ONE).is_zero()
         }
@@ -280,7 +278,7 @@ mod tests {
     fn test_zero() {
         // The delegation scalar compares representations, and keeps them canonical: `ORDER` is
         // not one of them.
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(bigint_ops))]
         {
             assert_eq!(Scalar::ZERO, Scalar::ORDER);
             assert!(Scalar::ORDER.is_zero());
@@ -330,7 +328,7 @@ mod tests {
             let (mut r1, mut r2) = k.decompose();
             let lambda = -Scalar::MINUS_LAMBDA;
 
-            #[cfg(feature = "bigint_ops")]
+            #[cfg(bigint_ops)]
             {
                 r1 = Scalar(r1.0.to_representation());
                 r2 = Scalar(r2.0.to_representation());
@@ -338,7 +336,7 @@ mod tests {
 
             prop_assert_eq!(r1 + r2 * lambda, k);
 
-            #[cfg(feature = "bigint_ops")]
+            #[cfg(bigint_ops)]
             {
                 r1 = Scalar(r1.0.to_integer());
                 r2 = Scalar(r2.0.to_integer());

@@ -6,6 +6,11 @@
 //! [`HintTarget`]), with no framing. Field hints and the wide quotient have no length prefix; the
 //! ModExp reduction answers with two length words (quotient and remainder, in `u32` words), which
 //! are not field limbs, then their words.
+//!
+//! The readers take two words at once wherever they make a 64-bit limb or fill limb memory
+//! (`MemoryOracle::read_u64`, `write_words`). On the packed transport of the 64-bit guests
+//! (`airbender_oracle::PackedWordChannelOracle`) that is one advice word; everywhere else the
+//! same words are read one after the other, in the same order.
 
 mod answer;
 mod encoding;
@@ -17,9 +22,13 @@ pub mod guest_layout;
 mod oracle;
 mod pairing;
 mod request;
+#[cfg(any(feature = "hinted_operations", test))]
+mod scalar_mul;
 mod secp256k1;
 #[cfg(test)]
 pub(crate) mod test_support;
+// the wide quotient is a hint of ModExp's hinted path
+#[cfg(any(feature = "hinted_operations", test))]
 pub(crate) mod wide_div;
 
 pub use self::answer::{read_hint_answer, HintAnswer, HintTarget};
@@ -38,25 +47,31 @@ pub use self::pairing::{
     bn254_pairing_residue_witness, G2SlopeHints, HintedChain,
 };
 pub use self::pairing::{checked_inverse, Bls12381Pair, PairingClaim};
+#[cfg(any(feature = "oracle_implementations", test))]
+pub use self::request::read_field_hint_request;
 pub use self::request::{
-    query_field_hint, query_field_hint_into, read_field_hint_request, send_field_hint_query,
-    FieldHintOp, FieldOpsHint, FieldOpsHint64, GenericFieldOpsHint,
+    query_field_hint, query_field_hint_into, send_field_hint_query, FieldHintOp, FieldOpsHint,
+    FieldOpsHint64, GenericFieldOpsHint,
 };
+#[cfg(any(feature = "hinted_operations", test))]
+pub use self::scalar_mul::{bn254_g1_mul_witness, Bn254G1MulRequest};
 pub use self::secp256k1::{RecoveryRequest, Secp256k1Element, Secp256k1HooksWithOracle};
-#[cfg(all(feature = "oracle_processor", target_pointer_width = "64"))]
-pub use crate::oracle_common::CryptoHints;
 #[cfg(all(
     any(feature = "oracle_implementations", test),
     target_pointer_width = "64"
 ))]
 pub use crate::oracle_common::{
-    answer_query, not_identity_claim, read_querier_u32_words, record_hints, NativeQuerierMemory,
-    RecordingHintOracle,
+    answer_query, not_identity_claim, read_querier_u32_words, record_hints, record_hints_packed,
+    NativeQuerierMemory, RecordingHintOracle,
 };
+#[cfg(all(feature = "oracle_processor", target_pointer_width = "64"))]
+pub use crate::oracle_common::{CryptoHints, NativeGuestCryptoHints};
 
-pub use airbender_oracle::{
-    read_querier_word, MemoryOracle, OracleError, QuerierMemory, QuerierMemoryError,
-};
+pub use airbender_oracle::{MemoryOracle, OracleError};
+// The oracle's read access to the querier's memory, which Airbender's simulator crate defines:
+// with the oracle side only
+#[cfg(any(feature = "oracle_implementations", test))]
+pub use airbender_oracle::{read_querier_word, QuerierMemory, QuerierMemoryError};
 
 pub use airbender_oracle::query_ids::{
     ADVICE_SUBSPACE_MASK, FIELD_OPS_ADVISE_QUERY_ID, MODEXP_ADVICE_QUERY_ID,
@@ -96,12 +111,13 @@ mod tests {
             (FieldHintOp::Bls12381BaseFieldDivision, 13),
             (FieldHintOp::Secp256k1RecoveryWitness, 14),
             (FieldHintOp::Bls12381PairingResidueWitness, 15),
+            (FieldHintOp::Bn254G1MulWitness, 16),
         ];
         for (op, number) in ops {
             assert_eq!(op as u32, number, "{op:?}");
             assert_eq!(FieldHintOp::parse_u32(number), Some(op));
         }
-        assert_eq!(FieldHintOp::parse_u32(16), None);
+        assert_eq!(FieldHintOp::parse_u32(17), None);
     }
 
     #[test]

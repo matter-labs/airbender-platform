@@ -96,7 +96,7 @@ impl Scalar {
     }
 
     /// The inverse in variable time (safegcd on 64-bit, else the addition chain); zero for zero
-    #[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
+    #[cfg(any(target_pointer_width = "64", test, proving))]
     pub fn invert_vartime(&self) -> Self {
         #[cfg(target_pointer_width = "32")]
         {

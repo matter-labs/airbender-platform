@@ -116,6 +116,14 @@ memory and answers in the guest's representation (that of the delegated fields: 
 records the guest's tape. The implementations of the answers live next to each primitive, in its
 `oracle_implementations` module.
 
+The oracle side of the protocol itself is Airbender's, in `riscv_transpiler::oracle`: the
+`QueryDispatcher` that serves the guest in the simulators, the `OracleQueryProcessor` trait of its
+responders, `GuestSource` and the read access to the guest's memory (`QuerierMemory`).
+`airbender-oracle` re-exports it with its `oracle_processor` feature and implements `MemoryOracle`
+for the dispatcher, for a querier in the host process; `hints::CryptoHints` (the
+`oracle_processor` feature of `airbender-crypto`) is the responder for the hints. See
+[`examples/oracle-hints/`](https://github.com/matter-labs/airbender-platform/tree/main/examples/oracle-hints).
+
 ```rust
 use airbender_crypto::hints::{HintError, Secp256k1HooksWithOracle};
 use airbender_crypto::secp256k1::recover_from_bytes_with_hooks;

@@ -9,8 +9,12 @@
 // The crate is `no_std`, so `context.rs`'s `use alloc::boxed::Box` needs the
 // crate linked explicitly. Without this, `--features alloc` does not build at all.
 // Tests use `alloc` too (the oracle side of `hints`).
+// The emulation of the bigint delegation on a host keeps its scratch space per thread
+// (`std::thread_local!`): a host process computes on several threads, the guest on one.
 #[cfg(any(feature = "alloc", test))]
 extern crate alloc;
+#[cfg(all(emulated_delegation, not(test)))]
+extern crate std;
 
 // Compile-time checks of the memory layout of the extension field towers and of the affine points,
 // which are not `repr(C)`: oracles read these values where they are in the memory of the RISC-V
@@ -43,16 +47,20 @@ macro_rules! assert_affine_layout {
     };
 }
 pub mod affine_glv;
+// The bigint delegation, its emulation and what is built on them (the delegated fields here;
+// elsewhere the secp256k1 and secp256r1 fields and scalars of the delegation, the delegated
+// digits and the hinted path of ModExp, the delegated hashes) do not exist on `riscv64`, whose
+// guest has no delegation and must not carry its emulation either: nothing there can select
+// them (see `build.rs`), and a cfg that tried to would not compile.
 #[allow(clippy::all)]
 #[allow(unused_imports)]
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    feature = "proving",
-    feature = "testing",
-    test
+#[cfg(all(
+    not(target_arch = "riscv64"),
+    any(bigint_ops, feature = "testing", test)
 ))]
 pub mod ark_ff_delegation;
 #[allow(clippy::all)]
+#[cfg(not(target_arch = "riscv64"))]
 #[allow(unused_imports, dead_code)]
 mod bigint_delegation;
 pub mod blake2f;
@@ -65,11 +73,13 @@ pub mod bytes32;
 #[cfg(test)]
 mod delegation_counts;
 pub(crate) mod extension_tower;
-#[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
+#[cfg(any(target_pointer_width = "64", test, proving))]
 pub mod field_inverse;
 pub mod hinted_ops;
 pub mod hints;
 pub(crate) mod jacobian;
+#[cfg(any(fp_lazy_reduction, test))]
+mod lazy_fp;
 pub mod modexp;
 pub mod oracle_common;
 pub mod precompiles;
@@ -90,34 +100,19 @@ pub mod sha3;
 
 pub use k256 as rust_k256;
 
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    feature = "proving",
-    test
-))]
+#[cfg(bigint_ops)]
 pub use self::ark_ff_delegation::{BigInt, BigInteger};
 
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    feature = "proving",
-    test
-)))]
+#[cfg(not(bigint_ops))]
 pub use self::ark_ff::{BigInt, BigInteger};
 
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    feature = "proving",
-    test
-))]
+#[cfg(bigint_ops)]
 pub use crate::ark_ff_delegation::Fp;
 
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    feature = "proving",
-    test
-)))]
+#[cfg(not(bigint_ops))]
 pub use ark_ff::Fp;
 
+#[cfg(not(target_arch = "riscv64"))]
 mod raw_delegation_interface;
 
 pub use blake2 as blake2_ext;
@@ -126,6 +121,7 @@ pub use ark_ec;
 pub use ark_ff;
 pub use ark_serialize;
 
+#[cfg(not(target_arch = "riscv64"))]
 pub use self::raw_delegation_interface::{
     bigint_op_delegation_raw, bigint_op_delegation_with_carry_bit_raw,
 };
@@ -134,6 +130,8 @@ pub use self::raw_delegation_interface::{
 // explicit initialization requirements.
 pub fn init_lib() {}
 
+/// The operations of the bigint delegation
+#[cfg(not(target_arch = "riscv64"))]
 #[derive(Clone, Copy)]
 pub enum BigIntOps {
     Add = 0,

@@ -1,7 +1,7 @@
 # oracle-hints
 
-A host oracle that answers the hint queries of `airbender-crypto` live, with
-`airbender_oracle::processor::QueryDispatcher`.
+A host oracle that answers the hint queries of `airbender-crypto` live, with Airbender's
+`QueryDispatcher` (`riscv_transpiler::oracle`, re-exported by `airbender_oracle::processor`).
 
 The hinted paths of the primitives (ModExp, ecrecover, the pairing checks, the MSMs, KZG)
 replace each expensive step with a query to the oracle: a multi-digit division, a field
@@ -19,10 +19,10 @@ responder, which declares its three advice query IDs (`FIELD_OPS_ADVISE_QUERY_ID
 
 - `RunMode::NativeRunOnly`: the dispatcher is the `MemoryOracle` of the hinted computation
   run in this process (`modexp(..., Some(&mut oracle))`), which checks the answers like the
-  guest does.
+  guest does. `airbender-oracle` implements the trait for the dispatcher.
 - `RunMode::RiscVRun`: the dispatcher is the non-determinism CSR source of the guest in the
-  simulator (`runner.run_with_source`). The guest's input words are served on the same CSR
-  before its first query (`GuestSource`), and a query's answer takes precedence over them.
+  simulator (`runner.run_with_source`). Airbender's `GuestSource` serves the guest's input
+  words on the same CSR, and a query's answer takes precedence over them.
 
 The **guest** reads its inputs, then runs ModExp and ecrecover with
 `CsrOracle::<HintError>::new(CsrChannel)` as their oracle, and returns a digest of both

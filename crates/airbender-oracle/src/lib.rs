@@ -1,5 +1,5 @@
-//! The oracle of Airbender guests: the query IDs, and the querier side of the memory-based
-//! protocol.
+//! The oracle of Airbender guests, as the querier sees it: the registry of the query IDs of
+//! programs, and the querier side of the memory-based protocol.
 //!
 //! On the proving target the oracle is the non-determinism CSR, a channel of words. In the
 //! memory-based protocol a query is exactly two words, the query ID (see [`query_ids`]) and one
@@ -8,20 +8,20 @@
 //! the word. The response is exactly the words the querier reads, without a length prefix, each
 //! written by the querier straight to its destination ([`MemoryOracle::write_words`]).
 //!
-//! [`MemoryOracle`] is the querier's side of that transport, with the querier's error type;
-//! [`WordChannelOracle`] implements it over a word channel, and on the guest [`CsrOracle`] over the
-//! non-determinism CSR. The encodings of values on top of it are the querier's (ZKsync OS's
-//! `zk_ee::oracle::memory_io`, the hints of `airbender-crypto`).
+//! [`MemoryOracle`] is the querier's side of that transport, with the querier's error type
+//! ([`OracleError`]); [`WordChannelOracle`] implements it over a word channel, and on the guest
+//! [`CsrOracle`] over the non-determinism CSR. On a 64-bit guest a channel word carries 64 bits:
+//! `PackedWordChannelOracle` delivers two response words in one wherever the querier takes two
+//! at once ([`MemoryOracle::read_u64`], [`MemoryOracle::write_words`]). The encodings of values on top of it are the
+//! querier's (ZKsync OS's `zk_ee::oracle::memory_io`, the hints of `airbender-crypto`).
 //!
-//! The oracle side reads the inputs of a query from the memory of the querier through
-//! [`QuerierMemory`] ([`NativeQuerierMemory`] for a querier in this process). With the
-//! `query_processor` feature (`alloc`), [`query_processor`] has the responder trait that a crate
-//! implements for its queries, free of any host tooling. With the
-//! `oracle_processor` feature (`std`, and the simulators' CSR trait), [`processor`] has the oracle of the host:
-//! [`QueryDispatcher`](processor::QueryDispatcher) dispatches queries to
-//! [`OracleQueryProcessor`](processor::OracleQueryProcessor)s, serves a querier in this process
-//! as a [`MemoryOracle`] and the RISC-V guest of Airbender's simulators (transpiler-based and
-//! JIT) as its non-determinism CSR source.
+//! The oracle side is Airbender's, `riscv_transpiler::oracle`: the dispatcher, the responder
+//! trait, the read access to the querier's memory and the system query IDs. With the
+//! `oracle_processor` feature (`std`, and the simulator crate, so not for guests) this crate
+//! re-exports it, in [`processor`], [`query_processor`], [`query_ids`] and at the root
+//! (`QuerierMemory` and its helpers), and implements [`MemoryOracle`] for
+//! [`QueryDispatcher`](processor::QueryDispatcher) and
+//! [`ReadWitnessSource`](processor::ReadWitnessSource), which serve a querier in this process.
 //!
 //! # Security
 //!
@@ -30,30 +30,34 @@
 
 #![cfg_attr(not(feature = "oracle_processor"), no_std)]
 
-#[cfg(feature = "query_processor")]
-extern crate alloc;
-
 #[cfg(target_arch = "riscv32")]
 mod csr;
 mod error;
 mod oracle;
 #[cfg(feature = "oracle_processor")]
 pub mod processor;
-mod querier_memory;
 pub mod query_ids;
-#[cfg(feature = "query_processor")]
-pub mod query_processor;
 mod word_channel;
 
 #[cfg(test)]
 mod tests;
 
+/// The responders of the oracle side, re-exported from `riscv_transpiler::oracle`: what a crate
+/// implements to answer its queries.
+#[cfg(feature = "oracle_processor")]
+pub mod query_processor {
+    pub use riscv_transpiler::oracle::{respond_to_every_target, OracleQueryProcessor, RunMode};
+}
+
 #[cfg(target_arch = "riscv32")]
 pub use self::csr::{CsrChannel, CsrOracle};
 pub use self::error::OracleError;
 pub use self::oracle::MemoryOracle;
-pub use self::querier_memory::{
+#[cfg(target_pointer_width = "64")]
+pub use self::word_channel::PackedWordChannelOracle;
+pub use self::word_channel::{WordChannel, WordChannelOracle};
+#[cfg(feature = "oracle_processor")]
+pub use riscv_transpiler::oracle::{
     offset_address, read_querier_u32_words_into, read_querier_word, NativeQuerierMemory,
     QuerierMemory, QuerierMemoryError,
 };
-pub use self::word_channel::{WordChannel, WordChannelOracle};

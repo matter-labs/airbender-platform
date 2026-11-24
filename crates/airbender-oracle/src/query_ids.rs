@@ -1,47 +1,67 @@
 //! The query IDs of the oracle: a guest starts every query with one (see [`MemoryOracle`]).
 //!
-//! The IDs are split into subspaces by bitmask, and this module allocates them all, so that the
-//! queries of the platform and of a guest program never collide:
+//! The IDs are split into subspaces by bitmask, so that the queries of the platform and of a
+//! guest program never collide:
 //! - the top bit is reserved;
 //! - the second bit marks the basic queries, whose second byte selects the subspace;
-//! - the platform owns the system and advice subspaces, and every ID in them is defined here;
+//! - the system subspace is Airbender's: its IDs, the basic and system masks and the UART marker
+//!   are defined in `riscv_transpiler::oracle::query_ids`, and re-exported here with the
+//!   `oracle_processor` feature (the host);
+//! - the platform owns the advice subspace, and every ID in it is defined here;
 //! - the other subspaces belong to ZKsync OS, which assigns the IDs inside them.
 //!
 //! The IDs are part of the wire protocol: a recorded tape answers the IDs it was recorded for.
 //!
 //! [`MemoryOracle`]: crate::MemoryOracle
 
+#[cfg(feature = "oracle_processor")]
+pub use riscv_transpiler::oracle::query_ids::{
+    BASIC_SUBSPACE_MASK, DISCONNECT_ORACLE_QUERY_ID, SYSTEM_SUBSPACE_MASK, UART_QUERY_ID,
+    ZK_MASKING_QUERY_ID,
+};
+
 /// Top bit, reserved
 pub const RESERVED_SUBSPACE_MASK: u32 = 0x80_00_00_00;
-/// Second bit, the basic queries
-pub const BASIC_SUBSPACE_MASK: u32 = 0x40_00_00_00;
 
-/// System queries, owned by the platform (e.g. [`DISCONNECT_ORACLE_QUERY_ID`])
-#[allow(clippy::identity_op)]
-pub const SYSTEM_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_00_00_00; // 0x40000000
+// The subspaces of the basic queries (the second bit, Airbender's `BASIC_SUBSPACE_MASK`) other
+// than the system one
+
 /// Generic queries, owned by ZKsync OS
-pub const GENERIC_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_01_00_00; // 0x40010000
+pub const GENERIC_SUBSPACE_MASK: u32 = 0x40_01_00_00;
 /// Preimage and hash queries, owned by ZKsync OS
-pub const PREIMAGE_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_02_00_00; // 0x40020000
+pub const PREIMAGE_SUBSPACE_MASK: u32 = 0x40_02_00_00;
 /// Account state and storage queries, owned by ZKsync OS
-pub const ACCOUNT_AND_STORAGE_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_03_00_00; // 0x40030000
+pub const ACCOUNT_AND_STORAGE_SUBSPACE_MASK: u32 = 0x40_03_00_00;
 /// State root and Merkle path queries, owned by ZKsync OS
-pub const STATE_AND_MERKLE_PATHS_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_04_00_00; // 0x40040000
+pub const STATE_AND_MERKLE_PATHS_SUBSPACE_MASK: u32 = 0x40_04_00_00;
 /// Computational advice (hints checked by the querier), owned by the platform
-pub const ADVICE_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_05_00_00; // 0x40050000
+pub const ADVICE_SUBSPACE_MASK: u32 = 0x40_05_00_00;
 /// Transaction queries, owned by ZKsync OS
-pub const TRANSACTION_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_06_00_00; // 0x40060000
+pub const TRANSACTION_SUBSPACE_MASK: u32 = 0x40_06_00_00;
 /// Block (and batch) queries, owned by ZKsync OS
-pub const BLOCK_SUBSPACE_MASK: u32 = BASIC_SUBSPACE_MASK | 0x00_07_00_00; // 0x40070000
+pub const BLOCK_SUBSPACE_MASK: u32 = 0x40_07_00_00;
 
-/// UART output, for debugging
-pub const UART_QUERY_ID: u32 = 0xff_ff_ff_ff;
-
-// ========== System subspace ==========
-
-/// Disconnects the guest from the external oracle: execution continues on its own
-#[allow(clippy::identity_op)]
-pub const DISCONNECT_ORACLE_QUERY_ID: u32 = SYSTEM_SUBSPACE_MASK | 0; // 0x40000000
+/// The subspaces above are those of Airbender's basic queries, and none is its system subspace.
+#[cfg(feature = "oracle_processor")]
+const _: () = {
+    let subspaces = [
+        GENERIC_SUBSPACE_MASK,
+        PREIMAGE_SUBSPACE_MASK,
+        ACCOUNT_AND_STORAGE_SUBSPACE_MASK,
+        STATE_AND_MERKLE_PATHS_SUBSPACE_MASK,
+        ADVICE_SUBSPACE_MASK,
+        TRANSACTION_SUBSPACE_MASK,
+        BLOCK_SUBSPACE_MASK,
+    ];
+    let mut i = 0;
+    while i < subspaces.len() {
+        // the second byte selects the subspace: 1 to 7 here, 0 is the system one
+        assert!(subspaces[i] == BASIC_SUBSPACE_MASK | ((i as u32 + 1) << 16));
+        assert!(subspaces[i] != SYSTEM_SUBSPACE_MASK);
+        assert!(subspaces[i] & RESERVED_SUBSPACE_MASK == 0);
+        i += 1;
+    }
+};
 
 // ========== Advice subspace ==========
 
@@ -69,15 +89,23 @@ mod tests {
 
     #[test]
     fn the_ids_are_the_wire_protocol() {
-        assert_eq!(SYSTEM_SUBSPACE_MASK, 0x4000_0000);
         assert_eq!(ADVICE_SUBSPACE_MASK, 0x4005_0000);
         assert_eq!(BLOCK_SUBSPACE_MASK, 0x4007_0000);
-        assert_eq!(DISCONNECT_ORACLE_QUERY_ID, 0x4000_0000);
         assert_eq!(MODEXP_ADVICE_QUERY_ID, 0x4005_0010);
         assert_eq!(FIELD_OPS_ADVISE_QUERY_ID, 0x4005_0011);
         assert_eq!(BLOB_COMMITMENT_AND_PROOF_QUERY_ID, 0x4005_0020);
         assert_eq!(U256_DIV_REM_ADVICE_QUERY_ID, 0x4005_0030);
         assert_eq!(U256_WIDE_DIV_REM_ADVICE_QUERY_ID, 0x4005_0031);
+    }
+
+    /// The IDs that Airbender defines, as this crate re-exports them
+    #[cfg(feature = "oracle_processor")]
+    #[test]
+    fn the_system_ids_are_the_wire_protocol() {
+        assert_eq!(BASIC_SUBSPACE_MASK, 0x4000_0000);
+        assert_eq!(SYSTEM_SUBSPACE_MASK, 0x4000_0000);
+        assert_eq!(DISCONNECT_ORACLE_QUERY_ID, 0x4000_0000);
+        assert_eq!(ZK_MASKING_QUERY_ID, 0x4000_0001);
         assert_eq!(UART_QUERY_ID, u32::MAX);
     }
 }

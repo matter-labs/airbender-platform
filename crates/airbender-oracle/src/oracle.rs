@@ -36,6 +36,20 @@ pub trait MemoryOracle: Sized {
         ))
     }
 
+    /// Reads the next two response words as one value, the earlier one in its low half.
+    ///
+    /// A transport whose words carry 64 bits delivers the two in one of them (see
+    /// `PackedWordChannelOracle`); the default reads them one after the other, so on every other
+    /// transport this consumes the same response words in the same order as two
+    /// [`read_word`](Self::read_word) calls. An oracle that wraps another one must forward this
+    /// call, like the others, for the two to agree on how the response is read.
+    #[inline(always)]
+    fn read_u64(&mut self) -> Result<u64, Self::Error> {
+        let low = self.read_word()?;
+        let high = self.read_word()?;
+        Ok(u64::from(low) | u64::from(high) << 32)
+    }
+
     /// Writes the next `num_words` response words to `dst`, in order. This is the memcpy-like
     /// primitive: "write the next `u32` to the next aligned address", repeated.
     ///
@@ -68,6 +82,11 @@ impl<O: MemoryOracle> MemoryOracle for &mut O {
     #[inline(always)]
     fn read_word(&mut self) -> Result<u32, Self::Error> {
         (**self).read_word()
+    }
+
+    #[inline(always)]
+    fn read_u64(&mut self) -> Result<u64, Self::Error> {
+        (**self).read_u64()
     }
 
     #[inline(always)]

@@ -16,6 +16,7 @@ impl OracleError for HintError {
     }
 }
 
+#[cfg(any(feature = "oracle_implementations", test))]
 impl From<airbender_oracle::QuerierMemoryError> for HintError {
     fn from(error: airbender_oracle::QuerierMemoryError) -> Self {
         Self(error.0)

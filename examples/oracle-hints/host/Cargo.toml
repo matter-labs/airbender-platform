@@ -8,6 +8,7 @@ edition = "2021"
 airbender-host = { path = "../../../crates/airbender-host", default-features = false }
 # The oracle side of the hints as a `QueryDispatcher` processor (`CryptoHints`), 64-bit hosts only
 airbender-crypto = { path = "../../../crates/airbender-crypto", features = ["oracle_processor"] }
+# Airbender's oracle side (`riscv_transpiler::oracle`) and `MemoryOracle` for its dispatcher
 airbender-oracle = { path = "../../../crates/airbender-oracle", features = ["oracle_processor"] }
 hex = "0.4"
 

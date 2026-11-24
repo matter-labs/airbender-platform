@@ -18,17 +18,35 @@ use ark_ff::{AdditiveGroup, Fp12, Fp12Config, Fp2, Fp2Config, Fp6, Fp6Config};
 /// `memcpy` call.
 pub(crate) trait CopyAssign: Copy {
     fn copy_assign(&mut self, src: &Self);
+    /// `self *= rhs` by the cheapest product the field has in place: its own `*=`, or with
+    /// `cfg(fp_lazy_reduction)` the inline product of `lazy_fp` on the limbs of a base field
+    /// element (about a sixth cheaper than the call of arkworks' on the RV64 guest) and the
+    /// lazily reduced product of an `Fp2` element
+    #[inline(always)]
+    fn mul_assign_inline(&mut self, rhs: &Self)
+    where
+        Self: for<'a> core::ops::MulAssign<&'a Self>,
+    {
+        *self *= rhs;
+    }
+
+    /// `self -= rhs`, as [`mul_assign_inline`](Self::mul_assign_inline)
+    #[inline(always)]
+    fn sub_assign_inline(&mut self, rhs: &Self)
+    where
+        Self: for<'a> core::ops::SubAssign<&'a Self>,
+    {
+        *self -= rhs;
+    }
     /// Initializes the memory at `dst` with a copy of `src`
     /// # Safety
     /// `dst` must be valid for writes of `Self` and aligned for it
     unsafe fn init_copy(dst: *mut Self, src: &Self);
 }
 
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    feature = "proving",
-    feature = "testing",
-    test
+#[cfg(all(
+    not(target_arch = "riscv64"),
+    any(bigint_ops, feature = "testing", test)
 ))]
 impl<P: crate::ark_ff_delegation::fp::FpConfig<N>, const N: usize> CopyAssign
     for crate::ark_ff_delegation::Fp<P, N>
@@ -77,6 +95,7 @@ impl<P: crate::ark_ff_delegation::fp::FpConfig<N>, const N: usize> CopyAssign
 }
 
 // the arkworks field types are the base fields of the host builds
+#[cfg(not(fp_lazy_reduction))]
 impl<P: ark_ff::FpConfig<N>, const N: usize> CopyAssign for ark_ff::Fp<P, N> {
     #[inline(always)]
     fn copy_assign(&mut self, src: &Self) {
@@ -89,7 +108,33 @@ impl<P: ark_ff::FpConfig<N>, const N: usize> CopyAssign for ark_ff::Fp<P, N> {
     }
 }
 
+#[cfg(fp_lazy_reduction)]
+impl<T: ark_ff::MontConfig<N>, const N: usize> CopyAssign
+    for ark_ff::Fp<ark_ff::MontBackend<T, N>, N>
+{
+    #[inline(always)]
+    fn copy_assign(&mut self, src: &Self) {
+        *self = *src;
+    }
+
+    #[inline(always)]
+    fn mul_assign_inline(&mut self, rhs: &Self) {
+        crate::lazy_fp::towers::fp_mul_assign(self, rhs);
+    }
+
+    #[inline(always)]
+    fn sub_assign_inline(&mut self, rhs: &Self) {
+        crate::lazy_fp::towers::fp_sub_assign(self, rhs);
+    }
+
+    #[inline(always)]
+    unsafe fn init_copy(dst: *mut Self, src: &Self) {
+        dst.write(*src);
+    }
+}
+
 // Component-wise copies keep extension-field affine arithmetic compatible with delegated Fp.
+#[cfg(not(fp_lazy_reduction))]
 impl<P: Fp2Config> CopyAssign for Fp2<P>
 where
     P::Fp: CopyAssign,
@@ -98,6 +143,27 @@ where
     fn copy_assign(&mut self, src: &Self) {
         self.c0.copy_assign(&src.c0);
         self.c1.copy_assign(&src.c1);
+    }
+
+    #[inline(always)]
+    unsafe fn init_copy(dst: *mut Self, src: &Self) {
+        // SAFETY: the caller supplies aligned writable memory for the entire Fp2.
+        P::Fp::init_copy(core::ptr::addr_of_mut!((*dst).c0), &src.c0);
+        P::Fp::init_copy(core::ptr::addr_of_mut!((*dst).c1), &src.c1);
+    }
+}
+
+#[cfg(fp_lazy_reduction)]
+impl<P: NonresidueMinusOne> CopyAssign for Fp2<P> {
+    #[inline(always)]
+    fn copy_assign(&mut self, src: &Self) {
+        self.c0.copy_assign(&src.c0);
+        self.c1.copy_assign(&src.c1);
+    }
+
+    #[inline(always)]
+    fn mul_assign_inline(&mut self, rhs: &Self) {
+        fp2_mul_assign(self, rhs);
     }
 
     #[inline(always)]
@@ -117,15 +183,42 @@ pub(crate) trait NonresidueMinusOne: Fp2Config<Fp: CopyAssign> {
     fn mul_assign_lazy(_a: &mut Fp2<Self>, _b: &Fp2<Self>) -> bool {
         false
     }
+
+    /// `a = a²` with plain sums for the factors of its two products, where the base field
+    /// offers it (`true`); otherwise `a` is left untouched
+    #[inline(always)]
+    fn square_in_place_lazy(_a: &mut Fp2<Self>) -> bool {
+        false
+    }
 }
 
-impl NonresidueMinusOne for crate::bn254::fields::Fq2Config {}
+/// The `Fp2` products with lazy reduction (`lazy_fp`)
+#[cfg(fp_lazy_reduction)]
+macro_rules! lazy_fp2_products {
+    () => {
+        #[inline(always)]
+        fn mul_assign_lazy(a: &mut Fp2<Self>, b: &Fp2<Self>) -> bool {
+            crate::lazy_fp::towers::fp2_mul_assign(a, b);
+            true
+        }
+
+        #[inline(always)]
+        fn square_in_place_lazy(a: &mut Fp2<Self>) -> bool {
+            crate::lazy_fp::towers::fp2_square_in_place(a);
+            true
+        }
+    };
+}
+
+impl NonresidueMinusOne for crate::bn254::fields::Fq2Config {
+    #[cfg(fp_lazy_reduction)]
+    lazy_fp2_products!();
+}
 impl NonresidueMinusOne for crate::bls12_381::fields::Fq2Config {
-    #[cfg(any(
-        all(target_arch = "riscv32", feature = "bigint_ops"),
-        test,
-        feature = "proving"
-    ))]
+    #[cfg(fp_lazy_reduction)]
+    lazy_fp2_products!();
+
+    #[cfg(bigint_ops)]
     #[inline(always)]
     fn mul_assign_lazy(a: &mut Fp2<Self>, b: &Fp2<Self>) -> bool {
         crate::bls12_381::fields::fq::fq2_mul_assign_lazy(&mut a.c0, &mut a.c1, &b.c0, &b.c1);
@@ -137,8 +230,35 @@ impl NonresidueMinusOne for crate::bls12_381::fields::Fq2Config {
 /// moving the operand (the arkworks `mul_fp2_by_nonresidue_in_place` hooks copy it)
 pub(crate) trait MulByXi: Fp6Config {
     fn mul_by_xi_in_place(a: &mut Fp2<Self::Fp2Config>);
+
+    /// `a *= b` with one reduction per coefficient, where the tower offers it (`true`);
+    /// otherwise `a` is left untouched
+    #[inline(always)]
+    fn mul_assign_lazy(_a: &mut Fp6<Self>, _b: &Fp6<Self>) -> bool {
+        false
+    }
+
+    /// `a *= c0 + c1 v`, as [`mul_assign_lazy`](Self::mul_assign_lazy)
+    #[inline(always)]
+    fn mul_by_01_lazy(
+        _a: &mut Fp6<Self>,
+        _c0: &Fp2<Self::Fp2Config>,
+        _c1: &Fp2<Self::Fp2Config>,
+    ) -> bool {
+        false
+    }
+
+    /// `a *= c1 v`, as [`mul_assign_lazy`](Self::mul_assign_lazy)
+    #[inline(always)]
+    fn mul_by_1_lazy(_a: &mut Fp6<Self>, _c1: &Fp2<Self::Fp2Config>) -> bool {
+        false
+    }
 }
 
+// bn254 keeps the `Fp6` products on reduced `Fp2` products (reduced lazily themselves, see
+// `NonresidueMinusOne`): with `ξ = 9 + u` the sums of an `Fp6` product taken on double-width
+// values cost more than the 6 reductions they save (7,875 against 6,922 cycles per product on
+// the RV64 guest, which has no carry flag).
 impl MulByXi for crate::bn254::fields::Fq6Config {
     /// `ξ = 9 + u`: `(9 c0 - c1) + (9 c1 + c0) u`
     #[inline(always)]
@@ -159,6 +279,31 @@ impl MulByXi for crate::bn254::fields::Fq6Config {
 }
 
 impl MulByXi for crate::bls12_381::fields::Fq6Config {
+    #[cfg(fp_lazy_reduction)]
+    #[inline(always)]
+    fn mul_assign_lazy(a: &mut Fp6<Self>, b: &Fp6<Self>) -> bool {
+        crate::lazy_fp::towers::fp6_mul_assign(a, b);
+        true
+    }
+
+    #[cfg(fp_lazy_reduction)]
+    #[inline(always)]
+    fn mul_by_01_lazy(
+        a: &mut Fp6<Self>,
+        c0: &Fp2<Self::Fp2Config>,
+        c1: &Fp2<Self::Fp2Config>,
+    ) -> bool {
+        crate::lazy_fp::towers::fp6_mul_by_01(a, c0, c1);
+        true
+    }
+
+    #[cfg(fp_lazy_reduction)]
+    #[inline(always)]
+    fn mul_by_1_lazy(a: &mut Fp6<Self>, c1: &Fp2<Self::Fp2Config>) -> bool {
+        crate::lazy_fp::towers::fp6_mul_by_1(a, c1);
+        true
+    }
+
     /// `ξ = 1 + u`: `(c0 - c1) + (c0 + c1) u`
     #[inline(always)]
     fn mul_by_xi_in_place(a: &mut Fp2<Self::Fp2Config>) {
@@ -292,9 +437,9 @@ pub(crate) fn fp2_add_assign<P: Fp2Config>(a: &mut Fp2<P>, b: &Fp2<P>) {
 }
 
 #[inline(always)]
-pub(crate) fn fp2_sub_assign<P: Fp2Config>(a: &mut Fp2<P>, b: &Fp2<P>) {
-    a.c0 -= &b.c0;
-    a.c1 -= &b.c1;
+pub(crate) fn fp2_sub_assign<P: NonresidueMinusOne>(a: &mut Fp2<P>, b: &Fp2<P>) {
+    a.c0.sub_assign_inline(&b.c0);
+    a.c1.sub_assign_inline(&b.c1);
 }
 
 #[inline(always)]
@@ -310,9 +455,9 @@ pub(crate) fn fp2_neg_in_place<P: Fp2Config>(a: &mut Fp2<P>) {
 }
 
 #[inline(always)]
-pub(crate) fn fp2_mul_by_fp<P: Fp2Config>(a: &mut Fp2<P>, f: &P::Fp) {
-    a.c0 *= f;
-    a.c1 *= f;
+pub(crate) fn fp2_mul_by_fp<P: NonresidueMinusOne>(a: &mut Fp2<P>, f: &P::Fp) {
+    a.c0.mul_assign_inline(f);
+    a.c1.mul_assign_inline(f);
 }
 
 /// `a *= b`, three base multiplications
@@ -340,6 +485,9 @@ pub(crate) fn fp2_mul_assign<P: NonresidueMinusOne>(a: &mut Fp2<P>, b: &Fp2<P>) 
 /// `a = a²`: `(c0 + c1)(c0 - c1) + 2 c0 c1 u`
 #[inline(always)]
 pub(crate) fn fp2_square_in_place<P: NonresidueMinusOne>(a: &mut Fp2<P>) {
+    if P::square_in_place_lazy(a) {
+        return;
+    }
     fp_tmp!(c0 = &a.c0);
     fp_tmp!(v0 = &a.c0);
     *v0 -= &a.c1;
@@ -375,7 +523,10 @@ pub(crate) fn fp6_add_assign<P: Fp6Config>(a: &mut Fp6<P>, b: &Fp6<P>) {
 }
 
 #[inline(always)]
-pub(crate) fn fp6_sub_assign<P: Fp6Config>(a: &mut Fp6<P>, b: &Fp6<P>) {
+pub(crate) fn fp6_sub_assign<P: Fp6Config>(a: &mut Fp6<P>, b: &Fp6<P>)
+where
+    P::Fp2Config: NonresidueMinusOne,
+{
     fp2_sub_assign(&mut a.c0, &b.c0);
     fp2_sub_assign(&mut a.c1, &b.c1);
     fp2_sub_assign(&mut a.c2, &b.c2);
@@ -413,6 +564,9 @@ pub(crate) fn fp6_mul_assign<P: MulByXi>(a: &mut Fp6<P>, b: &Fp6<P>)
 where
     P::Fp2Config: NonresidueMinusOne,
 {
+    if P::mul_assign_lazy(a, b) {
+        return;
+    }
     fp2_tmp!(ad = &a.c0);
     fp2_mul_assign(ad, &b.c0);
     fp2_tmp!(be = &a.c1);
@@ -498,6 +652,9 @@ pub(crate) fn fp6_mul_by_01<P: MulByXi>(a: &mut Fp6<P>, c0: &Fp2Of<P>, c1: &Fp2O
 where
     P::Fp2Config: NonresidueMinusOne,
 {
+    if P::mul_by_01_lazy(a, c0, c1) {
+        return;
+    }
     fp2_tmp!(a_a = &a.c0);
     fp2_mul_assign(a_a, c0);
     fp2_tmp!(b_b = &a.c1);
@@ -529,6 +686,9 @@ pub(crate) fn fp6_mul_by_1<P: MulByXi>(a: &mut Fp6<P>, c1: &Fp2Of<P>)
 where
     P::Fp2Config: NonresidueMinusOne,
 {
+    if P::mul_by_1_lazy(a, c1) {
+        return;
+    }
     fp2_tmp!(t = &a.c2);
     fp2_mul_assign(t, c1);
     fp2_mul_by_xi::<P>(t);

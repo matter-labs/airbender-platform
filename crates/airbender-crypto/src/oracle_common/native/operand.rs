@@ -146,6 +146,12 @@ impl<'m> Operand<'m> {
         F::from_components(&components)
     }
 
+    /// The prime field element of `limbs` Montgomery limbs (`R = 2^(64 limbs)`, any
+    /// representative) at `offset` bytes into the operand of the RISC-V guest
+    pub fn guest_prime_field<F: PrimeField>(&self, offset: usize, limbs: usize) -> F {
+        from_guest_montgomery(&self.guest_words(offset, 2 * limbs))
+    }
+
     /// The affine point at `offset` bytes into the operand of the RISC-V guest
     pub fn guest_affine<P: SWCurveConfig>(
         &self,

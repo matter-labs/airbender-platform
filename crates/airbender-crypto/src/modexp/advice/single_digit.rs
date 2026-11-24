@@ -3,9 +3,7 @@
 
 use super::bigint::ModexpAdvisor;
 use super::exponent::{exponentiate, ModMul};
-use crate::hints::wide_div::{
-    clone_into_slot, reduce_product_of_residues_with_quotient, verify_wide_div_rem_hint,
-};
+use super::wide_div::{reduce_product_of_residues_with_quotient, verify_wide_div_rem_hint};
 use crate::modexp::u256::U256;
 use crate::modexp::{strip_leading_zeroes, ModExpOutput};
 use core::mem::MaybeUninit;
@@ -22,8 +20,8 @@ impl<Adv: ModexpAdvisor> ModMul for U256ModMul<'_, Adv> {
         U256::zero()
     }
 
-    fn clone_elem(&mut self, x: &U256) -> U256 {
-        x.clone()
+    fn clone_into(&mut self, dst: &mut U256, x: &U256) {
+        dst.clone_from(x);
     }
 
     fn is_zero(&self, x: &U256) -> bool {
@@ -32,22 +30,31 @@ impl<Adv: ModexpAdvisor> ModMul for U256ModMul<'_, Adv> {
 
     #[inline(always)]
     fn square_assign(&mut self, x: &mut U256) {
-        // the product needs the multiplier as a separate operand
-        let mut y = MaybeUninit::uninit();
-        let y = clone_into_slot(&mut y, x);
-        self.mul_assign(x, y);
+        debug_assert!(*x < *self.modulus);
+        // the square lands in (x, hi)
+        let mut hi = MaybeUninit::uninit();
+        let hi = x.widening_square_assign_into_slot(&mut hi);
+        self.reduce_product(x, hi);
     }
 
     #[inline(always)]
     fn mul_assign(&mut self, x: &mut U256, y: &U256) {
-        // x, y < m (`exponentiate` multiplies only the reduced base and checked remainders), so
-        // the true quotient has q_hi = 0. The reducer accepts only q_hi = 0 and
-        // x * y - q_lo * m in [0, m), which holds for the true quotient alone.
         debug_assert!(*x < *self.modulus && *y < *self.modulus);
         // the product lands in (x, hi)
         let mut hi = MaybeUninit::uninit();
-        let hi = clone_into_slot(&mut hi, x);
-        x.widening_mul_assign_into(hi, y);
+        let hi = x.widening_mul_assign_into_slot(&mut hi, y);
+        self.reduce_product(x, hi);
+    }
+}
+
+impl<Adv: ModexpAdvisor> U256ModMul<'_, Adv> {
+    /// `x = (x, hi) mod m` for the product `(x, hi)` of two residues, with an advised quotient.
+    ///
+    /// The factors are below `m` (`exponentiate` multiplies only the reduced base and checked
+    /// remainders), so the true quotient has q_hi = 0. The reducer accepts only q_hi = 0 and
+    /// product - q_lo * m in [0, m), which holds for the true quotient alone.
+    #[inline(always)]
+    fn reduce_product(&mut self, x: &mut U256, hi: &mut U256) {
         let (q_lo, q_hi) = self.advisor.wide_quotient(x, hi, self.modulus);
         reduce_product_of_residues_with_quotient(x, hi, self.modulus, q_lo, q_hi);
     }

@@ -1,20 +1,8 @@
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-)))]
+#[cfg(not(bigint_ops))]
 use crate::ark_ff::MontFp;
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+#[cfg(bigint_ops)]
 use crate::ark_ff_delegation::BigInt as ScalarBigInt;
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+#[cfg(bigint_ops)]
 use crate::ark_ff_delegation::MontFp;
 #[cfg(test)]
 use ark_ec::AffineRepr;
@@ -23,11 +11,7 @@ use ark_ec::{
     scalar_mul::glv::GLVConfig,
     short_weierstrass::{Affine, Projective},
 };
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-)))]
+#[cfg(not(bigint_ops))]
 use ark_ff::BigInt as ScalarBigInt;
 #[cfg(test)]
 use ark_ff::Field;

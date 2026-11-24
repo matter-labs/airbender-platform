@@ -1,9 +1,5 @@
 use super::*;
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+#[cfg(bigint_ops)]
 use crate::ark_ff_delegation::MontFp;
 use crate::bn254::Fq12;
 use crate::extension_tower::*;
@@ -13,11 +9,7 @@ use ark_ec::pairing::PairingOutput;
 use ark_ec::short_weierstrass::SWCurveConfig;
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-)))]
+#[cfg(not(bigint_ops))]
 use ark_ff::MontFp;
 use ark_ff::One;
 use ark_ff::{AdditiveGroup, Field};

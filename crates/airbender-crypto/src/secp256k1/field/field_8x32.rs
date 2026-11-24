@@ -330,11 +330,11 @@ impl FieldElement8x32 {
 
     // The element is its own storage form (see `FieldStorage`): the constants of the tables
     // are computed in the portable representation and repacked, at compile time
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(bigint_ops)]
     pub(super) const DEFAULT: Self = Self::ZERO;
 
     /// The element whose Montgomery form has the words of `storage`
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(bigint_ops)]
     pub(super) const fn from_storage_10x26(storage: FieldStorage10x26) -> Self {
         let words = storage.0;
         let mut res = [0u64; 4];
@@ -347,13 +347,13 @@ impl FieldElement8x32 {
     }
 
     /// NOTE: expects a normalized element
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(bigint_ops)]
     #[inline(always)]
     pub(super) fn to_storage(self) -> Self {
         self
     }
 
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(bigint_ops)]
     #[inline(always)]
     pub(super) fn to_field_elem(self) -> Self {
         self

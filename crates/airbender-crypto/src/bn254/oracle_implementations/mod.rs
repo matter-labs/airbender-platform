@@ -3,15 +3,17 @@
 //! generic over the field (`oracle_common`).
 
 use super::curves::{g2_affine, Bn254, G1Evaluation, G2PreparedNoAlloc};
-use super::{Fq2, G1Affine, G2Affine};
+use super::{Fq, Fq2, Fr, G1Affine, G2Affine};
+use crate::affine_glv::MulWitness;
 use crate::hints::guest_layout::{
-    BN254_G1_AFFINE, BN254_G2_AFFINE, BN254_PAIR_G1, BN254_PAIR_G2, BN254_PAIR_SIZE,
+    BN254_G1_AFFINE, BN254_G1_MUL_SCALAR, BN254_G1_MUL_SIZE, BN254_G1_MUL_X, BN254_G1_MUL_Y,
+    BN254_G2_AFFINE, BN254_PAIR_G1, BN254_PAIR_G2, BN254_PAIR_SIZE,
 };
-use crate::hints::HintTarget;
+use crate::hints::{Bn254G1MulRequest, HintTarget};
 use crate::oracle_common::{Operand, Responses};
 use alloc::vec::Vec;
 use ark_ec::pairing::{MillerLoopOutput, Pairing};
-use ark_ff::{AdditiveGroup, Field, One};
+use ark_ff::{AdditiveGroup, Field, One, Zero};
 
 /// The claim about the bn254 pairing product (see `hints::PairingClaim`). `claim_not_identity`
 /// forces a non-identity claim (for tests of the exact path).
@@ -69,6 +71,42 @@ pub unsafe fn pairing_residue_witness(
     } else {
         responses.write(&(false, f.inverse().expect("non-zero")));
     }
+}
+
+/// The witness of the scalar multiplication of the operand (see `affine_glv::MulWitness`), or
+/// `None` if there is none to give: for a zero scalar or a point off the curve, which the
+/// querier does not ask for, and as for `oracle_common::mul_witness`
+///
+/// # Safety
+///
+/// For a querier in this process `operand` must be the operand of this op, a
+/// `Bn254G1MulRequest` (what `Operand::new` was promised): it is read in place as that type. A
+/// guest operand is read through the guest's memory only.
+pub unsafe fn g1_mul_witness(operand: &Operand) -> Option<MulWitness<Fq>> {
+    let (scalar, x, y): (Fr, Fq, Fq) = match operand.querier() {
+        HintTarget::Native => {
+            // SAFETY: the caller's obligation
+            let request: Bn254G1MulRequest = unsafe { operand.native_value() };
+            (request.scalar, request.x, request.y)
+        }
+        HintTarget::Guest => {
+            assert_eq!(
+                operand.size(),
+                BN254_G1_MUL_SIZE,
+                "the operand is a request"
+            );
+            (
+                operand.guest_prime_field(BN254_G1_MUL_SCALAR, 4),
+                operand.guest_element(BN254_G1_MUL_X),
+                operand.guest_element(BN254_G1_MUL_Y),
+            )
+        }
+    };
+    let point = G1Affine::new_unchecked(x, y);
+    if scalar.is_zero() || !point.is_on_curve() {
+        return None;
+    }
+    crate::oracle_common::mul_witness(&point, scalar)
 }
 
 /// The slopes of the two affine `G2` chains of the operand (see `hints::G2SlopeHints`); an

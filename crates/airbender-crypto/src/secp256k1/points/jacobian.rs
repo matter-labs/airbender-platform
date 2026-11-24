@@ -27,7 +27,7 @@ impl JacobianConst {
 
     #[inline(always)]
     pub(super) const fn assert_verify(&self) {
-        #[cfg(all(debug_assertions, not(feature = "bigint_ops")))]
+        #[cfg(all(debug_assertions, not(bigint_ops)))]
         {
             debug_assert!(self.x.0.magnitude <= Self::X_MAGNITUDE_MAX);
             debug_assert!(self.y.0.magnitude <= Self::Y_MAGNITUDE_MAX);
@@ -189,16 +189,16 @@ impl Jacobian {
     };
 
     // magnitudes only exist for the fields with lazy reduction
-    #[cfg(not(feature = "bigint_ops"))]
+    #[cfg(not(secp256k1_weak_field))]
     const X_MAGNITUDE_MAX: u32 = 4;
-    #[cfg(not(feature = "bigint_ops"))]
+    #[cfg(not(secp256k1_weak_field))]
     const Y_MAGNITUDE_MAX: u32 = 4;
-    #[cfg(all(debug_assertions, not(feature = "bigint_ops")))]
+    #[cfg(all(debug_assertions, not(secp256k1_weak_field)))]
     const Z_MAGNITUDE_MAX: u32 = 1;
 
     #[inline(always)]
     pub(super) const fn assert_verify(&self) {
-        #[cfg(all(debug_assertions, not(feature = "bigint_ops")))]
+        #[cfg(all(debug_assertions, not(secp256k1_weak_field)))]
         {
             debug_assert!(self.x.0.magnitude <= Self::X_MAGNITUDE_MAX);
             debug_assert!(self.y.0.magnitude <= Self::Y_MAGNITUDE_MAX);
@@ -242,7 +242,7 @@ impl Jacobian {
 
 /// Generic formulas, written for the field implementations with lazy reduction (`10x26`, `5x52`),
 /// where additions, negations and multiplications by a small integer are almost free
-#[cfg(not(feature = "bigint_ops"))]
+#[cfg(not(secp256k1_weak_field))]
 impl Jacobian {
     /// Adds the affine point `(x, y)` (or `(x, -y)` if `negate_y`), that must not be the infinity
     #[inline(always)]
@@ -513,7 +513,7 @@ impl Jacobian {
 /// - do not use negations (`b - a` is cheaper than `-a + b`) and multiplications by small integers
 /// - take operands by reference, and make temporary copies by the delegation call
 /// - do not normalize, as the field is "weakly reduced" all the time
-#[cfg(feature = "bigint_ops")]
+#[cfg(secp256k1_weak_field)]
 macro_rules! duplicate {
     ($name:ident = $src:expr) => {
         let mut $name = core::mem::MaybeUninit::<FieldElement>::uninit();
@@ -521,7 +521,7 @@ macro_rules! duplicate {
     };
 }
 
-#[cfg(feature = "bigint_ops")]
+#[cfg(secp256k1_weak_field)]
 impl Jacobian {
     /// `X3 = M^2 - 2*S`, `Y3 = M*(S - X3) - 8*Y^4`, `Z3 = 2*Y*Z`, where `M = 3*X^2`, `S = 4*X*Y^2`.
     /// 7 multiplications. `S` and `8*Y^4` are computed through `U = 2*Y^2` as `2*X*U` and `2*U^2`

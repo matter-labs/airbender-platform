@@ -3,7 +3,7 @@ use crate::k256::FieldBytes;
 use cfg_if::cfg_if;
 
 cfg_if! {
-    if #[cfg(any(target_arch = "riscv32", feature = "proving"))] {
+    if #[cfg(any(target_arch = "riscv32", proving))] {
         use super::field_10x26::{FieldElement10x26 as FieldElementInner, FieldStorage10x26 as FieldStorageInner};
     } else if #[cfg(target_pointer_width = "64")] {
         use super::field_5x52::{FieldElement5x52 as FieldElementInner, FieldStorage5x52 as FieldStorageInner};
@@ -208,6 +208,13 @@ impl FieldElementImpl {
 
     pub(super) const fn to_storage(self) -> FieldStorageImpl {
         FieldStorageImpl(self.value.to_storage())
+    }
+
+    /// The stored form of a constant of the 4x64 field, which this wraps the portable
+    /// representation of
+    #[cfg(secp256k1_field_4x64)]
+    pub(super) const fn to_storage_5x52(self) -> super::field_5x52::FieldStorage5x52 {
+        self.value.to_storage()
     }
 }
 

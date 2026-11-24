@@ -1,12 +1,21 @@
 //! ModExp with hints: a modulus of up to 32 bytes on the single-digit path (`single_digit`), a
 //! longer one on the multi-digit path (`bigint`), both walking the exponent as `exponent` does.
+//!
+//! One algorithm for every target: what is asked, what is answered and what is checked do not
+//! depend on the arithmetic under it, which is selected by `cfg(bigint_ops)` alone: the 256-bit
+//! values of the single-digit path in `modexp::u256`, the digits of the multi-digit path in
+//! `arith`. With the delegation both are sequences of delegation calls; without it (RV64, and
+//! hosts built without `bigint_ops`) both are carry chains on `u64` limbs. The queries, and so
+//! the hint tape, are the same on either.
 
 use bigint::ModexpAdvisor;
 
+mod arith;
 mod bigint;
-mod digit;
 mod exponent;
 mod single_digit;
+
+use crate::hints::wide_div;
 
 use self::bigint::BigintRepr;
 use crate::modexp::{checked_operand, ModExpOutput};
@@ -70,6 +79,7 @@ fn modexp_inner(
 
 #[cfg(test)]
 mod test {
+    use super::arith::{DIGIT_BYTES, DIGIT_LIMBS, MAX_DIGITS};
     use super::bigint::naive_advisor::NaiveAdvisor;
     use super::*;
     use crate::modexp::u256::U256;
@@ -121,7 +131,8 @@ mod test {
         );
     }
 
-    /// The exact output bytes: none for zero, whole 32-byte digits otherwise
+    /// The exact output bytes: none for zero, otherwise whole digits: 32 bytes for a modulus of
+    /// up to 32 bytes, the digits of the arithmetic for a longer one
     #[test]
     fn output_bytes() {
         let check = |base: &[u8], exp: &[u8], modulus: &[u8], output: &[u8]| {
@@ -131,7 +142,11 @@ mod test {
         one[31] = 1;
         check(&[0], &[1], &[2], &[]);
         check(&[0], &[0], &[2], &one);
-        check(&[0], &[0], &[0xff; 64], &one);
+        check(&[0], &[0], &[0xff; 64], &one[32 - DIGIT_BYTES..]);
+        // the zero top digits of a result are dropped, not its zero top bytes
+        let mut small = vec![0u8; DIGIT_BYTES];
+        small[DIGIT_BYTES - 1] = 9;
+        check(&[3], &[2], &[0xff; 64], &small);
         check(&[3], &[2], &[1], &[]);
         check(&[0], &[0], &[0, 0, 1], &[]);
         check(&[3], &[5], &[], &[]);
@@ -225,25 +240,53 @@ mod test {
         assert_matches_reference(&[255], &[48, 255, 128, 209], &modulus);
     }
 
-    /// Reduction advice written as given, one answer per query
-    struct MaliciousReductionAdvisor {
-        /// (quotient, remainder) as 64-bit limbs, one per digit
-        responses: std::vec::Vec<(std::vec::Vec<u64>, std::vec::Vec<u64>)>,
-        next_response: usize,
+    /// Bits of a digit of the arithmetic
+    const DIGIT_BITS: usize = 8 * DIGIT_BYTES;
+
+    /// The digits of a forged quotient or remainder as written: 64-bit limbs, low first, in
+    /// whole digits of the arithmetic
+    type Digits = std::vec::Vec<u64>;
+
+    /// The digits of `x`, none for zero
+    fn digits_of(x: &BigUint) -> Digits {
+        let mut limbs: Digits = x.iter_u64_digits().collect();
+        limbs.resize(limbs.len().next_multiple_of(DIGIT_LIMBS), 0);
+        limbs
     }
 
-    fn write_bigint_digits(digits: &[u64], dst: &mut BigintRepr) {
-        unsafe {
-            let dst_capacity = dst.clear_as_capacity_mut();
-            for (dst_digit, src_digit) in dst_capacity.iter_mut().zip(digits.iter()) {
-                let dst_ptr: *mut u64 = dst_digit.as_mut_ptr().cast::<[u64; 4]>().cast();
-                dst_ptr.write(*src_digit);
-                dst_ptr.add(1).write(0);
-                dst_ptr.add(2).write(0);
-                dst_ptr.add(3).write(0);
-            }
-            dst.set_num_digits(digits.len());
+    fn digit_count(digits: &Digits) -> usize {
+        digits.len() / DIGIT_LIMBS
+    }
+
+    /// `digits` as `count` digits: cut, or extended by digits of limbs `limb`
+    fn with_digits(mut digits: Digits, count: usize, limb: u64) -> Digits {
+        digits.resize(count * DIGIT_LIMBS, limb);
+        digits
+    }
+
+    /// `count` digits of all ones
+    fn ones(count: usize) -> Digits {
+        vec![u64::MAX; count * DIGIT_LIMBS]
+    }
+
+    /// Writes `digits` as they are (zero top digits too), as many as the buffer holds
+    fn write_digits(digits: &[u64], dst: &mut BigintRepr) {
+        let capacity = dst.clear_as_capacity_mut();
+        let count = (digits.len() / DIGIT_LIMBS).min(capacity.len());
+        let limbs = capacity.as_mut_ptr().cast::<u64>();
+        for (i, limb) in digits[..count * DIGIT_LIMBS].iter().enumerate() {
+            // SAFETY: a limb of the first `count` slots, each `DIGIT_LIMBS` aligned limbs
+            unsafe { limbs.add(i).write(*limb) };
         }
+        // SAFETY: the first `count` slots were written, within the capacity
+        unsafe { dst.set_num_digits(count) };
+    }
+
+    /// Reduction advice written as given, one answer per query
+    struct MaliciousReductionAdvisor {
+        /// (quotient, remainder)
+        responses: std::vec::Vec<(Digits, Digits)>,
+        next_response: usize,
     }
 
     impl ModexpAdvisor for MaliciousReductionAdvisor {
@@ -256,8 +299,8 @@ mod test {
         ) {
             let (quotient, remainder) = &self.responses[self.next_response];
             self.next_response += 1;
-            write_bigint_digits(quotient, quotient_dst);
-            write_bigint_digits(remainder, remainder_dst);
+            write_digits(quotient, quotient_dst);
+            write_digits(remainder, remainder_dst);
         }
 
         fn wide_quotient(&mut self, _lo: &U256, _hi: &U256, _modulus: &U256) -> (U256, U256) {
@@ -265,68 +308,48 @@ mod test {
         }
     }
 
-    /// `m = 2^512 - 1`, `x = 2^256 + 2`, so `x^2 mod m = 4 * 2^256 + 5`. The forged answer for the
-    /// squaring is `q = 2^256 + 1`, `r = 5 * 2^256 + 5`: `q * m + r = 2^768 + x^2`, which equals
-    /// `x^2` modulo 2^768 and must be rejected because it does not fit.
+    /// `m = 2^512 - 1`, `x = 2^256 + 2`, so `x^2 = m + r` with `r = 4 * 2^256 + 5`. With `D` the
+    /// base of the digits, the forged answer for the squaring is `q = 1 + D`, `r + D`:
+    /// `q * m + r` is then `x^2 + D * 2^512`, which equals `x^2` modulo `D * 2^512`, the digits
+    /// of the product, and must be rejected because it does not fit them.
     #[test]
     #[should_panic(expected = "modexp advice: q * m + r does not fit the digits of the product")]
     fn test_modexp_delegation_malicious_advisor_truncates_reconstruction_regression() {
         let mut base = vec![0u8; 33];
         base[0] = 0x01;
         base[32] = 0x02;
-        let modulus = vec![0xff; 64];
+        let modulus = [0xff; 64];
 
-        let mut expected = vec![0u8; 64];
+        // 4 * 2^256 + 5, in whole digits
+        let mut expected = [0u8; 64];
         expected[31] = 0x04;
         expected[63] = 0x05;
-        assert_eq!(modexp_honest(&base, &[2], &modulus), expected);
+        let significant = (33usize).next_multiple_of(DIGIT_BYTES);
+        assert_eq!(
+            modexp_honest(&base, &[2], &modulus),
+            expected[64 - significant..]
+        );
 
+        let one = BigUint::from(1u32);
+        let digit_base = &one << DIGIT_BITS;
+        let x = BigUint::from_bytes_be(&base);
+        let r = (BigUint::from(4u32) << 256) + 5u32;
         let mut advisor = MaliciousReductionAdvisor {
             responses: vec![
                 // the initial reduction, honest: x = 0 * m + x
-                (vec![], vec![2, 1]),
-                (vec![1, 1], vec![5, 5]),
+                (vec![], digits_of(&x)),
+                (
+                    digits_of(&(&one + &digit_base)),
+                    digits_of(&(r + digit_base)),
+                ),
             ],
             next_response: 0,
         };
         modexp_with_advisor(&base, &[2], &modulus, &mut advisor);
     }
 
-    /// The digits of a forged quotient or remainder, 64-bit limbs low first, as written
-    type Digits = std::vec::Vec<[u64; 4]>;
-
     /// What a forgery answers for `a / m`, given the true quotient and remainder
     type Forgery = fn(&BigUint, &BigUint, &BigUint, &BigUint) -> (Digits, Digits);
-
-    /// The digits of `x`, none for zero
-    fn digits_of(x: &BigUint) -> Digits {
-        let limbs: std::vec::Vec<u64> = x.iter_u64_digits().collect();
-        limbs
-            .chunks(4)
-            .map(|chunk| {
-                let mut digit = [0u64; 4];
-                digit[..chunk.len()].copy_from_slice(chunk);
-                digit
-            })
-            .collect()
-    }
-
-    /// `count` digits of all ones
-    fn ones(count: usize) -> Digits {
-        vec![[u64::MAX; 4]; count]
-    }
-
-    /// Writes `digits` as they are (zero top digits too), as many as the buffer holds
-    fn write_digits(digits: &[[u64; 4]], dst: &mut BigintRepr) {
-        let capacity = dst.clear_as_capacity_mut();
-        let count = digits.len().min(capacity.len());
-        for (slot, digit) in capacity.iter_mut().zip(digits) {
-            // SAFETY: a slot holds four aligned limbs
-            unsafe { slot.as_mut_ptr().cast::<[u64; 4]>().write(*digit) };
-        }
-        // SAFETY: the first `count` slots were written, within the capacity
-        unsafe { dst.set_num_digits(count) };
-    }
 
     /// Answers reduction advice honestly, except call `forged_call` (every call for `None`),
     /// which gets what `forge` makes of the honest answer
@@ -366,25 +389,24 @@ mod test {
     /// Answers that differ from the honest one in content, in length or only in their spelling
     /// (zero top digits, a remainder that is not reduced). The last ones are right values, and
     /// must not fail anywhere but in a check either.
-    const FORGERIES: [Forgery; 17] = [
+    const FORGERIES: [Forgery; 20] = [
         // the honest answer
         |q, r, _, _| (digits_of(q), digits_of(r)),
         // zero top digits: on the remainder (a zero remainder gets digits), up to the modulus's
         // length, and on the quotient
         |q, r, _, _| {
-            let mut remainder = digits_of(r);
-            remainder.push([0; 4]);
-            (digits_of(q), remainder)
+            let remainder = digits_of(r);
+            let count = digit_count(&remainder) + 1;
+            (digits_of(q), with_digits(remainder, count, 0))
         },
         |q, r, _, m| {
-            let mut remainder = digits_of(r);
-            remainder.resize(digits_of(m).len(), [0; 4]);
-            (digits_of(q), remainder)
+            let count = digit_count(&digits_of(m));
+            (digits_of(q), with_digits(digits_of(r), count, 0))
         },
         |q, r, _, _| {
-            let mut quotient = digits_of(q);
-            quotient.push([0; 4]);
-            (quotient, digits_of(r))
+            let quotient = digits_of(q);
+            let count = digit_count(&quotient) + 1;
+            (with_digits(quotient, count, 0), digits_of(r))
         },
         // a remainder that is congruent but not reduced
         |q, r, _, m| {
@@ -408,10 +430,31 @@ mod test {
         |_, _, a, _| (Digits::new(), digits_of(a)),
         |_, _, a, _| (digits_of(a), Digits::new()),
         |_, _, _, _| (Digits::new(), Digits::new()),
-        |q, _, _, m| (ones(digits_of(q).len()), ones(digits_of(m).len())),
+        |q, _, _, m| {
+            (
+                ones(digit_count(&digits_of(q))),
+                ones(digit_count(&digits_of(m))),
+            )
+        },
+        // a quotient off by one, down and up, and a remainder equal to the modulus
+        |q, r, _, _| {
+            if q.is_zero() {
+                (digits_of(&(q + 2u32)), digits_of(r))
+            } else {
+                (digits_of(&(q - 1u32)), digits_of(r))
+            }
+        },
+        |q, _, _, m| (digits_of(q), digits_of(m)),
+        // a wrong top limb alone, where the honest one is zero or not
+        |q, r, _, m| {
+            let mut remainder = with_digits(digits_of(r), digit_count(&digits_of(m)), 0);
+            *remainder.last_mut().unwrap() ^= 1 << 63;
+            (digits_of(q), remainder)
+        },
         // `q * m + r` that is the product only modulo a power of the digit base
         |q, r, a, m| {
-            let shift = 256 * (digits_of(a).len() - digits_of(m).len().min(digits_of(a).len()));
+            let (a_digits, m_digits) = (digit_count(&digits_of(a)), digit_count(&digits_of(m)));
+            let shift = DIGIT_BITS * (a_digits - m_digits.min(a_digits));
             (
                 digits_of(&(q + (BigUint::from(1u32) << shift))),
                 digits_of(r),
@@ -419,16 +462,14 @@ mod test {
         },
         // too long: by a digit each, and whole buffers
         |q, r, _, m| {
-            let mut remainder = digits_of(r);
-            remainder.resize(digits_of(m).len() + 1, [1; 4]);
-            (digits_of(q), remainder)
+            let count = digit_count(&digits_of(m)) + 1;
+            (digits_of(q), with_digits(digits_of(r), count, 1))
         },
         |q, r, a, _| {
-            let mut quotient = digits_of(q);
-            quotient.resize(digits_of(a).len() + 2, [1; 4]);
-            (quotient, digits_of(r))
+            let count = digit_count(&digits_of(a)) + 2;
+            (with_digits(digits_of(q), count, 1), digits_of(r))
         },
-        |_, _, _, _| (ones(200), ones(200)),
+        |_, _, _, _| (ones(2 * MAX_DIGITS + 8), ones(2 * MAX_DIGITS + 8)),
     ];
 
     /// The output of a ModExp with `advisor`, or the message of its panic

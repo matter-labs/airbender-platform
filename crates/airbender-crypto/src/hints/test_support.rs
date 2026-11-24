@@ -46,6 +46,115 @@ impl MemoryOracle for TapeOracle {
     }
 }
 
+/// One read of a querier
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    Word,
+    U64,
+    /// `write_words` of this many words
+    Words(usize),
+}
+
+/// An oracle that logs how the querier reads the answers of the oracle it wraps
+pub(crate) struct ReadLog<O> {
+    pub(crate) inner: O,
+    pub(crate) reads: Vec<Read>,
+}
+
+impl<O> ReadLog<O> {
+    pub(crate) fn new(inner: O) -> Self {
+        Self {
+            inner,
+            reads: Vec::new(),
+        }
+    }
+}
+
+impl<O: MemoryOracle> MemoryOracle for ReadLog<O> {
+    type Error = O::Error;
+
+    unsafe fn send_query(&mut self, query_id: u32, input_word: usize) -> Result<(), O::Error> {
+        // SAFETY: guaranteed by the caller
+        unsafe { self.inner.send_query(query_id, input_word) }
+    }
+
+    fn read_word(&mut self) -> Result<u32, O::Error> {
+        self.reads.push(Read::Word);
+        self.inner.read_word()
+    }
+
+    fn read_u64(&mut self) -> Result<u64, O::Error> {
+        self.reads.push(Read::U64);
+        self.inner.read_u64()
+    }
+
+    unsafe fn write_words(&mut self, dst: *mut u32, num_words: usize) -> Result<(), O::Error> {
+        self.reads.push(Read::Words(num_words));
+        // SAFETY: guaranteed by the caller
+        unsafe { self.inner.write_words(dst, num_words) }
+    }
+
+    fn finish_query(&mut self) -> Result<(), O::Error> {
+        self.inner.finish_query()
+    }
+}
+
+/// The advice words of the packed transport for the response words `words` read by `reads`:
+/// the packing rule, written out (see `airbender_oracle::PackedWordChannelOracle`)
+pub(crate) fn pack(words: &[u32], reads: &[Read]) -> Vec<u64> {
+    let mut words = words.iter().copied().map(u64::from);
+    let mut next = || words.next().expect("the reads are within the words");
+    let mut tape = Vec::new();
+    for read in reads {
+        match *read {
+            Read::Word => tape.push(next()),
+            Read::U64 => tape.push(next() | next() << 32),
+            Read::Words(len) => {
+                for _ in 0..len / 2 {
+                    tape.push(next() | next() << 32);
+                }
+                if len % 2 == 1 {
+                    tape.push(next());
+                }
+            }
+        }
+    }
+    assert!(words.next().is_none(), "the reads take all the words");
+    tape
+}
+
+/// The advice tape of a packed guest as a word channel: queries are recorded, not answered
+#[cfg(target_pointer_width = "64")]
+#[derive(Debug, Default)]
+pub(crate) struct PackedTape {
+    pub(crate) words: VecDeque<u64>,
+    pub(crate) written: Vec<usize>,
+}
+
+#[cfg(target_pointer_width = "64")]
+impl airbender_oracle::WordChannel for PackedTape {
+    fn write_word(&mut self, word: usize) {
+        self.written.push(word);
+    }
+
+    fn read_word(&mut self) -> usize {
+        self.words
+            .pop_front()
+            .expect("the advice tape is exhausted") as usize
+    }
+}
+
+/// The oracle of a packed guest that reads the advice words `words`
+#[cfg(target_pointer_width = "64")]
+pub(crate) fn packed_tape_oracle(
+    words: impl IntoIterator<Item = u64>,
+) -> airbender_oracle::PackedWordChannelOracle<PackedTape, HintError> {
+    airbender_oracle::PackedWordChannelOracle::new(PackedTape {
+        words: words.into_iter().collect(),
+        written: Vec::new(),
+    })
+}
+
 #[cfg(target_pointer_width = "64")]
 pub(crate) use self::in_process::{
     lying_oracle, lying_oracle_last_word, non_identity_claiming_oracle, GuestMemory,
@@ -201,10 +310,11 @@ mod in_process {
                         FieldHintOp::Bn254PairingResidueWitness
                         | FieldHintOp::Bls12381KzgResidueWitness
                         | FieldHintOp::Bls12381PairingResidueWitness
-                        | FieldHintOp::Secp256k1RecoveryWitness => 1,
+                        | FieldHintOp::Secp256k1RecoveryWitness
+                        | FieldHintOp::Bn254G1MulWitness => 1,
                         _ => 0,
                     };
-                    // an answer that is only its flag (no recovery witness) has the flag flipped
+                    // an answer that is only its flag (no witness) has the flag flipped
                     let index = index.min(words.len() - 1);
                     words[index] ^= 1;
                 }
@@ -248,4 +358,21 @@ mod in_process {
             },
         )
     }
+}
+
+/// Runs `f` with a recorder of the tape that a querier with the fields of this build reads when
+/// it runs the same computation: the tape of the guest with the bigint delegation in a build
+/// with `cfg(bigint_ops)`, the native one otherwise (the fields of a 64-bit guest without the
+/// delegation). The two differ wherever the representations do, as for a bls12-381 element.
+pub(crate) fn record_build_tape<R>(
+    f: impl FnOnce(&mut crate::hints::RecordingHintOracle) -> R,
+) -> (R, Vec<u32>) {
+    let target = if cfg!(bigint_ops) {
+        crate::hints::HintTarget::Guest
+    } else {
+        crate::hints::HintTarget::Native
+    };
+    let mut recorder = crate::hints::RecordingHintOracle::recording_for(target);
+    let result = f(&mut recorder);
+    (result, recorder.into_tape())
 }

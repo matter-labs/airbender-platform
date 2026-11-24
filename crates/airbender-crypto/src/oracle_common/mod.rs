@@ -5,8 +5,8 @@
 //! `bn254::oracle_implementations`, `bls12_381::oracle_implementations`,
 //! `modexp::oracle_implementations`), the operands read from the querier's memory
 //! ([`Operand`]), and the recorder of the hint tape of the guest ([`RecordingHintOracle`]). With
-//! `oracle_processor`, [`CryptoHints`] is that dispatch as a processor of
-//! `airbender_oracle::processor::QueryDispatcher`, the oracle of the simulators' guest.
+//! `oracle_processor`, [`CryptoHints`] is that dispatch as a processor of Airbender's
+//! `QueryDispatcher` (`riscv_transpiler::oracle`), the oracle of the simulators' guest.
 //!
 //! The oracle side reads native requests as `FieldOpsHint64` (and `ModExpAdviceParams64`), so it
 //! is for 64-bit hosts. It answers a querier in this process (`HintTarget::Native`) and the RISC-V
@@ -19,16 +19,17 @@ pub mod residue_witness;
     target_pointer_width = "64"
 ))]
 mod native;
-#[cfg(all(feature = "oracle_processor", target_pointer_width = "64"))]
-pub use self::native::CryptoHints;
 #[cfg(all(
     any(feature = "oracle_implementations", test),
     target_pointer_width = "64"
 ))]
 pub use self::native::{
-    answer_query, not_identity_claim, read_querier_u32_words, record_hints, NativeQuerierMemory,
-    Operand, RecordingHintOracle, Responses,
+    answer_query, mul_witness, not_identity_claim, read_querier_u32_words, record_hints,
+    record_hints_packed, short_vector_4d, NativeQuerierMemory, Operand, RecordingHintOracle,
+    Responses,
 };
+#[cfg(all(feature = "oracle_processor", target_pointer_width = "64"))]
+pub use self::native::{CryptoHints, NativeGuestCryptoHints};
 
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {

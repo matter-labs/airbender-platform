@@ -7,6 +7,7 @@ use super::request::{send_field_hint_query, FieldHintOp};
 use crate::secp256k1::field::FieldElement;
 use crate::secp256k1::scalars::Scalar;
 use crate::secp256k1::{Affine, RecoveryWitness};
+#[cfg(not(target_arch = "riscv64"))]
 use crate::{bigint_op_delegation_raw, BigIntOps};
 use airbender_oracle::{MemoryOracle, OracleError};
 #[cfg(any(feature = "oracle_implementations", test))]
@@ -78,8 +79,9 @@ fn words_of_be_bytes(bytes: &[u8; 32]) -> [u32; 8] {
 /// - on the guest with `bigint_ops`, the Montgomery form `x 2^256 mod m`, which is both types'
 ///   memory layout there (checked at compile time). Operands may be any 256-bit representative;
 ///   answers are written straight into the destination and checked to be below the modulus.
-/// - otherwise (natively, and on the guest without `bigint_ops`), the canonical integer, through
-///   the types' API.
+/// - otherwise (natively, and on the guest without `bigint_ops`), the canonical integer. On
+///   64-bit targets those words are the limbs of a `FieldElement` (`field_4x64`), whose operands
+///   may be any 256-bit representative too; a `Scalar` goes through the type's API.
 pub trait Secp256k1Element: Copy {
     /// The modulus, in little-endian words
     const MODULUS: [u32; 8];
@@ -107,6 +109,15 @@ pub trait Secp256k1Element: Copy {
     /// The element of the words of a canonical integer, `None` for the modulus or above
     fn from_canonical_words(words: &[u32; 8]) -> Option<Self> {
         Self::from_be_bytes(&be_bytes(words))
+    }
+
+    /// The element of the 64-bit limbs of a canonical integer (each two of its words, the low
+    /// one first), `None` for the modulus or above
+    #[inline(always)]
+    fn from_canonical_u64s(limbs: &[u64; 4]) -> Option<Self> {
+        Self::from_canonical_words(&core::array::from_fn(|i| {
+            (limbs[i / 2] >> (32 * (i % 2))) as u32
+        }))
     }
 
     /// The Montgomery words of the element, below the modulus
@@ -144,16 +155,21 @@ pub trait Secp256k1Element: Copy {
     /// # Safety
     ///
     /// `words` must be valid for reads and writes, and 32-byte aligned: a delegation operand.
+    // not on `riscv64`, which has no delegation and no emulation of one
+    #[cfg(not(target_arch = "riscv64"))]
     unsafe fn validate<E: OracleError>(words: *mut [u32; 8]) -> Result<(), E>;
 }
 
 /// A 32-byte aligned operand of the bigint delegation. As an immutable static it lands in
 /// `.rodata`, which the linker places above the ROM bound.
+#[cfg(not(target_arch = "riscv64"))]
 #[repr(C, align(32))]
 struct DelegationOperand([u32; 8]);
 
+#[cfg(not(target_arch = "riscv64"))]
 static FIELD_MODULUS: DelegationOperand =
     DelegationOperand(<FieldElement as Secp256k1Element>::MODULUS);
+#[cfg(not(target_arch = "riscv64"))]
 static SCALAR_MODULUS: DelegationOperand = DelegationOperand(<Scalar as Secp256k1Element>::MODULUS);
 
 /// Checks the value at `words` is below `modulus`: subtracting the modulus borrows exactly then,
@@ -162,6 +178,7 @@ static SCALAR_MODULUS: DelegationOperand = DelegationOperand(<Scalar as Secp256k
 /// # Safety
 ///
 /// `words` must be valid for reads and writes, and 32-byte aligned.
+#[cfg(not(target_arch = "riscv64"))]
 #[inline(always)]
 unsafe fn check_below_with_delegation<E: OracleError>(
     words: *mut [u32; 8],
@@ -207,6 +224,30 @@ impl Secp256k1Element for FieldElement {
         self
     }
 
+    // The words of the canonical integer are the limbs of the element: no bytes in between
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    fn to_canonical_words(self) -> [u32; 8] {
+        let limbs = self.to_canonical_limbs();
+        core::array::from_fn(|i| (limbs[i / 2] >> (32 * (i % 2))) as u32)
+    }
+
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    fn from_canonical_words(words: &[u32; 8]) -> Option<Self> {
+        Self::from_canonical_limbs(core::array::from_fn(|i| {
+            u64::from(words[2 * i]) | u64::from(words[2 * i + 1]) << 32
+        }))
+    }
+
+    // they are the limbs of the element
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    fn from_canonical_u64s(limbs: &[u64; 4]) -> Option<Self> {
+        Self::from_canonical_limbs(*limbs)
+    }
+
+    #[cfg(not(target_arch = "riscv64"))]
     unsafe fn validate<E: OracleError>(words: *mut [u32; 8]) -> Result<(), E> {
         // SAFETY: guaranteed by the caller
         unsafe { check_below_with_delegation(words, &FIELD_MODULUS) }
@@ -239,6 +280,7 @@ impl Secp256k1Element for Scalar {
         self
     }
 
+    #[cfg(not(target_arch = "riscv64"))]
     unsafe fn validate<E: OracleError>(words: *mut [u32; 8]) -> Result<(), E> {
         // SAFETY: guaranteed by the caller
         unsafe { check_below_with_delegation(words, &SCALAR_MODULUS) }
@@ -259,7 +301,7 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: MemoryOracle>(
     oracle: &mut O,
     dst: &'a mut MaybeUninit<T>,
 ) -> Result<&'a mut T, O::Error> {
-    #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+    #[cfg(all(target_arch = "riscv32", bigint_ops))]
     {
         // `validate` relies on the element being its Montgomery words, 32-byte aligned
         const { assert!(T::IS_MONTGOMERY_WORDS && core::mem::align_of::<T>() >= 32) };
@@ -271,26 +313,31 @@ fn read_secp256k1_element<'a, T: Secp256k1Element, O: MemoryOracle>(
             Ok(dst.assume_init_mut())
         }
     }
-    #[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+    #[cfg(not(all(target_arch = "riscv32", bigint_ops)))]
     {
-        let mut words = [0u32; 8];
-        // SAFETY: the buffer holds 8 words
-        unsafe { oracle.write_words(words.as_mut_ptr(), 8)? };
-        let element = T::from_canonical_words(&words)
+        // the words two at a time, in registers: one advice word each on the packed transport
+        let mut limbs = [0u64; 4];
+        for limb in &mut limbs {
+            *limb = oracle.read_u64()?;
+        }
+        let element = T::from_canonical_u64s(&limbs)
             .ok_or(O::Error::new("the secp256k1 hint is not canonical"))?;
         Ok(dst.write(element))
     }
 }
 
-/// Receives a base field quotient, which the caller checks against the fraction. On the guest the
-/// words are taken unchecked: the delegated representation accepts any 256-bit representative and
-/// the caller's check is modulo `p`, so a representative above `p` is the same element.
+/// Receives a base field quotient, which the caller checks against the fraction. Where an
+/// element is any 256-bit representative of its residue (the delegated field of the guest, and
+/// the four 64-bit limbs of the 64-bit targets) the words are taken unchecked, straight into the
+/// element: the caller's check is modulo `p`, so a representative above `p` is the same element,
+/// and nothing downstream reads a representative without reducing it (the encodings, the parity
+/// and the comparisons do).
 #[inline(always)]
 fn read_secp256k1_quotient<'a, O: MemoryOracle>(
     oracle: &mut O,
     dst: &'a mut MaybeUninit<FieldElement>,
 ) -> Result<&'a mut FieldElement, O::Error> {
-    #[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+    #[cfg(all(target_arch = "riscv32", bigint_ops))]
     {
         const {
             assert!(
@@ -304,7 +351,18 @@ fn read_secp256k1_quotient<'a, O: MemoryOracle>(
             Ok(dst.assume_init_mut())
         }
     }
-    #[cfg(not(all(target_arch = "riscv32", feature = "bigint_ops")))]
+    #[cfg(secp256k1_field_4x64)]
+    {
+        // The element is four 64-bit limbs, each two of the words, and any value of them is
+        // one. They are put together as they are read, so that the element is made in
+        // registers.
+        let mut limbs = [0u64; 4];
+        for limb in &mut limbs {
+            *limb = oracle.read_u64()?;
+        }
+        Ok(dst.write(FieldElement::from_limbs(limbs)))
+    }
+    #[cfg(not(any(all(target_arch = "riscv32", bigint_ops), secp256k1_field_4x64)))]
     {
         read_secp256k1_element(oracle, dst)
     }
@@ -348,7 +406,7 @@ pub struct RecoveryRequest {
 }
 
 // The guest sends the five elements as their Montgomery words, back to back.
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 const _: () = assert!(core::mem::size_of::<RecoveryRequest>() == 5 * 32);
 
 impl RecoveryRequest {
@@ -383,21 +441,20 @@ impl HintAnswer for RecoveryWitness {
         oracle: &mut O,
         dst: &'a mut MaybeUninit<Self>,
     ) -> Result<&'a mut Self, O::Error> {
-        let mut words = [0u32; 32];
-        // SAFETY: the buffer holds 32 words
-        unsafe { oracle.write_words(words.as_mut_ptr(), 32)? };
-        let (key, coefficients) = words.as_chunks::<8>().0.split_at(2);
+        let mut key = [[0u32; 8]; 2];
+        // SAFETY: the buffer holds 16 words
+        unsafe { oracle.write_words(key.as_mut_ptr().cast::<u32>(), 16)? };
+        // each coefficient is four words: two halves, the low one first
+        let mut coefficients = [0i128; 4];
+        for coefficient in &mut coefficients {
+            let low = oracle.read_u64()?;
+            let high = oracle.read_u64()?;
+            *coefficient = (u128::from(low) | u128::from(high) << 64) as i128;
+        }
         Ok(dst.write(RecoveryWitness {
             key_x: be_bytes(&key[0]),
             key_y: be_bytes(&key[1]),
-            coefficients: core::array::from_fn(|i| {
-                let words = &coefficients[i / 2][4 * (i % 2)..][..4];
-                let mut value = 0u128;
-                for (j, word) in words.iter().enumerate() {
-                    value |= u128::from(*word) << (32 * j);
-                }
-                value as i128
-            }),
+            coefficients,
         }))
     }
 
@@ -459,6 +516,9 @@ impl<'a, O: MemoryOracle> crate::secp256k1::hooks::Secp256k1Hooks
         witness
     }
 
+    // In the group operations of the field of four 64-bit limbs the elements are in registers:
+    // inlined there, the check shares them and the frame
+    #[cfg_attr(secp256k1_field_4x64, inline(always))]
     fn fe_divide<'q>(
         &mut self,
         fraction: &mut [FieldElement; 2],
@@ -483,8 +543,13 @@ impl<'a, O: MemoryOracle> crate::secp256k1::hooks::Secp256k1Hooks
         // obligation), so only the quotient passes. The fraction is ours to overwrite.
         let [numerator, denominator] = fraction;
         denominator.mul_in_place(quotient);
-        denominator.sub_in_place(numerator);
-        assert!(denominator.is_zero());
+        #[cfg(secp256k1_field_4x64)]
+        assert!(denominator.is_equal(numerator));
+        #[cfg(not(secp256k1_field_4x64))]
+        {
+            denominator.sub_in_place(numerator);
+            assert!(denominator.is_zero());
+        }
 
         quotient
     }

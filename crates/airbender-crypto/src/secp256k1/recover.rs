@@ -213,21 +213,18 @@ fn ecmult_with_hooks<H: super::hooks::Secp256k1Hooks>(
     context: &ECMultContext,
     hooks: &mut H,
 ) -> Jacobian {
-    #[cfg(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"))]
+    #[cfg(all(feature = "secp256k1-shamir-msm", bigint_ops))]
     {
         let _ = context;
         super::recover_shamir::ecmult(a, na, ng, hooks)
     }
 
-    #[cfg(not(all(feature = "secp256k1-shamir-msm", feature = "bigint_ops")))]
+    #[cfg(not(all(feature = "secp256k1-shamir-msm", bigint_ops)))]
     ecmult_wnaf(a, na, ng, context, hooks)
 }
 
 /// Algorithm adapted from https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h#L237
-#[cfg_attr(
-    all(feature = "secp256k1-shamir-msm", feature = "bigint_ops"),
-    allow(dead_code)
-)]
+#[cfg_attr(all(feature = "secp256k1-shamir-msm", bigint_ops), allow(dead_code))]
 fn ecmult_wnaf<H: super::hooks::Secp256k1Hooks>(
     a: &Jacobian,
     na: &Scalar,
@@ -385,8 +382,8 @@ fn add_from_table(
         }
     };
     cfg_select! {
-        // with the delegated field the table is read in place
-        feature = "bigint_ops" => {
+        // the table is read in place where the stored form is the element
+        secp256k1_weak_field => {
             let (x, y) = stored.coordinates();
             add(r, x, y);
         }

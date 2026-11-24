@@ -104,7 +104,9 @@ rand_chacha = { version = "0.3", default-features = false }
 # the CPU program prover, the GPU execution prover (behind its `gpu` feature)
 # and the recursion driver + native verification.
 riscv_common = { path = "../zksync-airbender/riscv_common" }
-riscv_transpiler = { path = "../zksync-airbender/riscv_transpiler" }
+# Without the JIT (its assembler and disassembler crates), which `airbender-host` enables: the
+# oracle side of `airbender-oracle` does not need it
+riscv_transpiler = { path = "../zksync-airbender/riscv_transpiler", default-features = false }
 prover_pipeline = { path = "../zksync-airbender/prover_pipeline", default-features = false }
 field = { path = "../zksync-airbender/field" }
 

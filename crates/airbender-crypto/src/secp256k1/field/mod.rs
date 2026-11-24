@@ -2,40 +2,54 @@ use crate::k256::FieldBytes;
 use cfg_if::cfg_if;
 use core::ops::{AddAssign, MulAssign, SubAssign};
 
-#[cfg(any(target_arch = "riscv32", test, feature = "proving"))]
+#[cfg(any(target_arch = "riscv32", test, bigint_ops))]
 mod field_10x26;
-#[cfg(any(target_arch = "riscv32", test, feature = "proving"))]
+#[cfg(any(target_arch = "riscv32", test, bigint_ops))]
 mod mod_inv32;
 
-#[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
+// With the 4x64 field this one computes the constants only, at compile time
+// TODO: Investigate the correct approach to avoid warning here
+#[cfg_attr(secp256k1_field_4x64, allow(dead_code))]
+#[cfg(any(target_pointer_width = "64", test, proving))]
 mod field_5x52;
-#[cfg(any(target_pointer_width = "64", test, feature = "proving"))]
+#[cfg(any(target_pointer_width = "64", test, proving))]
 pub(crate) mod mod_inv64;
 
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+// never on `riscv64`: its guest has no delegation, and does not emulate one
+#[cfg(bigint_ops)]
 mod field_8x32;
 
-#[cfg(all(debug_assertions, not(feature = "bigint_ops")))]
+#[cfg(any(secp256k1_field_4x64, test))]
+mod field_4x64;
+
+// The representations with lazy reduction, with their magnitudes checked: debug builds. With the
+// 4x64 field it wraps the constants only.
+// TODO: Investigate the correct approach to avoid warning here
+#[cfg_attr(secp256k1_field_4x64, allow(dead_code))]
+#[cfg(all(debug_assertions, not(bigint_ops)))]
 mod field_impl;
 
+// The element of the computations (`FieldElementImpl`), of the constants computed at compile
+// time (`FieldElementImplConst`, a portable representation with `const` arithmetic) and of the
+// precomputed tables (`FieldStorageImpl`). See `build.rs` for the cfgs.
 cfg_if! {
-    if #[cfg(all(debug_assertions, not(feature = "bigint_ops")))] {
-        use field_impl::{FieldElementImpl as FieldElementImplConst, FieldElementImpl, FieldStorageImpl};
-    } else if #[cfg(feature = "bigint_ops")] {
+    if #[cfg(bigint_ops)] {
         // The stored form is the delegated element itself (Montgomery form, 32-byte aligned),
         // so precomputed tables are used in place, without a conversion or a copy
         use field_10x26::FieldElement10x26 as FieldElementImplConst;
         use field_8x32::{FieldElement8x32 as FieldElementImpl, FieldElement8x32 as FieldStorageImpl};
-    } else if #[cfg(target_pointer_width = "64")] {
-        use field_5x52::{FieldElement5x52 as FieldElementImpl, FieldElement5x52 as FieldElementImplConst, FieldStorage5x52 as FieldStorageImpl};
-    } else if #[cfg(target_pointer_width = "32")] {
-        use field_10x26::{FieldElement10x26 as FieldElementImplConst, FieldElement10x26 as FieldElementImpl, FieldStorage10x26 as FieldStorageImpl};
+    } else if #[cfg(secp256k1_field_4x64)] {
+        // The stored form is the element itself here too (canonical), and the constants are
+        // repacked from the portable representation
+        #[cfg(debug_assertions)]
+        use field_impl::FieldElementImpl as FieldElementImplConst;
+        #[cfg(not(debug_assertions))]
+        use field_5x52::FieldElement5x52 as FieldElementImplConst;
+        use field_4x64::{FieldElement4x64 as FieldElementImpl, FieldElement4x64 as FieldStorageImpl};
+    } else if #[cfg(debug_assertions)] {
+        use field_impl::{FieldElementImpl as FieldElementImplConst, FieldElementImpl, FieldStorageImpl};
     } else {
-        panic!("unsupported arch");
+        use field_10x26::{FieldElement10x26 as FieldElementImplConst, FieldElement10x26 as FieldElementImpl, FieldStorage10x26 as FieldStorageImpl};
     }
 }
 
@@ -101,7 +115,7 @@ impl FieldElementConst {
     pub(crate) const fn to_storage(self) -> FieldStorage {
         // Storage is read into the runtime element as is, and the delegation-based one
         // is in Montgomery form
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(bigint_ops)]
         {
             // 2^256 mod p
             const R: FieldElementConst = FieldElementConst::from_bytes_unchecked(&[
@@ -113,7 +127,15 @@ impl FieldElementConst {
             ))
         }
 
-        #[cfg(not(feature = "bigint_ops"))]
+        // The words of the canonical integer are the limbs of the element
+        #[cfg(secp256k1_field_4x64)]
+        {
+            FieldStorage(FieldStorageImpl::from_storage_5x52(
+                self.0.to_storage_5x52(),
+            ))
+        }
+
+        #[cfg(not(secp256k1_weak_field))]
         FieldStorage(self.0.to_storage())
     }
 
@@ -192,7 +214,7 @@ impl FieldElement {
     /// representations with magnitudes skip the normalization of `rhs` that `sub_in_place` does,
     /// and the result has the magnitude of `self` plus `magnitude + 1`. The inputs of a
     /// multiplication must stay within magnitude 8.
-    #[cfg(not(feature = "bigint_ops"))]
+    #[cfg(not(secp256k1_weak_field))]
     #[inline(always)]
     pub fn sub_in_place_magnitude(&mut self, rhs: &Self, magnitude: u32) {
         self.0.sub_in_place_magnitude(&rhs.0, magnitude);
@@ -200,34 +222,41 @@ impl FieldElement {
 
     /// Brings the magnitude back to 1 between the operations, cheaper than the full
     /// normalization (which the comparisons and the byte encodings do themselves)
-    #[cfg(not(feature = "bigint_ops"))]
+    #[cfg(not(secp256k1_weak_field))]
     #[inline(always)]
     pub fn normalize_weak_in_place(&mut self) {
         self.0.normalize_weak_in_place();
     }
 
+    /// Computes `self = self - first - second`, in one pass
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    pub(crate) fn sub_two_in_place(&mut self, first: &Self, second: &Self) {
+        self.0.sub_two_in_place(&first.0, &second.0);
+    }
+
     /// Computes `self = minuend - self`
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(secp256k1_weak_field)]
     #[inline(always)]
     pub(crate) fn sub_and_negate_in_place(&mut self, minuend: &Self) {
         self.0.sub_and_negate_in_place(&minuend.0);
     }
 
-    #[cfg(feature = "bigint_ops")]
+    #[cfg(secp256k1_weak_field)]
     #[inline(always)]
     pub(crate) fn triple_in_place(&mut self) {
         self.0.triple_in_place();
     }
 
-    /// Cheaper `*self = *src` for the delegation-based field
-    #[cfg(feature = "bigint_ops")]
+    /// `*self = *src`, cheaper for the delegation-based field
+    #[cfg(secp256k1_weak_field)]
     #[inline(always)]
     pub(crate) fn copy_from(&mut self, src: &Self) {
         self.0.copy_from(&src.0);
     }
 
-    /// Cheaper `Clone` for the delegation-based field: initializes `dst` with a copy of `src`
-    #[cfg(feature = "bigint_ops")]
+    /// Initializes `dst` with a copy of `src`, cheaper for the delegation-based field
+    #[cfg(secp256k1_weak_field)]
     #[inline(always)]
     pub(crate) fn write_copy<'a>(
         dst: &'a mut core::mem::MaybeUninit<Self>,
@@ -241,6 +270,41 @@ impl FieldElement {
             &mut *(FieldElementImpl::write_copy(dst, &src.0) as *mut FieldElementImpl)
                 .cast::<Self>()
         }
+    }
+
+    /// The element of little-endian limbs, any 256-bit integer: a representative of its
+    /// residue, which may be the one above the modulus
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    pub(crate) fn from_limbs(limbs: [u64; 4]) -> Self {
+        Self(FieldElementImpl::from_limbs(limbs))
+    }
+
+    /// The element of the little-endian limbs of a canonical integer, `None` for the modulus or
+    /// above: the element is those limbs
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    pub(crate) fn from_canonical_limbs(limbs: [u64; 4]) -> Option<Self> {
+        match FieldElementImpl::from_canonical_limbs(limbs) {
+            Some(element) => Some(Self(element)),
+            None => None,
+        }
+    }
+
+    /// The little-endian limbs of the canonical integer
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    pub(crate) fn to_canonical_limbs(self) -> [u64; 4] {
+        self.0.to_canonical_limbs()
+    }
+
+    /// Whether the elements are equal (modulo `p`): one comparison of the limbs for elements
+    /// that are the same representative, as a computed value and the one it is checked against
+    /// are
+    #[cfg(secp256k1_field_4x64)]
+    #[inline(always)]
+    pub(crate) fn is_equal(&self, other: &Self) -> bool {
+        self.0.is_equal(&other.0)
     }
 
     #[inline(always)]
@@ -338,15 +402,15 @@ impl FieldElement {
         self.0.normalizes_to_zero()
     }
 
-    /// Whether the element is one: in the delegated representation one comparison, otherwise a
-    /// subtraction that normalizes to zero
+    /// Whether the element is one: one comparison where one has a single representative,
+    /// otherwise a subtraction that normalizes to zero
     #[inline(always)]
     pub fn is_one(&self) -> bool {
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(secp256k1_weak_field)]
         {
             self.0.is_one()
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(secp256k1_weak_field))]
         {
             let mut difference = *self;
             difference.sub_in_place(&Self::ONE);
@@ -354,15 +418,15 @@ impl FieldElement {
         }
     }
 
-    /// Whether the element is minus one: in the delegated representation one comparison,
-    /// otherwise an addition that normalizes to zero
+    /// Whether the element is minus one: one comparison where minus one has a single
+    /// representative, otherwise an addition that normalizes to zero
     #[inline(always)]
     pub fn is_minus_one(&self) -> bool {
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(secp256k1_weak_field)]
         {
             self.0.is_minus_one()
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(secp256k1_weak_field))]
         {
             let mut sum = *self;
             sum.add_in_place(&Self::ONE);
@@ -385,11 +449,11 @@ impl FieldElement {
     /// The canonical big-endian bytes of the element into `bytes`
     #[inline(always)]
     pub fn write_bytes(self, bytes: &mut [u8; 32]) {
-        #[cfg(feature = "bigint_ops")]
+        #[cfg(secp256k1_weak_field)]
         {
             self.0.write_bytes(bytes);
         }
-        #[cfg(not(feature = "bigint_ops"))]
+        #[cfg(not(secp256k1_weak_field))]
         {
             bytes.copy_from_slice(&self.to_bytes());
         }
@@ -455,11 +519,12 @@ impl FieldStorage {
         FieldElement(self.0.to_field_elem())
     }
 
-    /// The stored element in place: with the delegated field the storage is the element
-    #[cfg(feature = "bigint_ops")]
+    /// The stored element in place: the storage is the element itself
+    #[cfg(secp256k1_weak_field)]
     #[inline(always)]
     pub(crate) fn as_field_elem(&self) -> &FieldElement {
-        // SAFETY: both are `repr(transparent)` wrappers of `FieldElement8x32`
+        // SAFETY: both are `repr(transparent)` wrappers of the same type (see the selection of
+        // `FieldElementImpl` and `FieldStorageImpl`)
         unsafe { &*(self as *const Self).cast::<FieldElement>() }
     }
 }

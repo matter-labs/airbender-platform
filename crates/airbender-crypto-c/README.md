@@ -69,7 +69,9 @@ or is ignored, and never changes a result.
 ## Features
 
 All RV32 only; `delegation` is a compile error natively. Native builds always have the hinted
-operations and their oracle side (`airbender-crypto/oracle_implementations`), for recording.
+operations and their oracle side (`airbender-crypto/oracle_implementations`), for recording; the
+oracle side brings Airbender's simulator crate (`riscv_transpiler`, without its JIT) into the
+native build.
 
 - `delegation`: delegated big-integer arithmetic (`airbender-crypto/proving`).
 - `csr-oracle`: hints through the CSR (`airbender-crypto/hinted_operations`), with or without

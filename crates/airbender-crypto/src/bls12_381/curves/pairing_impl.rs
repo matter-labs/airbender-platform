@@ -1,9 +1,5 @@
 use super::*;
-#[cfg(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-))]
+#[cfg(bigint_ops)]
 use crate::ark_ff_delegation::MontFp;
 use crate::bls12_381::{Fq12, Fq2};
 use crate::extension_tower::*;
@@ -15,11 +11,7 @@ use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ff::BitIteratorBE;
 use ark_ff::Field;
-#[cfg(not(any(
-    all(target_arch = "riscv32", feature = "bigint_ops"),
-    test,
-    feature = "proving"
-)))]
+#[cfg(not(bigint_ops))]
 use ark_ff::MontFp;
 use ark_ff::One;
 use ark_serialize::CanonicalDeserialize;
@@ -694,7 +686,8 @@ impl CanonicalDeserialize for G2PreparedNoAlloc {
     }
 }
 
-#[cfg(test)]
+// the delegated representation only
+#[cfg(all(test, bigint_ops))]
 mod test {
     use super::*;
     use crate::bls12_381::{Fq6, Fr};

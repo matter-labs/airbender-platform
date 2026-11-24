@@ -48,7 +48,14 @@ pub const BN254_PAIR_G1: usize = 0;
 pub const BN254_PAIR_G2: usize = 96;
 pub const BN254_PAIR_SIZE: usize = 256;
 
-#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
+/// Byte offsets of the scalar (its 4 Montgomery limbs, as a base field element) and of the
+/// coordinates of the point of a `Bn254G1MulRequest`, and its size in bytes
+pub const BN254_G1_MUL_SCALAR: usize = 0;
+pub const BN254_G1_MUL_X: usize = 32;
+pub const BN254_G1_MUL_Y: usize = 64;
+pub const BN254_G1_MUL_SIZE: usize = 96;
+
+#[cfg(all(target_arch = "riscv32", bigint_ops))]
 const _: () = {
     use super::{Bls12381Pair, HintEncoding};
     use crate::{bls12_381, bn254};
@@ -75,6 +82,16 @@ const _: () = {
     assert!(offset_of!(Bls12381Pair, g1) == BLS12_381_PAIR_G1);
     assert!(offset_of!(Bls12381Pair, g2) == BLS12_381_PAIR_G2);
     assert!(size_of::<Bls12381Pair>() == BLS12_381_PAIR_SIZE);
+
+    #[cfg(feature = "hinted_operations")]
+    {
+        use super::Bn254G1MulRequest;
+        assert!(offset_of!(bn254::Fr, 0) == 0 && size_of::<bn254::Fr>() == 32);
+        assert!(offset_of!(Bn254G1MulRequest, scalar) == BN254_G1_MUL_SCALAR);
+        assert!(offset_of!(Bn254G1MulRequest, x) == BN254_G1_MUL_X);
+        assert!(offset_of!(Bn254G1MulRequest, y) == BN254_G1_MUL_Y);
+        assert!(size_of::<Bn254G1MulRequest>() == BN254_G1_MUL_SIZE);
+    }
 
     type Bn254Pair = (bn254::G1Affine, bn254::G2Affine);
     assert!(offset_of!(Bn254Pair, 0) == BN254_PAIR_G1);

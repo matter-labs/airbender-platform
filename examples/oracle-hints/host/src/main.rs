@@ -1,51 +1,20 @@
-//! The oracle of a guest that takes hints: a `QueryDispatcher` with airbender-crypto's responder
-//! for its field operations and ModExp advice (`CryptoHints`), serving a native run of the same
-//! computation as its `MemoryOracle`, and the RISC-V guest as its non-determinism CSR source.
-use airbender_crypto::hints::{CryptoHints, HintError, NoHints};
+//! The oracle of a guest that takes hints: Airbender's `QueryDispatcher` with airbender-crypto's
+//! responder for its field operations and ModExp advice (`CryptoHints`), serving a native run of
+//! the same computation as its `MemoryOracle`, and the RISC-V guest as its non-determinism CSR
+//! source (`GuestSource`: the guest's input words, then the oracle).
+use airbender_crypto::hints::{CryptoHints, NoHints};
 use airbender_crypto::modexp::modexp;
 use airbender_crypto::precompiles::secp256k1_ecrecover;
 use airbender_host::{Inputs, Program, Result};
-use airbender_oracle::processor::{NonDeterminismCSRSource, QueryDispatcher, RamPeek, RunMode};
-use std::collections::VecDeque;
+use airbender_oracle::processor::{GuestSource, QueryDispatcher, RunMode};
 use std::path::PathBuf;
 
 /// The oracle for a run in `mode`, with the responder for the hints: the field operations
 /// (inverses, square roots, quotients, pairing witnesses) and the ModExp advice.
-fn hint_oracle(mode: RunMode) -> QueryDispatcher<HintError> {
+fn hint_oracle(mode: RunMode) -> QueryDispatcher {
     let mut oracle = QueryDispatcher::new(mode);
     oracle.add_external_processor(CryptoHints);
     oracle
-}
-
-/// The CSR source of the guest: its input words, then the oracle. The guest reads its inputs
-/// before its first query, and after a query it reads the words of the answer.
-struct GuestSource {
-    inputs: VecDeque<u32>,
-    oracle: QueryDispatcher<HintError>,
-}
-
-impl NonDeterminismCSRSource for GuestSource {
-    fn read(&mut self) -> u32 {
-        if self.oracle.has_pending_response() {
-            return self.oracle.read();
-        }
-        match self.inputs.pop_front() {
-            Some(word) => word,
-            None => self.oracle.read(),
-        }
-    }
-
-    fn write_with_memory_access<R: RamPeek + ?Sized>(&mut self, ram: &R, value: u32) {
-        self.oracle.write_with_memory_access(ram, value);
-    }
-
-    fn write_with_memory_access_raw(&mut self, ram: &[u32], value: u32) {
-        self.oracle.write_with_memory_access_raw(ram, value);
-    }
-
-    fn write_with_memory_access_dyn(&mut self, ram: &dyn RamPeek, value: u32) {
-        self.oracle.write_with_memory_access_dyn(ram, value);
-    }
 }
 
 /// 32 bytes from a hex literal
@@ -106,12 +75,10 @@ fn main() -> Result<()> {
     inputs.push(&y_is_odd)?;
 
     let runner = program.transpiler_runner().build()?;
-    let mut oracle = QueryDispatcher::new(RunMode::RiscVRun);
-    oracle.add_external_processor(CryptoHints);
-    let source = GuestSource {
-        inputs: inputs.words().iter().copied().collect(),
-        oracle,
-    };
+    let source = GuestSource::new(
+        inputs.words().iter().copied(),
+        hint_oracle(RunMode::RiscVRun),
+    );
     let execution = runner.run_with_source(source)?;
     let guest_output = execution.receipt.output[0];
 

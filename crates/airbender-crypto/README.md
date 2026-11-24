@@ -19,9 +19,12 @@
 
 ## Features
 
-- `proving`: enables delegation-oriented features used on `riscv32` Airbender guests. It implies `bigint_ops` (the bigint delegation of the fields) and `hinted_operations`.
+- `proving`: enables delegation-oriented features used on `riscv32` Airbender guests: the delegated hashes, `bigint_ops` and `hinted_operations`.
+- `bigint_ops`: the bigint delegation does the field arithmetic, and the fields have its representations. On `riscv32` it is the real delegation; on a host it is emulated in software, so the RV32 code runs natively. Usable without `proving` and with or without `hinted_operations`.
 - `hinted_operations`: the hinted paths of the primitives, which take oracle witnesses (`hints`). Independent of `bigint_ops`: the answers are read in the representation of the fields of the build.
-- `oracle_implementations`: the oracle side on a native host, which computes the witnesses (`*/oracle_implementations`, `oracle_common`) and records the hint tape; it allocates.
+- `oracle_implementations`: the oracle side on a native host, which computes the witnesses (`*/oracle_implementations`, `oracle_common`) and records the hint tape; it allocates. It reads the querier's memory through Airbender's `QuerierMemory` (`riscv_transpiler::oracle`), so it depends on the simulator crate: host builds only.
+- `oracle_processor`: `hints::CryptoHints`, the oracle side as an `OracleQueryProcessor` of Airbender's `QueryDispatcher`.
+- On `riscv64` there is no bigint delegation and none is emulated: `bigint_ops` and `proving` select nothing there (`build.rs` masks them; the sources test `cfg(bigint_ops)` and `cfg(proving)`, never the features), so a `riscv64` guest builds the 64-bit software arithmetic and reads hints in the native representation (`hints::HintTarget::Native`), as a 64-bit host without `proving` does. The secp256k1 base field of those builds is four saturated 64-bit limbs (`secp256k1::field::field_4x64`), and the `Fp2` products of the bn254 and bls12-381 towers and the `Fp6` products of bls12-381 reduce once per coefficient (`lazy_fp`, with its bounds); the base field products of the affine curve arithmetic and of the hinted division checks are inline there too.
 - `alloc`: `ECMultContext::new_in` and `TryExtend` for `Vec`; no endpoint allocates.
 - Default features keep host usage available and enable the secp256k1 static context and the hinted operations.
 
@@ -42,7 +45,7 @@ equation. A wrong answer fails the computation or is ignored (unused bn254 G2 sl
 never changes a result.
 
 Every endpoint (the `precompiles` functions and `modexp::modexp`) takes `Option<&mut O>` with
-`O: MemoryOracle` (from `airbender-oracle`, whose `Error` type is the caller's). `Some(oracle)` runs
+`O: MemoryOracle` (from `airbender-oracle`, whose `Error` type is the oracle's). `Some(oracle)` runs
 the hinted path, which asks the same queries as zksync-os (in the same order, except that the bn254
 pairing check asks its residue witness before the hints of the pairs, which it then takes a chunk
 of pairs at a time); `None::<&mut NoHints>` runs the plain path. Both give the same result (for
@@ -61,15 +64,20 @@ in `oracle_common`. The answers are in the representation of the querier's targe
 (`hints::HintTarget`): a querier in this process, or the RISC-V guest with `bigint_ops`.
 
 A query is two words written to the non-determinism CSR: the query ID, then the address of a
-request in guest memory. The answer is raw `u32` words, one CSR read each, with no framing. The
-query IDs are allocated in `airbender_oracle::query_ids`. Field hints use `0x4005_0011`, and their
+request in guest memory. The answer is raw `u32` words, one CSR read each, with no framing (a
+64-bit guest without the delegation reads them packed, two to an advice word wherever a hint takes
+two at once: `airbender_oracle::PackedWordChannelOracle`, recorded by `record_hints_packed`). The
+query IDs of the hints are allocated in `airbender_oracle::query_ids`. Field hints use `0x4005_0011`, and their
 elements are the raw Montgomery limbs of the guest's delegated fields; the ModExp queries are
 described in `src/modexp/README.md`.
 
 ecrecover takes the recovered key from the oracle with a short 4-dimensional decomposition of the
 signature (`FieldHintOp::Secp256k1RecoveryWitness`), and checks it with about a fifth fewer group
 operations than computing it. A witness that does not check out panics, as any wrong hint does; the
-oracle answers "no witness" for a key at infinity, and the key is then computed.
+oracle answers "no witness" for a key at infinity, and the key is then computed. The bn254 `G1`
+multiplication takes its product the same way (`FieldHintOp::Bn254G1MulWitness`, checked by
+`affine_glv::check_mul_witness` with about two thirds of the group operations), and computes it
+if the oracle answers "no witness".
 
 Functions that take a divider or a hinted inverse (`*_with_divider`, `into_affine_with_inverse`,
 `hinted_ops::to_affine_with_inverse`) assume their points are on the curve. The byte-level
@@ -84,19 +92,26 @@ let (sum, tape) = record_hints(|oracle| bn254_g1_add(&points, Some(oracle)));
 assert_eq!(sum, bn254_g1_add(&points, None::<&mut NoHints>));
 ```
 
-Recorders on different threads are independent, unless `proving` is enabled on a native target
-(possibly by another crate, through feature unification): its emulated delegated fields share one
-`static mut` scratch space, so the caller must serialize every use of them.
+Recorders on different threads are independent, also with the emulated delegation of a host
+build with `bigint_ops`: its scratch space is per thread.
 
 ### Testing
 
-Unit tests run on the delegated fields of the test build, which have the guest's representation.
-The integration tests in `tests/` cover the arkworks fields of a normal build, and the ones for
-hints, precompiles and ModExp only compile with the oracle side:
+Unit and integration tests run on the fields of the build, so each configuration is tested by
+building it. The tests of hints, precompiles and ModExp need the oracle side:
 
 ```sh
+# The twin of the riscv64 guest: 64-bit software fields, hints
 cargo test -p airbender-crypto --features oracle_implementations
+# The twin of the riscv32 guest: the emulated bigint delegation, hints
+cargo test -p airbender-crypto --features oracle_implementations,bigint_ops
+# Without hints, on either arithmetic
+cargo test -p airbender-crypto --no-default-features --features forward,secp256k1-static-context
+cargo test -p airbender-crypto --no-default-features --features forward,secp256k1-static-context,bigint_ops
 ```
+
+`tests/multi_miller.rs` is for the software fields only. With `proving` the delegated hashes are
+emulated too.
 
 Debug builds run fewer property-test cases for the hint-heavy endpoints; `--release` runs them all.
 The crate depends on no host tooling (simulator, prover): the tests that run a RISC-V guest

@@ -70,6 +70,40 @@ impl U256 {
         self.0.widening_mul_assign_into(&mut high.0, &rhs.0);
     }
 
+    /// `(self, high) = self * rhs`, the high half into a fresh slot: a copy of `self` into it
+    /// (the multiplicand of the high product), then the low and the high product
+    #[inline(always)]
+    pub fn widening_mul_assign_into_slot<'a>(
+        &mut self,
+        high: &'a mut MaybeUninit<Self>,
+        rhs: &Self,
+    ) -> &'a mut Self {
+        // SAFETY: `high` is an exclusively borrowed `Self` place, so it is aligned and disjoint
+        // from `self`, and the copy initializes all of it
+        let high = unsafe {
+            Self::write_into_ptr_unchecked(high.as_mut_ptr(), self);
+            high.assume_init_mut()
+        };
+        self.widening_mul_assign_into(high, rhs);
+        high
+    }
+
+    /// `(self, high) = self * self`, the high half into a fresh slot. The product needs the
+    /// multiplier as a separate operand: a copy of `self`, then as the product.
+    #[inline(always)]
+    pub fn widening_square_assign_into_slot<'a>(
+        &mut self,
+        high: &'a mut MaybeUninit<Self>,
+    ) -> &'a mut Self {
+        let mut multiplier = MaybeUninit::<Self>::uninit();
+        // SAFETY: as in `widening_mul_assign_into_slot`
+        let multiplier = unsafe {
+            Self::write_into_ptr_unchecked(multiplier.as_mut_ptr(), self);
+            multiplier.assume_init_ref()
+        };
+        self.widening_mul_assign_into_slot(high, multiplier)
+    }
+
     #[inline(always)]
     pub fn from_be_bytes(input: &[u8; 32]) -> Self {
         Self(DelegatedU256::from_be_bytes(input))
@@ -123,12 +157,12 @@ unsafe fn bigint_op_delegation_with_carry_bit(
     unsafe { bigint_op_delegation_with_carry_bit_raw(a.cast(), b.cast(), carry, op) }
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, emulated_delegation)))]
 static mut SCRATCH_FOR_MUT: MaybeUninit<DelegatedU256> = MaybeUninit::uninit();
 
-// Tests run in parallel: one scratch per thread, boxed as thread-locals are not 32-byte aligned
-// on every host
-#[cfg(test)]
+// A host that emulates the delegation computes on several threads at once, as tests do: one
+// scratch per thread, boxed as thread-locals are not 32-byte aligned on every host
+#[cfg(any(test, emulated_delegation))]
 std::thread_local! {
     static SCRATCH_FOR_MUT: std::boxed::Box<core::cell::UnsafeCell<MaybeUninit<DelegatedU256>>> =
         std::boxed::Box::new(core::cell::UnsafeCell::new(MaybeUninit::uninit()));
@@ -177,14 +211,14 @@ unsafe fn write_into_ptr_unchecked(dst: *mut DelegatedU256, source: &DelegatedU2
 /// # Safety
 /// `operand` must be 32 bytes aligned and point to 32 bytes of accessible memory.
 unsafe fn copy_to_scratch(operand: *const DelegatedU256) -> *mut DelegatedU256 {
-    #[cfg(not(test))]
+    #[cfg(not(any(test, emulated_delegation)))]
     #[allow(static_mut_refs)]
     unsafe {
         let _ = bigint_op_delegation(SCRATCH_FOR_MUT.as_mut_ptr(), operand, BigIntOps::MemCpy);
         SCRATCH_FOR_MUT.as_mut_ptr()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, emulated_delegation))]
     unsafe {
         let scratch = SCRATCH_FOR_MUT.with(|scratch| scratch.get().cast::<DelegatedU256>());
         let _ = bigint_op_delegation(scratch, operand, BigIntOps::MemCpy);

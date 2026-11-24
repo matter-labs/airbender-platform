@@ -52,6 +52,9 @@ num-traits = { workspace = true }
 # ark-bls12-381 = { path = "../../git_copies/algebra/curves/bls12_381", default-features = false, features = ["curve", "scalar_field"] }
 
 [dev-dependencies]
+# The oracle side (`airbender_oracle::QuerierMemory` and the simulator crate behind it), which
+# the unit tests use without `oracle_implementations`
+airbender-oracle = { path = "../airbender-oracle", features = ["oracle_processor"] }
 ruint = { workspace = true }
 ark-std = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }
@@ -63,6 +66,8 @@ hex-literal = { workspace = true }
 ark-test-curves = { workspace = true, features = ["secp256k1", "bls12_381_curve"] }
 rand_core = { workspace = true, features = ["getrandom"] }
 rand_chacha = { workspace = true }
+# The permutation behind `sha3` (already in the lock file), for the host tests of `sha3::rv64`
+keccak = { version = "0.1", default-features = false }
 
 [features]
 # forward = ["blake2"]
@@ -81,14 +86,18 @@ default = ["forward", "secp256k1-static-context", "hinted_operations"]
 hinted_operations = []
 # The oracle side on a native host: the implementations that compute the witnesses
 # (`*/oracle_implementations`, `oracle_common`), which allocate, and the recorder of the hint
-# tape.
-oracle_implementations = ["hinted_operations", "alloc"]
+# tape. They read the querier's memory through Airbender's `QuerierMemory`, which lives in its
+# simulator crate (`riscv_transpiler::oracle`, through `airbender-oracle/oracle_processor`): a
+# host-only dependency, never a guest's.
+oracle_implementations = ["hinted_operations", "alloc", "airbender-oracle/oracle_processor"]
 # The oracle side as a responder of the oracle protocol (`CryptoHints`, an
-# `airbender_oracle::query_processor::OracleQueryProcessor`), which a host registers with its
-# `QueryDispatcher`. Only the trait is pulled in: no simulator or prover crate.
-oracle_processor = ["oracle_implementations", "airbender-oracle/query_processor"]
+# `OracleQueryProcessor` of `riscv_transpiler::oracle`), which a host registers with its
+# `QueryDispatcher`.
+oracle_processor = ["oracle_implementations"]
 # bigint_ops = ["zeroize", "num-bigint", "num-traits", "num-integer"]
-# The bigint delegation of the RV32 guest for the field arithmetic
+# The bigint delegation of the RV32 guest for the field arithmetic. On a host it is emulated in
+# software, with the same representations: the RV32 code runs and is tested natively. Never in
+# force on `riscv64` (see `build.rs`).
 bigint_ops = []
 keccak_special5 = []
 single_round_with_control = ["blake2s_u32/blake2_with_compression"]
