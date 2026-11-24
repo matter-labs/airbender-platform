@@ -1,4 +1,10 @@
 use super::*;
+#[cfg(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+))]
+use crate::ark_ff_delegation::MontFp;
 use crate::bn254::Fq12;
 use crate::extension_tower::*;
 use ark_ec::bn::g2::EllCoeff;
@@ -7,6 +13,12 @@ use ark_ec::pairing::PairingOutput;
 use ark_ec::short_weierstrass::SWCurveConfig;
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
+#[cfg(not(any(
+    all(target_arch = "riscv32", feature = "bigint_ops"),
+    test,
+    feature = "proving"
+)))]
+use ark_ff::MontFp;
 use ark_ff::One;
 use ark_ff::{AdditiveGroup, Field};
 use ark_serialize::CanonicalDeserialize;
@@ -19,7 +31,7 @@ impl Bn254 {
     /// `1`, and multiplied by `initial` (`initial_inverse`) at the `1` (`-1`) digits of the loop
     /// count, so that the result is `initial^(6x+2) f` for the plain Miller loop output `f`: the
     /// accumulator goes through the double-and-add of the exponent. This is how the residue
-    /// witness pairing check (`crate::residue_witness`) gets `d^(6x+2)` almost for free (the
+    /// witness pairing check (`crate::oracle_common::residue_witness`) gets `d^(6x+2)` almost for free (the
     /// squarings are the loop's own). `initial_inverse` must be the inverse of `initial`.
     ///
     /// The prepared `G2` points are borrowed: precomputed lines are read in place.
@@ -108,7 +120,9 @@ impl Bn254 {
         // no pair: the accumulator is the initial value to the power of the loop count all
         // the same
         match initial {
-            Some((initial, _)) => initial.pow(crate::residue_witness::bn254::SIX_X_PLUS_2),
+            Some((initial, _)) => {
+                initial.pow(crate::oracle_common::residue_witness::bn254::SIX_X_PLUS_2)
+            }
             None => result,
         }
     }
@@ -407,8 +421,11 @@ impl From<G2Affine> for G2PreparedNoAlloc {
                 affine_lines: false,
             }
         } else {
-            use ark_ff::{AdditiveGroup, One};
-            let two_inv = Fq::one().double().inverse().unwrap();
+            use ark_ff::One;
+            const TWO_INV: Fq = MontFp!(
+                "10944121435919637611123202872628637544348155578648911831344518947322613104292"
+            );
+            let two_inv = TWO_INV;
             let mut i = 0;
             let mut ell_coeffs: [core::mem::MaybeUninit<EllCoeff<Config>>; BN254_NUM_ELL_COEFFS] =
                 [const { core::mem::MaybeUninit::uninit() }; BN254_NUM_ELL_COEFFS];

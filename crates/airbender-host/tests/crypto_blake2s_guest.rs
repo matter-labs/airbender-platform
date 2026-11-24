@@ -1,14 +1,15 @@
-// Tests that run the blake2s test program as a RISC-V binary and verify correctness.
-//
-// Prerequisites: build the test program binaries first:
-//   cd src/blake2s/test_program && ./dump_bin.sh
+//! Runs airbender-crypto's blake2s test program as a RISC-V binary and verifies correctness.
+//! The harness lives here because airbender-crypto does not depend on host tooling.
+//!
+//! Prerequisites: build the test program binaries first:
+//!   cd crates/airbender-crypto/src/blake2s/test_program && ./dump_bin.sh
 
 use airbender_host::{Program, Runner};
 use std::path::PathBuf;
 
 fn test_program_dist_dir(app_name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/blake2s/test_program/dist")
+        .join("../airbender-crypto/src/blake2s/test_program/dist")
         .join(app_name)
 }
 

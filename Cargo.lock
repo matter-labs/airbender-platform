@@ -89,7 +89,7 @@ dependencies = [
 name = "airbender-crypto"
 version = "0.3.0"
 dependencies = [
- "airbender-host",
+ "airbender-oracle",
  "ark-bls12-381",
  "ark-bn254",
  "ark-ec",
@@ -120,6 +120,15 @@ dependencies = [
  "sha2",
  "sha3 0.10.9",
  "zeroize",
+]
+
+[[package]]
+name = "airbender-crypto-c"
+version = "0.3.0"
+dependencies = [
+ "airbender-crypto",
+ "airbender-oracle",
+ "airbender-rt",
 ]
 
 [[package]]
@@ -158,6 +167,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "airbender-oracle"
+version = "0.3.0"
+dependencies = [
+ "riscv_common",
+ "riscv_transpiler",
 ]
 
 [[package]]
@@ -1602,13 +1619,12 @@ dependencies = [
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
- "zlib-rs",
 ]
 
 [[package]]
@@ -1628,11 +1644,12 @@ name = "full_statement_verifier"
 version = "0.1.0"
 dependencies = [
  "common_constants",
- "flate2",
+ "proof_fixtures",
  "riscv_transpiler",
  "serde",
  "serde_json",
  "setups",
+ "sha3 0.12.0",
  "verifier_common",
 ]
 
@@ -1826,6 +1843,7 @@ dependencies = [
  "cs",
  "era_cudart",
  "era_cudart_sys",
+ "fft",
  "field",
  "gkr_eval_ir",
  "gpu_core",
@@ -2782,6 +2800,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "proof_fixtures"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "miniz_oxide",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "proptest"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3400,7 +3428,6 @@ dependencies = [
  "sha3 0.12.0",
  "shift_binary",
  "syn 2.0.117",
- "unified_extended_machine",
  "unified_reduced_machine",
  "verifier_common",
 ]
@@ -3945,16 +3972,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
-name = "unified_extended_machine"
-version = "0.1.0"
-dependencies = [
- "circuit_common",
- "common_constants",
- "prover",
- "witness_eval_generator",
-]
-
-[[package]]
 name = "unified_reduced_machine"
 version = "0.1.0"
 dependencies = [
@@ -4001,6 +4018,7 @@ dependencies = [
  "field",
  "non_determinism_source",
  "proc-macro2",
+ "proof_fixtures",
  "prover",
  "quote",
  "serde",
@@ -4482,12 +4500,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "zlib-rs"
-version = "0.6.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmij"

@@ -51,8 +51,8 @@ pub use vk::{compute_real_vk, verify_proof, RealVk};
 /// direct Airbender crates at the same time.
 pub mod raw {
     pub use prover_pipeline::{
-        verify_artifact, ProgramSource, ProofArtifact, ProofCounts, ProofTarget, ProofTimingsMs,
-        ProverBackend,
+        verify_artifact_in_mode, ProgramSource, ProofArtifact, ProofCounts, ProofTarget,
+        ProofTimingsMs, ProverBackend, SoundnessMode,
     };
     pub use riscv_transpiler::abstractions::non_determinism::QuasiUARTSource;
     pub use riscv_transpiler::ir::{

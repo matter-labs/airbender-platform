@@ -52,7 +52,7 @@ fn selftest() {
             hasher.update(&message);
             let res = hasher.finalize();
             let mut hash_bytes = [0u8; 32];
-            hash_bytes.copy_from_slice(&res);
+            hash_bytes.copy_from_slice(res.as_ref());
             hash_bytes
         };
 

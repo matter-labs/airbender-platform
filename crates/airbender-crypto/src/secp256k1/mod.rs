@@ -4,7 +4,11 @@
 mod context;
 pub mod field;
 pub mod hooks;
-pub mod oracle;
+#[cfg(all(
+    any(feature = "oracle_implementations", test),
+    target_pointer_width = "64"
+))]
+pub mod oracle_implementations;
 mod points;
 mod recover;
 mod recover_affine;
@@ -12,8 +16,6 @@ mod recover_affine;
 mod recover_shamir;
 mod recover_witnessed;
 pub mod scalars;
-#[cfg(all(not(target_arch = "riscv32"), feature = "secp256k1-static-context"))]
-pub mod witness_host;
 
 #[cfg(test)]
 mod test_vectors;
@@ -30,7 +32,9 @@ pub use recover::recover_with_context_and_hooks;
 pub use recover_witnessed::WITNESS_COEFFICIENT_BITS;
 
 #[cfg(feature = "secp256k1-static-context")]
-pub use recover::{recover, recover_from_bytes_with_hooks, recover_with_hooks};
+pub use recover::{
+    recover, recover_from_bytes_with_hooks, recover_with_hooks, verify_prehash_with_hooks,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum Secp256k1Err {
@@ -107,6 +111,12 @@ pub fn ecrecover_test() {
     let recovered_key = recover(&msg, &signature, &recovery_id).unwrap();
 
     assert_eq!(recovered_key.to_bytes(), public_key.to_bytes());
+}
+
+/// Verify prehashed ECDSA. Malformed inputs return None, false claims Some(false).
+#[cfg(feature = "secp256k1-static-context")]
+pub fn verify_prehash(msg: &[u8; 32], sig: &[u8; 64], pubkey: &[u8; 64]) -> Option<bool> {
+    recover::verify_prehash_with_hooks(msg, sig, pubkey, &mut hooks::DefaultSecp256k1Hooks)
 }
 
 #[cfg(test)]

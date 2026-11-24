@@ -1,0 +1,35 @@
+[package]
+name = "airbender-crypto-c"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "C ABI for Airbender cryptographic accelerators"
+
+# The C archive is built with `cargo rustc --crate-type staticlib`; listing it here would build
+# it for every Rust dependent too.
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+airbender-crypto = { path = "../airbender-crypto", default-features = false, features = ["forward", "secp256k1-static-context"] }
+
+# Native builds take hints from a recording on the calling thread: the oracle side of the hints
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies]
+airbender-crypto = { path = "../airbender-crypto", default-features = false, features = ["hinted_operations", "oracle_implementations"] }
+
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+airbender-oracle = { path = "../airbender-oracle" }
+airbender-rt = { path = "../airbender-rt", optional = true, default-features = false, features = ["allocator-custom", "external-startup"] }
+
+[features]
+default = []
+# RV32 only: hints through the non-determinism CSR, from a tape recorded natively, with or
+# without `delegation`. Native builds ignore it.
+csr-oracle = ["airbender-crypto/hinted_operations"]
+# RV32 only: delegated big-integer arithmetic.
+delegation = ["airbender-crypto/proving"]
+# RV32 only: airbender-rt's panic and allocation-error handlers for C guests, and a global
+# allocator that traps (nothing allocates; `alloc` is only linked). Leave off in Rust guests
+# that start through airbender-rt, which bring their own.
+c-runtime = ["dep:airbender-rt"]

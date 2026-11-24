@@ -132,8 +132,8 @@ pub(super) fn verify_witnessed<H: Secp256k1Hooks>(
 mod tests {
     use super::super::context::ECRECOVER_CONTEXT;
     use super::super::hooks::DefaultSecp256k1Hooks;
+    use super::super::oracle_implementations::witness::{decompose_4d, recovery_witness};
     use super::super::recover::{compute_from_point, recover_from_bytes_with_hooks};
-    use super::super::witness_host::{decompose_4d, recovery_witness};
     use super::*;
     use core::mem::MaybeUninit;
     use proptest::{prop_assert, prop_assert_eq, proptest};
@@ -190,15 +190,17 @@ mod tests {
         recover_from_bytes_with_hooks(digest, r, s, *odd, hooks)
     }
 
-    /// Whether the recovery rejects the witness
+    /// Whether the recovery rejects the witness: it panics, as for a wrong hint
     fn rejects(input: &([u8; 32], [u8; 32], [u8; 32], bool), witness: RecoveryWitness) -> bool {
-        recover(
-            input,
-            &mut WitnessHooks {
-                witness: Some(witness),
-                divisions: 0,
-            },
-        )
+        std::panic::catch_unwind(|| {
+            recover(
+                input,
+                &mut WitnessHooks {
+                    witness: Some(witness),
+                    divisions: 0,
+                },
+            )
+        })
         .is_err()
     }
 

@@ -19,7 +19,7 @@ use super::{
 };
 use crate::error::{HostError, Result};
 use crate::security::SecurityLevel;
-use prover_pipeline::{ProgramProver, ProgramProverConfig, ProverBackend, RamSize};
+use prover_pipeline::{ProgramProver, ProgramProverConfig, ProverBackend, RamSize, SoundnessMode};
 use riscv_transpiler::common_constants::rom::ROM_BYTE_SIZE;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -182,6 +182,7 @@ impl CpuProver {
 
         let source = program_source(app_bin_path)?;
         let config = ProgramProverConfig {
+            soundness_mode: SoundnessMode::DEFAULT,
             target: level.as_proof_target(),
             backend: ProverBackend::Cpu,
             cycles_bound: Some(

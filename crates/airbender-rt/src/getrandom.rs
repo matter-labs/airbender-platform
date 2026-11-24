@@ -22,3 +22,11 @@ pub unsafe extern "Rust" fn __getrandom_v03_custom(
 ) -> Result<(), getrandom::Error> {
     Err(getrandom::Error::UNSUPPORTED)
 }
+
+// getrandom 0.2 looks up `__getrandom_custom`, which this macro defines.
+#[cfg(target_arch = "riscv32")]
+fn unsupported(_dest: &mut [u8]) -> Result<(), getrandom::Error> {
+    Err(getrandom::Error::UNSUPPORTED)
+}
+#[cfg(target_arch = "riscv32")]
+getrandom::register_custom_getrandom!(unsupported);

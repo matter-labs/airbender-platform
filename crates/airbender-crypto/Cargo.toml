@@ -12,6 +12,7 @@ description = "Shared crypto primitives for Airbender host and guest programs"
 readme = "README.md"
 
 [dependencies]
+airbender-oracle = { path = "../airbender-oracle" }
 common_constants = { workspace = true }
 riscv_common = { workspace = true }
 blake2 = { workspace = true }
@@ -51,7 +52,6 @@ num-traits = { workspace = true }
 # ark-bls12-381 = { path = "../../git_copies/algebra/curves/bls12_381", default-features = false, features = ["curve", "scalar_field"] }
 
 [dev-dependencies]
-airbender-host = { path = "../airbender-host", default-features = false }
 ruint = { workspace = true }
 ark-std = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }
@@ -67,9 +67,28 @@ rand_chacha = { workspace = true }
 [features]
 # forward = ["blake2"]
 forward = []
-proving = ["single_round_with_control", "bigint_ops", "secp256k1-static-context", "keccak_special5"]
-default = ["forward", "secp256k1-static-context"]
+proving = [
+    "single_round_with_control",
+    "bigint_ops",
+    "hinted_operations",
+    "secp256k1-static-context",
+    "keccak_special5",
+]
+default = ["forward", "secp256k1-static-context", "hinted_operations"]
+# The hinted paths of the primitives: the oracle witnesses (`hints`) in the recovery, the pairing
+# checks, the MSMs, KZG and ModExp. Independent of `bigint_ops`: the answers are read in the
+# representation of the fields of the build.
+hinted_operations = []
+# The oracle side on a native host: the implementations that compute the witnesses
+# (`*/oracle_implementations`, `oracle_common`), which allocate, and the recorder of the hint
+# tape.
+oracle_implementations = ["hinted_operations", "alloc"]
+# The oracle side as a responder of the oracle protocol (`CryptoHints`, an
+# `airbender_oracle::query_processor::OracleQueryProcessor`), which a host registers with its
+# `QueryDispatcher`. Only the trait is pulled in: no simulator or prover crate.
+oracle_processor = ["oracle_implementations", "airbender-oracle/query_processor"]
 # bigint_ops = ["zeroize", "num-bigint", "num-traits", "num-integer"]
+# The bigint delegation of the RV32 guest for the field arithmetic
 bigint_ops = []
 keccak_special5 = []
 single_round_with_control = ["blake2s_u32/blake2_with_compression"]
@@ -78,6 +97,7 @@ secp256k1-static-context = []
 # Experimental: evmone-like structure of the ecrecover's multi-scalar multiplication (fixed windows for G,
 # joint NAF for the recovered point). Applies to the delegation-based field (`bigint_ops`) only.
 secp256k1-shamir-msm = []
+# The allocating endpoints (the pairing checks and the MSMs) and `ECMultContext::new_in`
 alloc = []
 sha3_tests = []
 testing = []

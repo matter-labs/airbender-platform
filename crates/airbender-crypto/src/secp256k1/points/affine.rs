@@ -132,6 +132,29 @@ impl Affine {
         self.infinity || (self.x.is_zero() && self.y.is_zero())
     }
 
+    /// Parse canonical finite coordinates and validate the curve equation.
+    // Its only caller, `verify_prehash_with_hooks`, needs the static context
+    #[cfg(feature = "secp256k1-static-context")]
+    pub(crate) fn from_coordinates(bytes: &[u8; 64]) -> Option<Self> {
+        let x = FieldElement::from_bytes(bytes[..32].try_into().unwrap())?;
+        let y = FieldElement::from_bytes(bytes[32..].try_into().unwrap())?;
+        let mut yy = y;
+        yy.square_in_place();
+        let mut xxx = x;
+        xxx.square_in_place();
+        xxx.mul_in_place(&x);
+        xxx.add_int_in_place(7);
+        yy.sub_in_place(&xxx);
+        if !yy.normalizes_to_zero() {
+            return None;
+        }
+        Some(Self {
+            x,
+            y,
+            infinity: false,
+        })
+    }
+
     pub fn decompress(x_bytes: &FieldBytes, y_is_odd: bool) -> Option<Self> {
         Self::decompress_with_hooks(
             x_bytes,

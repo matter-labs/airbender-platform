@@ -10,6 +10,7 @@
 /// index `n` in `Z⁴`, so about 64 bits each). The verification is then a multi-scalar
 /// multiplication whose variable-base scalars have about 64 bits instead of 128.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
 pub struct RecoveryWitness {
     /// The coordinates of the key, big-endian
     pub key_x: [u8; 32],
@@ -35,9 +36,9 @@ pub trait Secp256k1Hooks {
     /// modulo the order) with the point `point` (`x = r`, the `y` of the recovery id), if the
     /// hook provides one: the recovery is then checked against it (`recover_witnessed`), with
     /// about a fifth fewer group operations, instead of computed. Only used with
-    /// `FE_DIVIDE_IS_CHEAP`. A witness that does not check out fails the recovery, so a hook
-    /// must answer `None` when it has none (e.g. for a signature whose key is the point at
-    /// infinity).
+    /// `FE_DIVIDE_IS_CHEAP`. A witness that does not check out panics, as a wrong hint does, so
+    /// that it cannot change the result of the recovery; a hook must answer `None` when it has
+    /// none (e.g. for a signature whose key is the point at infinity).
     fn recovery_witness(
         &mut self,
         point: &super::points::Affine,
