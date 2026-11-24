@@ -48,7 +48,7 @@ pub const BN254_PAIR_G1: usize = 0;
 pub const BN254_PAIR_G2: usize = 96;
 pub const BN254_PAIR_SIZE: usize = 256;
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(all(target_arch = "riscv32", feature = "bigint_ops"))]
 const _: () = {
     use super::{Bls12381Pair, HintEncoding};
     use crate::{bls12_381, bn254};

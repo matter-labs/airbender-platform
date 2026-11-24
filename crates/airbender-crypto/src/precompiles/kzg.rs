@@ -3,11 +3,11 @@
 use crate::ark_ec::pairing::Pairing;
 use crate::ark_ec::{AffineRepr, CurveGroup};
 use crate::ark_ff::{Field, PrimeField};
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints as curve_hints;
 use airbender_oracle::MemoryOracle;
 
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 use super::unavailable as curve_hints;
 
 /// A scalar of the KZG proof check (`z` or `y`), as an integer below the group order
@@ -40,8 +40,10 @@ pub fn parse_scalar(input: &[u8; 32]) -> Result<KzgScalar, ()> {
 // The callers map the failure to their own error
 #[allow(clippy::result_unit_err)]
 pub fn parse_g1_compressed(input: &[u8]) -> Result<crate::bls12_381::G1Affine, ()> {
-    use crate::ark_serialize::CanonicalDeserialize;
-    crate::bls12_381::G1Affine::deserialize_compressed(input).map_err(|_| ())
+    use crate::ark_ff::Field;
+    // the same decoding as arkworks' `deserialize_compressed`, without its `Read`-based errors
+    // (which allocate)
+    crate::bls12_381::g1_from_compressed_with_sqrt(input, |y_squared| y_squared.sqrt()).ok_or(())
 }
 
 /// [`parse_g1_compressed`]; with an oracle, the square root is a checked hint and the subgroup
@@ -66,7 +68,7 @@ pub fn parse_g1_compressed_with_oracle<O: MemoryOracle>(
                     )
                 },
             )
-            .map_err(|_| ())
+            .ok_or(())
         }
         None => parse_g1_compressed(input),
     }
@@ -136,19 +138,19 @@ pub fn verify_kzg_proof_with_oracle<O: MemoryOracle>(
         return exact(&Field::inverse);
     };
     // Residue witness check in place of the final exponentiation (eprint 2024/640, soundness in
-    // `crate::residue_witness`). The prover cannot choose the result: a claimed identity must pass
+    // `crate::oracle_common::residue_witness`). The prover cannot choose the result: a claimed identity must pass
     // the check or this panics, and a claimed non-identity takes the exact final exponentiation.
     match curve_hints::bls12_381_kzg_residue_witness(oracle, &g1) {
         curve_hints::PairingClaim::Identity { c: _, d, s } => {
             let l = Bls12_381::multi_miller_loop_shared(Some(&d), pairs());
             assert!(
-                crate::residue_witness::bls12_381::check(&l, &d, &s),
+                crate::oracle_common::residue_witness::bls12_381::check(&l, &d, &s),
                 "the residue witness of the KZG proof claimed to be valid is wrong"
             );
             true
         }
         curve_hints::PairingClaim::NotIdentity { f_inverse } => {
-            exact(&|f| curve_hints::checked_inverse(f, f_inverse))
+            exact(&|f| Some(curve_hints::checked_inverse(f, f_inverse)))
         }
     }
 }
@@ -189,7 +191,7 @@ pub fn kzg_verify_proof<O: MemoryOracle>(
     ))
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

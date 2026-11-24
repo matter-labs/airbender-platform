@@ -1,22 +1,22 @@
-//! The residue witnesses of the pairing checks (`crate::residue_witness`, after
+//! The residue witnesses of the pairing checks (`crate::oracle_common::residue_witness`, after
 //! <https://eprint.iacr.org/2024/640>), which replace the final exponentiations, and the slopes of
 //! the affine `G2` chains of the bn254 pairing check.
 //!
 //! The witnesses are not checked here: the pairing check fails for any witness of a non-identity
-//! product (see `crate::residue_witness`). A wrong hint fails an assertion or is ignored, and never
+//! product (see `crate::oracle_common::residue_witness`). A wrong hint fails an assertion or is ignored, and never
 //! changes a result. Ignored words are `G2` slopes a chain does not use, or all of a chain the
 //! prover reports as exceptional (the projective computation then runs instead).
 
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use super::answer::{read_hint_answer, HintAnswer};
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use super::request::{send_field_hint_query, FieldHintOp};
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use airbender_oracle::MemoryOracle;
 use ark_ff::Field;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use ark_ff::{One, Zero};
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 use core::mem::MaybeUninit;
 
 /// A validated pair of the bls12-381 pairing; `repr(C)` fixes the guest layout.
@@ -38,9 +38,9 @@ pub enum PairingClaim<F12, F6> {
 }
 
 /// The claim about the bn254 pairing product over validated `pairs`, for
-/// `crate::residue_witness::bn254::check` on the Miller loop started at `d`. `c d = 1` is checked
+/// `crate::oracle_common::residue_witness::bn254::check` on the Miller loop started at `d`. `c d = 1` is checked
 /// here: the loop multiplies by `c` at negative digits, and the check is only sound for `c = d^-1`.
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 pub fn bn254_pairing_residue_witness<O: MemoryOracle>(
     oracle: &mut O,
     pairs: &[(crate::bn254::G1Affine, crate::bn254::G2Affine)],
@@ -76,7 +76,7 @@ pub fn bn254_pairing_residue_witness<O: MemoryOracle>(
 /// line slopes. A cleared flag marks an exceptional chain, whose words are skipped. Each slope is
 /// checked against its fraction. The unread rest is skipped on drop and the query ended, so the
 /// oracle stays in step on every path.
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 pub struct G2SlopeHints<'a, O: MemoryOracle> {
     oracle: &'a mut O,
     /// Words of the answer not received yet
@@ -84,18 +84,18 @@ pub struct G2SlopeHints<'a, O: MemoryOracle> {
 }
 
 /// Oracle words of one `Fq2` hint
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 const FQ2_HINT_WORDS: usize = 2 * 2 * 4;
 
 /// Oracle words of the whole answer: two flags and the slopes
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 const G2_HINT_WORDS: usize = 2
     + (crate::bn254::curves::g2_affine::SUBGROUP_DIVISIONS
         + crate::bn254::curves::g2_affine::LINE_DIVISIONS)
         * FQ2_HINT_WORDS;
 
 /// Asks for the slopes of the affine `G2` chains of `q` (on the twist, not at infinity)
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 pub fn bn254_g2_pairing_slopes<'a, O: MemoryOracle>(
     oracle: &'a mut O,
     q: &crate::bn254::G2Affine,
@@ -109,7 +109,7 @@ pub fn bn254_g2_pairing_slopes<'a, O: MemoryOracle>(
     }
 }
 
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 impl<'a, O: MemoryOracle> G2SlopeHints<'a, O> {
     /// The slopes of the membership test, `None` if the prover reports an exceptional chain
     pub fn subgroup_chain(&mut self) -> Option<HintedChain<'_, 'a, O>> {
@@ -146,7 +146,7 @@ impl<'a, O: MemoryOracle> G2SlopeHints<'a, O> {
     }
 }
 
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 impl<O: MemoryOracle> Drop for G2SlopeHints<'_, O> {
     fn drop(&mut self) {
         self.skip(self.remaining_words);
@@ -157,13 +157,13 @@ impl<O: MemoryOracle> Drop for G2SlopeHints<'_, O> {
 }
 
 /// The hints of one chain, in the chain's order
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 pub struct HintedChain<'c, 'a, O: MemoryOracle> {
     hints: &'c mut G2SlopeHints<'a, O>,
     remaining: usize,
 }
 
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bn254::Fq2> for HintedChain<'_, '_, O> {
     #[inline(always)]
     fn divide<'q>(
@@ -184,7 +184,7 @@ impl<O: MemoryOracle> crate::affine_glv::Divider<crate::bn254::Fq2> for HintedCh
     }
 }
 
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 impl<O: MemoryOracle> Drop for HintedChain<'_, '_, O> {
     /// The rest of an abandoned chain is skipped
     fn drop(&mut self) {
@@ -193,8 +193,8 @@ impl<O: MemoryOracle> Drop for HintedChain<'_, '_, O> {
 }
 
 /// The claim about `e(p1, G2) e(p2, tau G2)` for `points = [p1, p2]` (the KZG proof check), for
-/// `crate::residue_witness::bls12_381::check` on the Miller loop started at `d` (`c` is zero)
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+/// `crate::oracle_common::residue_witness::bls12_381::check` on the Miller loop started at `d` (`c` is zero)
+#[cfg(any(feature = "hinted_operations", test))]
 pub fn bls12_381_kzg_residue_witness<O: MemoryOracle>(
     oracle: &mut O,
     points: &[crate::bls12_381::G1Affine; 2],
@@ -223,7 +223,7 @@ pub fn bls12_381_kzg_residue_witness<O: MemoryOracle>(
 }
 
 /// The claim about the bls12-381 pairing product over validated `pairs` (`c` is zero)
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+#[cfg(any(feature = "hinted_operations", test))]
 pub fn bls12_381_pairing_residue_witness<O: MemoryOracle>(
     oracle: &mut O,
     pairs: &[Bls12381Pair],
@@ -251,13 +251,15 @@ pub fn bls12_381_pairing_residue_witness<O: MemoryOracle>(
     claim
 }
 
-/// The hinted inverse of the Miller loop output `f`, checked
-pub fn checked_inverse<F: Field>(f: &F, f_inverse: F) -> Option<F> {
+/// The hinted inverse of the Miller loop output `f`, checked with one multiplication. `f` is
+/// non-zero a priori (the Miller loop of points on the curves never vanishes), so there is no
+/// zero case: the check is the whole validation, and a zero `f` fails it like a wrong hint.
+pub fn checked_inverse<F: Field>(f: &F, f_inverse: F) -> F {
     assert!(
         (*f * f_inverse).is_one(),
         "the Miller loop inverse hint is wrong"
     );
-    Some(f_inverse)
+    f_inverse
 }
 
 #[cfg(all(test, target_pointer_width = "64"))]
@@ -265,10 +267,10 @@ mod tests {
     use super::*;
     use crate::affine_glv::{Divider, InvertingDivider};
     use crate::bn254::curves::g2_affine;
-    use crate::hints::host::{record_hints, RecordingHintOracle};
     use crate::hints::test_support::{
         lying_oracle, lying_oracle_last_word, non_identity_claiming_oracle, TapeOracle,
     };
+    use crate::oracle_common::{record_hints, RecordingHintOracle};
     use crate::{bls12_381, bn254};
     use ark_ec::pairing::Pairing;
     use ark_ec::{AffineRepr, CurveGroup};
@@ -314,14 +316,16 @@ mod tests {
             panic!("the product is the identity");
         };
         let l = bn254_miller_loop(Some((&d, &c)), &identity);
-        assert!(crate::residue_witness::bn254::check(&l, &d, &s));
+        assert!(crate::oracle_common::residue_witness::bn254::check(
+            &l, &d, &s
+        ));
         let PairingClaim::NotIdentity { f_inverse } =
             bn254_pairing_residue_witness(&mut oracle, &other)
         else {
             panic!("the product is not the identity");
         };
         let f = bn254_miller_loop(None, &other);
-        assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
+        assert_eq!(checked_inverse(&f, f_inverse), f_inverse);
         // a false non-identity claim comes with the inverse the exact path checks
         let PairingClaim::NotIdentity { f_inverse } =
             bn254_pairing_residue_witness(&mut non_identity_claiming_oracle(), &identity)
@@ -329,7 +333,7 @@ mod tests {
             panic!("the oracle claims a non-identity");
         };
         let f = bn254_miller_loop(None, &identity);
-        assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
+        assert_eq!(checked_inverse(&f, f_inverse), f_inverse);
     }
 
     #[test]
@@ -370,7 +374,9 @@ mod tests {
         };
         assert!(c.is_zero());
         let l = kzg_miller_loop(Some(&d), &identity);
-        assert!(crate::residue_witness::bls12_381::check(&l, &d, &s));
+        assert!(crate::oracle_common::residue_witness::bls12_381::check(
+            &l, &d, &s
+        ));
         // the inverses are of the conjugated loop outputs
         let PairingClaim::NotIdentity { f_inverse } =
             bls12_381_kzg_residue_witness(&mut oracle, &other)
@@ -379,7 +385,7 @@ mod tests {
         };
         let mut f = kzg_miller_loop(None, &other);
         f.conjugate_in_place();
-        assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
+        assert_eq!(checked_inverse(&f, f_inverse), f_inverse);
     }
 
     #[test]
@@ -402,14 +408,16 @@ mod tests {
         };
         assert!(c.is_zero());
         let l = Bls12_381::multi_miller_loop_with_initial_owned(&d, g1(&identity), g2(&identity));
-        assert!(crate::residue_witness::bls12_381::check(&l, &d, &s));
+        assert!(crate::oracle_common::residue_witness::bls12_381::check(
+            &l, &d, &s
+        ));
         let PairingClaim::NotIdentity { f_inverse } =
             bls12_381_pairing_residue_witness(&mut oracle, &other)
         else {
             panic!("the product is not the identity");
         };
         let f = Bls12_381::multi_miller_loop(g1(&other), g2(&other)).0;
-        assert_eq!(checked_inverse(&f, f_inverse), Some(f_inverse));
+        assert_eq!(checked_inverse(&f, f_inverse), f_inverse);
     }
 
     /// Divides with the first `hinted` quotients of `chain`, and with inversions after them

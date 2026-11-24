@@ -1,7 +1,5 @@
 use super::mpnat::{DoubleWord, MPNat, Word, BASE, WORD_BITS};
-use super::vec_in;
-use alloc::vec::Vec;
-use core::alloc::Allocator;
+use super::Digits;
 
 // Computes the "Montgomery Product" of two numbers.
 // See Coarsely Integrated Operand Scanning (CIOS) Method in
@@ -10,13 +8,7 @@ use core::alloc::Allocator;
 // digits needs to represent `n`. `n_prime` has the property that `r(r^(-1)) - nn' = 1`.
 // Note: This algorithm only works if `xy < rn` (generally we will either have both `x < n`, `y < n`
 // or we will have `x < r`, `y < n`).
-pub fn monpro<A: Allocator + Clone>(
-    x: &MPNat<A>,
-    y: &MPNat<A>,
-    n: &MPNat<A>,
-    n_prime: Word,
-    out: &mut [Word],
-) {
+pub fn monpro(x: &MPNat, y: &MPNat, n: &MPNat, n_prime: Word, out: &mut [Word]) {
     debug_assert!(
         n.is_odd(),
         "Montgomery multiplication only makes sense with odd modulus"
@@ -82,7 +74,7 @@ pub fn monpro<A: Allocator + Clone>(
 }
 
 // Equivalent to `monpro(x, x, n, n_prime, out)`, but more efficient.
-pub fn monsq<A: Allocator + Clone>(x: &MPNat<A>, n: &MPNat<A>, n_prime: Word, out: &mut [Word]) {
+pub fn monsq(x: &MPNat, n: &MPNat, n_prime: Word, out: &mut [Word]) {
     debug_assert!(
         n.is_odd(),
         "Montgomery multiplication only makes sense with odd modulus"
@@ -171,7 +163,7 @@ pub fn mod_inv(x: Word) -> Word {
 /// then computes the difference to get the remainder. It is possible that this
 /// quotient is too big by 1; we can catch that case by looking for overflow
 /// in the subtraction.
-pub fn compute_r_mod_n<A: Allocator + Clone>(n: &MPNat<A>, out: &mut [Word]) {
+pub fn compute_r_mod_n(n: &MPNat, out: &mut [Word]) {
     let k = n.digits.len();
 
     if k == 1 {
@@ -221,15 +213,10 @@ pub fn compute_r_mod_n<A: Allocator + Clone>(n: &MPNat<A>, out: &mut [Word]) {
 }
 
 /// Computes `base ^ exp`, ignoring overflow.
-pub fn big_wrapping_pow<A: Allocator + Clone>(
-    base: &MPNat<A>,
-    exp: &[u8],
-    scratch_space: &mut [Word],
-    allocator: A,
-) -> MPNat<A> {
+pub fn big_wrapping_pow(base: &MPNat, exp: &[u8], scratch_space: &mut [Word]) -> MPNat {
     // Compute result via the "binary method", see Knuth The Art of Computer Programming
     let mut result = MPNat {
-        digits: vec_in!(allocator.clone(); 0; scratch_space.len()),
+        digits: Digits::from_elem(0, scratch_space.len()),
     };
     result.digits[0] = 1;
     for &b in exp {
@@ -250,7 +237,7 @@ pub fn big_wrapping_pow<A: Allocator + Clone>(
 }
 
 /// Computes `(x * y) mod 2^(WORD_BITS*out.len())`.
-pub fn big_wrapping_mul<A: Allocator + Clone>(x: &MPNat<A>, y: &MPNat<A>, out: &mut [Word]) {
+pub fn big_wrapping_mul(x: &MPNat, y: &MPNat, out: &mut [Word]) {
     let s = out.len();
     for i in 0..s {
         let mut c: Word = 0;
@@ -268,7 +255,7 @@ pub fn big_wrapping_mul<A: Allocator + Clone>(x: &MPNat<A>, y: &MPNat<A>, out: &
 }
 
 /// Computes `x^2`, storing the result in `out`.
-pub fn big_sq<A: Allocator + Clone>(x: &MPNat<A>, out: &mut [Word]) {
+pub fn big_sq(x: &MPNat, out: &mut [Word]) {
     debug_assert!(
         out.len() > 2 * x.digits.len(),
         "Output needs double the digits to hold the value of x^2"
@@ -409,13 +396,9 @@ pub fn join_as_double(hi: Word, lo: Word) -> DoubleWord {
 }
 
 #[cfg(test)]
-extern crate std;
-#[cfg(test)]
-pub fn mp_nat_to_u128(x: &MPNat<std::alloc::Global>) -> u128 {
-    use std::alloc::Global;
-
+pub fn mp_nat_to_u128(x: &MPNat) -> u128 {
     let mut buf = [0u8; 16];
-    let result = x.to_big_endian(Global);
+    let result = x.to_big_endian();
     let k = result.len();
     buf[(16 - k)..].copy_from_slice(&result);
     u128::from_be_bytes(buf)
@@ -425,19 +408,32 @@ pub fn mp_nat_to_u128(x: &MPNat<std::alloc::Global>) -> u128 {
 mod test {
     use super::*;
     use num_bigint::BigUint;
-    use std::alloc::Global;
-    extern crate std;
     use std::vec;
+    use std::vec::Vec;
 
-    fn mp(n: u128) -> MPNat<Global> {
-        MPNat::from_big_endian(&n.to_be_bytes(), Global)
+    fn mp(n: u128) -> MPNat {
+        MPNat::from_big_endian(&n.to_be_bytes())
     }
 
-    fn big(x: &MPNat<Global>) -> BigUint {
-        BigUint::from_bytes_be(&x.to_big_endian(Global))
+    /// The value of `x`, whatever its length (a power may exceed the output's EIP-7823 bound)
+    fn big(x: &MPNat) -> BigUint {
+        let bytes: Vec<u8> = x
+            .digits
+            .iter()
+            .rev()
+            .flat_map(|digit| digit.to_be_bytes())
+            .collect();
+        BigUint::from_bytes_be(&bytes)
     }
 
-    fn n_prime(m: &MPNat<Global>) -> Word {
+    /// An `MPNat` of the digits of a test vector
+    fn of(digits: &[Word]) -> MPNat {
+        MPNat {
+            digits: Digits::from_slice(digits),
+        }
+    }
+
+    fn n_prime(m: &MPNat) -> Word {
         Word::MAX - mod_inv(m.digits[0]) + 1
     }
 
@@ -472,12 +468,12 @@ mod test {
 
             let mut out = vec![0; m.digits.len() + 2];
             monpro(&mp(x), &mp(y), &m, n_prime(&m), &mut out);
-            let result = BigInt::from(big(&MPNat { digits: out }));
+            let result = BigInt::from(big(&of(&out)));
             assert_eq!(result, expected(x, y), "{x}*{y}");
 
             let mut out = vec![0; 2 * m.digits.len() + 1];
             monsq(&mp(x), &m, n_prime(&m), &mut out);
-            let result = BigInt::from(big(&MPNat { digits: out }));
+            let result = BigInt::from(big(&of(&out)));
             assert_eq!(result, expected(x, x), "{x}^2");
         }
     }
@@ -494,10 +490,7 @@ mod test {
             compute_r_mod_n(&x, &mut out);
             let expected =
                 BigUint::from(2_u32).pow((WORD_BITS * x.digits.len()) as u32) % BigUint::from(n);
-            assert_eq!(
-                BigUint::from(mp_nat_to_u128(&MPNat { digits: out })),
-                expected
-            );
+            assert_eq!(BigUint::from(mp_nat_to_u128(&of(&out))), expected);
         }
     }
 
@@ -534,7 +527,7 @@ mod test {
                 1 + (expected.to_bytes_be().len()
                     / crate::modexp::software::mpnat::WORD_BYTES)
             ];
-            let result = big_wrapping_pow(&mp(a), &b.to_be_bytes(), &mut scratch, Global);
+            let result = big_wrapping_pow(&mp(a), &b.to_be_bytes(), &mut scratch);
             assert_eq!(big(&result), expected, "{a}^{b}");
         }
     }
@@ -556,7 +549,7 @@ mod test {
                 % BigUint::from(2_u32).pow((output_digits * WORD_BITS) as u32);
             let mut out = vec![0; output_digits];
             big_wrapping_mul(&mp(a), &mp(b), &mut out);
-            assert_eq!(big(&MPNat { digits: out }), expected, "{a}*{b}");
+            assert_eq!(big(&of(&out)), expected, "{a}*{b}");
         }
     }
 
@@ -570,10 +563,10 @@ mod test {
             "ffffffffffffffffffffffffffffffff",
             "ffffffff800000008000000040000000ffffffff80000000",
         ] {
-            let x = MPNat::from_big_endian(&crate::modexp::hex::decode(a).unwrap(), Global);
+            let x = MPNat::from_big_endian(&crate::modexp::hex::decode(a).unwrap());
             let mut out = vec![0; 2 * x.digits.len() + 1];
             big_sq(&x, &mut out);
-            assert_eq!(big(&MPNat { digits: out }), big(&x).pow(2_u32), "{a}^2");
+            assert_eq!(big(&of(&out)), big(&x).pow(2_u32), "{a}^2");
         }
     }
 

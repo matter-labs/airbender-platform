@@ -1,16 +1,19 @@
 # ModExp
 
 The arithmetic of the ModExp precompile (`0x05`). Header parsing, the EIP-7823 length cap and gas
-stay with the caller. The module needs the `alloc` feature.
+stay with the caller; the cap is relied on here: an operand of more than 1024 significant bytes
+panics, and every working value is a fixed-capacity vector on the stack (`FixedVec`), so nothing
+is allocated.
 
-`modexp::modexp(base, exp, modulus, allocator, oracle)` takes big-endian operands:
+`modexp::modexp(base, exp, modulus, oracle)` takes big-endian operands and returns a
+`ModExpOutput` (a `FixedVec` of up to 1024 bytes):
 
 - with `Some(oracle)` it runs `advice::modexp`, which asks for hints and checks them; a wrong
   hint panics, so a prover cannot change a result;
 - with `None` it runs `software::modexp` (aurora-engine's MPNat), which needs no oracle.
 
-The two paths can differ in leading zero bytes. `write_modexp_output(output, mod_len, dst)` pads or
-truncates the result to `mod_len` bytes, after which they agree.
+The two paths can differ in leading zero bytes. `write_modexp_output(&output, mod_len, dst)` pads
+or truncates the result to `mod_len` bytes, after which they agree.
 
 ## Hints
 
@@ -29,9 +32,10 @@ digits on the host emulation of the delegation.
 ## Tests
 
 ```sh
-cargo test -p airbender-crypto --features alloc -- modexp
-cargo test -p airbender-crypto --features alloc --test modexp_native
+cargo test -p airbender-crypto -- modexp
+cargo test -p airbender-crypto --features oracle_implementations --test modexp_native
 ```
 
 `tests/modexp_native.rs` runs the vectors on the naive digits and checks that the recorded hint
-tapes match the unit tests' tapes.
+tapes match the unit tests' tapes. The oracle side of the two queries is
+`oracle_implementations/`.

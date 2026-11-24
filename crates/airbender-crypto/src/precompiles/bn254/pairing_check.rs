@@ -1,53 +1,69 @@
 //! The bn254 pairing check (EIP-197), on the EVM encoding of the pairs.
 
 use super::bigint_from_be;
-use crate::ark_ff::Zero;
-use crate::ark_serialize::Valid;
-#[cfg(any(not(target_arch = "riscv32"), feature = "bigint_ops"))]
+use crate::ark_ec::pairing::Pairing;
+use crate::ark_ff::{One, PrimeField, Zero};
+use crate::bn254::curves::{g2_affine, Bn254, G1Affine, G1Evaluation, G2Affine, G2PreparedNoAlloc};
+use crate::bn254::fields::{Fq, Fq12, Fq2};
+#[cfg(any(feature = "hinted_operations", test))]
 use crate::hints as curve_hints;
+use crate::precompiles::MAX_BN254_PAIRS;
+use crate::scratch::{with_buffer, SliceVec};
 use airbender_oracle::MemoryOracle;
-use alloc::vec::Vec;
-use core::alloc::Allocator;
+use core::mem::MaybeUninit;
 
-#[cfg(all(target_arch = "riscv32", not(feature = "bigint_ops")))]
+#[cfg(not(any(feature = "hinted_operations", test)))]
 use super::super::unavailable as curve_hints;
+
+/// The pairs of the hinted path whose Miller loops run with one shared accumulator: up to this
+/// many prepared `G2` points (16 KB each, the affine lines of hinted slopes) and normalized `G1`
+/// points are held on the stack at a time; every further chunk costs one more loop's squarings
+/// and one multiplication. Guests have 16-32 MB stacks, the host the thread stacks of its
+/// embedding.
+#[cfg(target_arch = "riscv32")]
+const MILLER_LOOP_CHUNK: usize = 4;
+#[cfg(not(target_arch = "riscv32"))]
+const MILLER_LOOP_CHUNK: usize = 2;
 
 /// Whether the product of the pairings of the first `num_pairs` pairs of `src` is the identity.
 /// A pair is 192 bytes, big-endian: G1 `x, y`, then G2 `x, y` with the imaginary part first; all
 /// zeroes is the point at infinity, and `src` is read as if zero-padded. Fails unless every
-/// coordinate is canonical, every point is on its curve and every G2 point is in the subgroup.
+/// coordinate is canonical, every point is on its curve and every G2 point is in the subgroup;
+/// more than [`MAX_BN254_PAIRS`] pairs fail before anything is parsed.
 ///
-/// With an oracle, the G2 lines come from checked hinted slopes (asked pair by pair while
-/// parsing), the G1 points are normalized with hinted divisions, and the final exponentiation is
-/// replaced by a residue witness check or a checked hinted inverse. A wrong hint panics or is
-/// ignored (unused slope words, or every slope of a chain the prover marks exceptional); it never
-/// changes the result. The pairs, and with an oracle the 16 KB G2 lines and the G1 points, go
-/// into vectors of `allocator`.
+/// With an oracle, the residue witness of the product is asked once the pairs are parsed, and
+/// then, a chunk of pairs at a time, the G2 lines come from checked hinted slopes (which also
+/// check the subgroup) and the G1 points are normalized with hinted divisions; the final
+/// exponentiation is replaced by the residue witness check or a checked hinted inverse. A wrong
+/// hint panics or is ignored (unused slope words, or every slope of a chain the prover marks
+/// exceptional); it never changes the result. Nothing is allocated: the pairs go into a stack
+/// buffer of [`MAX_BN254_PAIRS`], read in place by the oracle of the residue witness, and the
+/// 16 KB G2 lines and the G1 points of a chunk live on the stack too.
 // The caller maps every failure to its invalid-point error
 #[allow(clippy::result_unit_err)]
-pub fn bn254_pairing_check<A: Allocator + Clone, O: MemoryOracle>(
+pub fn bn254_pairing_check<O: MemoryOracle>(
     num_pairs: usize,
     src: &[u8],
-    allocator: A,
     oracle: Option<&mut O>,
 ) -> Result<bool, ()> {
-    use crate::ark_ec::pairing::Pairing;
-    use crate::ark_ff::{One, PrimeField};
-    use crate::bn254::curves::{
-        g2_affine, Bn254, G1Affine, G1Evaluation, G2Affine, G2PreparedNoAlloc,
-    };
-    use crate::bn254::fields::{Fq, Fq2};
-
     if num_pairs == 0 {
         return Ok(true);
     }
+    // A transaction has at most 2^24 gas (EIP-7825) and a check costs 45000 + 34000 per pair
+    // (EIP-1108), so it can pay for (2^24 - 45000) / 34000 = 492 pairs: the buffer's capacity.
+    if num_pairs > MAX_BN254_PAIRS {
+        return Err(());
+    }
+    with_buffer::<_, MAX_BN254_PAIRS, _>(|pairs| parse_and_check(num_pairs, src, pairs, oracle))
+}
 
+fn parse_and_check<O: MemoryOracle>(
+    num_pairs: usize,
+    src: &[u8],
+    pairs: &mut SliceVec<'_, (G1Affine, G2Affine)>,
+    oracle: Option<&mut O>,
+) -> Result<bool, ()> {
     let mut oracle = oracle;
-    let mut pairs = Vec::with_capacity_in(num_pairs, allocator.clone());
-    // with an oracle: the affine G2 lines from hinted slopes, and the normalized G1 points
-    let with_advice = if oracle.is_some() { num_pairs } else { 0 };
-    let mut prepared = Vec::with_capacity_in(with_advice, allocator.clone());
-    let mut evaluations = Vec::with_capacity_in(with_advice, allocator.clone());
     let mut src_iter = src.iter();
 
     for _ in 0..num_pairs {
@@ -66,8 +82,9 @@ pub fn bn254_pairing_check<A: Allocator + Clone, O: MemoryOracle>(
 
         let g1_is_zero = g1_x.is_zero() && g1_y.is_zero();
         let g1_point = G1Affine::new_unchecked(g1_x, g1_y);
-        if !g1_is_zero {
-            g1_point.check().map_err(|_| ())?;
+        // on the curve is in the subgroup (cofactor 1); `check()` would drop arkworks' error
+        if !g1_is_zero && !g1_point.is_on_curve() {
+            return Err(());
         }
 
         let g2_x = Fq2::new(parse(g2_x_c0)?, parse(g2_x_c1)?);
@@ -82,43 +99,20 @@ pub fn bn254_pairing_check<A: Allocator + Clone, O: MemoryOracle>(
         if !g2_point.is_on_curve() {
             return Err(());
         }
-        // the slopes of the point's two affine chains; unread slopes are skipped on drop
-        let mut hints = oracle
-            .as_deref_mut()
-            .map(|oracle| curve_hints::bn254_g2_pairing_slopes(oracle, &g2_point));
-        let is_in_subgroup = hints
-            .as_mut()
-            .and_then(|hints| hints.subgroup_chain())
-            .and_then(|mut chain| g2_affine::membership(&g2_point, &mut chain))
-            // no hints, or an exceptional chain: the projective test
-            .unwrap_or_else(|| g2_point.is_in_correct_subgroup_assuming_on_curve());
-        if !is_in_subgroup {
-            return Err(());
-        }
         if g1_is_zero {
-            // e(O, Q) = 1
-            continue;
-        }
-        if let Some(hints) = hints.as_mut() {
-            // built in place in the next slot: 16 KB, not to be moved
-            prepared.reserve(1);
-            let slot = &mut prepared.spare_capacity_mut()[0];
-            let affine = hints
-                .line_chain()
-                .and_then(|mut chain| g2_affine::prepare_into(&g2_point, &mut chain, slot));
-            if affine.is_none() {
-                // an exceptional chain: the projective lines
-                slot.write(G2PreparedNoAlloc::from(g2_point));
+            // e(O, Q) = 1, but Q must be in the subgroup all the same: with an oracle, the
+            // membership test runs on hinted slopes (the rest of the answer is skipped)
+            let is_in_subgroup = match oracle.as_deref_mut() {
+                Some(oracle) => {
+                    let mut hints = curve_hints::bn254_g2_pairing_slopes(oracle, &g2_point);
+                    membership_with_hints(&g2_point, hints.subgroup_chain())
+                }
+                None => g2_point.is_in_correct_subgroup_assuming_on_curve(),
+            };
+            if !is_in_subgroup {
+                return Err(());
             }
-            // SAFETY: the slot was just initialized
-            unsafe { prepared.set_len(prepared.len() + 1) };
-        }
-        drop(hints);
-        if let Some(oracle) = oracle.as_deref_mut() {
-            evaluations.push(G1Evaluation::new(
-                &g1_point,
-                &mut curve_hints::Bn254FqDivider::new(oracle),
-            ));
+            continue;
         }
 
         pairs.push((g1_point, g2_point));
@@ -128,32 +122,119 @@ pub fn bn254_pairing_check<A: Allocator + Clone, O: MemoryOracle>(
         return Ok(true);
     }
 
-    let g1_iter = || pairs.iter().map(|(g1, _)| g1);
-    let g2_iter = || pairs.iter().map(|(_, g2)| g2);
     let Some(oracle) = oracle else {
-        let miller_loop = Bn254::multi_miller_loop(g1_iter(), g2_iter());
+        if pairs
+            .iter()
+            .any(|(_, g2)| !g2.is_in_correct_subgroup_assuming_on_curve())
+        {
+            return Err(());
+        }
+        // each G2 point is prepared projectively, one at a time
+        let miller_loop = Bn254::multi_miller_loop(
+            pairs.iter().map(|(g1, _)| g1),
+            pairs.iter().map(|(_, g2)| g2),
+        );
         let result =
             Bn254::final_exponentiation(miller_loop).expect("the Miller loop output is invertible");
         return Ok(result.0.is_one());
     };
-    debug_assert!(prepared.len() == pairs.len() && evaluations.len() == pairs.len());
-    let normalized = || evaluations.iter().zip(prepared.iter());
+    hinted_check(pairs, oracle)
+}
+
+/// The membership test of `q` on the hinted chain, or projectively when the prover marks the
+/// chain exceptional
+fn membership_with_hints<C: crate::affine_glv::Divider<Fq2>>(
+    q: &G2Affine,
+    chain: Option<C>,
+) -> bool {
+    chain
+        .and_then(|mut chain| g2_affine::membership(q, &mut chain))
+        .unwrap_or_else(|| q.is_in_correct_subgroup_assuming_on_curve())
+}
+
+/// The hinted check of parsed pairs (on the curves, no point at infinity): the residue witness
+/// claim, then the Miller loop a chunk of pairs at a time (the subgroup checks on the way), with
+/// the first chunk's accumulator started at the witness. Not inlined: the chunk buffers live in
+/// this frame only while the loop runs.
+#[inline(never)]
+fn hinted_check<O: MemoryOracle>(
+    pairs: &[(G1Affine, G2Affine)],
+    oracle: &mut O,
+) -> Result<bool, ()> {
     // Residue witness check in place of the final exponentiation (eprint 2024/640, soundness in
-    // `crate::residue_witness`). The prover cannot choose the result: a claimed identity must pass
-    // the check or this panics, and a claimed non-identity takes the exact final exponentiation.
-    match curve_hints::bn254_pairing_residue_witness(oracle, &pairs) {
-        curve_hints::PairingClaim::Identity { c, d, s } => {
-            let l = Bn254::multi_miller_loop_normalized(Some((&d, &c)), normalized());
+    // `crate::oracle_common::residue_witness`). The prover cannot choose the result: a claimed
+    // identity must pass the check or this panics, and a claimed non-identity takes the exact
+    // final exponentiation. The claim is asked before the subgroup checks of the pairs: an
+    // invalid pair fails the check whatever the claim, which is then dropped.
+    let claim = curve_hints::bn254_pairing_residue_witness(oracle, pairs);
+    let initial = match &claim {
+        curve_hints::PairingClaim::Identity { c, d, .. } => Some((d, c)),
+        curve_hints::PairingClaim::NotIdentity { .. } => None,
+    };
+
+    let mut prepared: [MaybeUninit<G2PreparedNoAlloc>; MILLER_LOOP_CHUNK] =
+        [const { MaybeUninit::uninit() }; MILLER_LOOP_CHUNK];
+    let mut evaluations: [MaybeUninit<G1Evaluation>; MILLER_LOOP_CHUNK] =
+        [const { MaybeUninit::uninit() }; MILLER_LOOP_CHUNK];
+    let mut f = Fq12::one();
+    let mut started = false;
+    for chunk in pairs.chunks(MILLER_LOOP_CHUNK) {
+        for (i, (g1, g2)) in chunk.iter().enumerate() {
+            // the slopes of the point's two affine chains; unread slopes are skipped on drop
+            let mut hints = curve_hints::bn254_g2_pairing_slopes(oracle, g2);
+            if !membership_with_hints(g2, hints.subgroup_chain()) {
+                return Err(());
+            }
+            // built in place in its slot: 16 KB, not to be moved
+            let slot = &mut prepared[i];
+            let affine = hints
+                .line_chain()
+                .and_then(|mut chain| g2_affine::prepare_into(g2, &mut chain, slot));
+            if affine.is_none() {
+                // an exceptional chain: the projective lines
+                slot.write(G2PreparedNoAlloc::from(*g2));
+            }
+            drop(hints);
+            evaluations[i].write(G1Evaluation::new(
+                g1,
+                &mut curve_hints::Bn254FqDivider::new(oracle),
+            ));
+        }
+        // SAFETY: the first `chunk.len()` slots of both arrays were initialized above
+        let (prepared, evaluations) = unsafe {
+            (
+                core::slice::from_raw_parts(
+                    prepared.as_ptr().cast::<G2PreparedNoAlloc>(),
+                    chunk.len(),
+                ),
+                core::slice::from_raw_parts(
+                    evaluations.as_ptr().cast::<G1Evaluation>(),
+                    chunk.len(),
+                ),
+            )
+        };
+        let normalized = || evaluations.iter().zip(prepared.iter());
+        // the Miller loop is multiplicative in the pairs: the product of the loops of the chunks,
+        // the first one started at the witness, is the loop of all the pairs started there
+        if started {
+            f *= Bn254::multi_miller_loop_normalized(None, normalized());
+        } else {
+            f = Bn254::multi_miller_loop_normalized(initial, normalized());
+            started = true;
+        }
+    }
+
+    match claim {
+        curve_hints::PairingClaim::Identity { d, s, .. } => {
             assert!(
-                crate::residue_witness::bn254::check(&l, &d, &s),
+                crate::oracle_common::residue_witness::bn254::check(&f, &d, &s),
                 "the residue witness of the pairing claimed to be the identity is wrong"
             );
             Ok(true)
         }
         curve_hints::PairingClaim::NotIdentity { f_inverse } => {
-            let miller_loop = Bn254::multi_miller_loop_normalized(None, normalized());
-            let result = Bn254::final_exponentiation_with_inverse(&miller_loop, |f| {
-                curve_hints::checked_inverse(f, f_inverse)
+            let result = Bn254::final_exponentiation_with_inverse(&f, |f| {
+                Some(curve_hints::checked_inverse(f, f_inverse))
             })
             .expect("the Miller loop output is invertible");
             Ok(result.is_one())
@@ -161,7 +242,7 @@ pub fn bn254_pairing_check<A: Allocator + Clone, O: MemoryOracle>(
     }
 }
 
-// The tests use the host side (`hints::host`), which serves 64-bit hosts only.
+// The tests use the host side (`oracle_common`), which serves 64-bit hosts only.
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
@@ -173,8 +254,26 @@ mod tests {
     use hex_literal::hex;
     use proptest::test_runner::Config as ProptestConfig;
     use proptest::{prop_assert_eq, proptest};
-    use std::alloc::Global;
     use std::vec::Vec;
+
+    /// One pair too many fails on the count alone (the pair itself is not parsed), while the
+    /// most pairs, all at infinity, pass
+    #[test]
+    fn the_pair_count_is_bounded_by_the_gas_cap() {
+        let unparsable = [0xff; 192];
+        assert_eq!(
+            bn254_pairing_check(MAX_BN254_PAIRS + 1, &unparsable, None::<&mut NoHints>),
+            Err(())
+        );
+        let (hinted, tape) = record_hints(|oracle| {
+            bn254_pairing_check(MAX_BN254_PAIRS + 1, &unparsable, Some(oracle))
+        });
+        assert_eq!((hinted, tape.is_empty()), (Err(()), true));
+        assert_eq!(
+            bn254_pairing_check(MAX_BN254_PAIRS, &[], None::<&mut NoHints>),
+            Ok(true)
+        );
+    }
 
     /// Two pairs whose product is the identity
     const SRC: [u8; 384] = hex!(
@@ -239,13 +338,37 @@ mod tests {
             (&outside, Err(())),
         ] {
             let n = src.len() / 192;
-            let (hinted, _) =
-                record_hints(|oracle| bn254_pairing_check(n, src, Global, Some(oracle)));
+            let (hinted, _) = record_hints(|oracle| bn254_pairing_check(n, src, Some(oracle)));
             assert_eq!(hinted, expected);
-            assert_eq!(
-                bn254_pairing_check(n, src, Global, None::<&mut NoHints>),
-                expected
-            );
+            assert_eq!(bn254_pairing_check(n, src, None::<&mut NoHints>), expected);
+        }
+    }
+
+    /// More pairs than a chunk holds, identities and not, with and without hints
+    #[test]
+    fn products_over_several_chunks() {
+        for n in [
+            MILLER_LOOP_CHUNK,
+            MILLER_LOOP_CHUNK + 1,
+            2 * MILLER_LOOP_CHUNK + 1,
+        ] {
+            let mut pairs: Vec<(G1Affine, G2Affine)> =
+                (1..=n as u64).map(|k| (g1(k), g2(k + 1))).collect();
+            let not_identity = encode(&pairs);
+            // e(G1, G2)^k, cancelled by a last pair
+            let k = (1..=n as u64).fold(Fr::from(0u64), |k, i| k + Fr::from(i) * Fr::from(i + 1));
+            pairs.push((
+                (G1Affine::generator() * -k).into_affine(),
+                G2Affine::generator(),
+            ));
+            let identity = encode(&pairs);
+            for (src, expected) in [(&identity, Ok(true)), (&not_identity, Ok(false))] {
+                let n = src.len() / 192;
+                let result =
+                    assert_tape_replays!(|oracle| bn254_pairing_check(n, src, Some(oracle)));
+                assert_eq!(result, expected);
+                assert_eq!(bn254_pairing_check(n, src, None::<&mut NoHints>), expected);
+            }
         }
     }
 
@@ -253,14 +376,14 @@ mod tests {
     #[should_panic(expected = "not an inverse pair")]
     fn wrong_identity_witness_inverse_panics() {
         let mut lying = lying_oracle(&[FieldHintOp::Bn254PairingResidueWitness]);
-        let _ = bn254_pairing_check(2, &SRC, Global, Some(&mut lying));
+        let _ = bn254_pairing_check(2, &SRC, Some(&mut lying));
     }
 
     #[test]
     #[should_panic(expected = "claimed to be the identity is wrong")]
     fn wrong_identity_witness_scaling_factor_panics() {
         let mut lying = lying_oracle_last_word(&[FieldHintOp::Bn254PairingResidueWitness]);
-        let _ = bn254_pairing_check(2, &SRC, Global, Some(&mut lying));
+        let _ = bn254_pairing_check(2, &SRC, Some(&mut lying));
     }
 
     #[test]
@@ -268,7 +391,7 @@ mod tests {
     fn wrong_slope_panics() {
         let src = encode(&[(G1Affine::generator(), G2Affine::generator())]);
         let mut lying = lying_oracle_last_word(&[FieldHintOp::Bn254G2PairingSlopes]);
-        let _ = bn254_pairing_check(1, &src, Global, Some(&mut lying));
+        let _ = bn254_pairing_check(1, &src, Some(&mut lying));
     }
 
     /// Products that are and are not the identity, points at infinity, G2 points outside the
@@ -300,8 +423,8 @@ mod tests {
                 src[at * 192 + usize::from(flip[1]) % 192] ^= flip[2] | 1;
             }
             let n = pairs.len();
-            let hinted = hinted_cases.record(|oracle| bn254_pairing_check(n, &src, Global, Some(oracle)));
-            prop_assert_eq!(hinted, bn254_pairing_check(n, &src, Global, None::<&mut NoHints>));
+            let hinted = hinted_cases.record(|oracle| bn254_pairing_check(n, &src, Some(oracle)));
+            prop_assert_eq!(hinted, bn254_pairing_check(n, &src, None::<&mut NoHints>));
         });
         hinted_cases.check();
     }
@@ -309,7 +432,7 @@ mod tests {
     #[test]
     fn recorded_tape_replays() {
         // the identity (the residue witness), not the identity (the exact final exponentiation),
-        // and a point outside the subgroup, rejected while parsing
+        // and a point outside the subgroup, rejected at its chunk
         let not_identity = encode(&[(g1(6), g2(1)), (g1(2), g2(3))]);
         let rejected = encode(&[(g1(6), g2(1)), (g1(2), outside())]);
         for (src, expected) in [
@@ -317,30 +440,37 @@ mod tests {
             (&not_identity, Ok(false)),
             (&rejected, Err(())),
         ] {
-            let result =
-                assert_tape_replays!(|oracle| bn254_pairing_check(2, src, Global, Some(oracle)));
+            let result = assert_tape_replays!(|oracle| bn254_pairing_check(2, src, Some(oracle)));
             assert_eq!(result, expected);
         }
     }
 
-    /// The hints of each pair are asked while it is parsed, so a rejected pair comes after the
-    /// hints of the pairs before it, and no residue witness is asked
+    /// The residue witness claim comes first, then the hints of each pair in order: a rejected
+    /// pair comes after the hints of the pairs before it, and stops the loop
     #[test]
-    fn hints_are_asked_while_parsing() {
+    fn hints_are_asked_after_the_claim_pair_by_pair() {
+        // the words of a non-identity claim: a flag and an `Fq12` inverse
+        const CLAIM_WORDS: usize = 1 + 12 * 8;
         let first = encode(&[(g1(6), g2(1))]);
         let rejected = encode(&[(g1(2), outside())]);
         let check = |src: &[u8]| {
-            record_hints(|oracle| bn254_pairing_check(src.len() / 192, src, Global, Some(oracle)))
+            record_hints(|oracle| bn254_pairing_check(src.len() / 192, src, Some(oracle)))
         };
         let (_, first_tape) = check(&first);
-        let (_, rejected_tape) = check(&rejected);
+        let (rejected_result, rejected_tape) = check(&rejected);
+        assert_eq!(rejected_result, Err(()));
         let (result, tape) = check(&[first, rejected].concat());
         assert_eq!(result, Err(()));
-        assert!(!rejected_tape.is_empty());
-        // the slopes and G1 divisions of the first pair, then the slopes of the second
-        let (parsed, rest) = tape.split_at(tape.len() - rejected_tape.len());
-        assert_eq!(rest, rejected_tape);
-        assert!(!parsed.is_empty() && parsed.len() < first_tape.len());
-        assert_eq!(parsed, &first_tape[..parsed.len()]);
+        // the claim of the pairs together, the slopes and G1 divisions of the first pair, then
+        // the slopes of the second, whose subgroup check fails
+        assert_eq!(
+            tape.len(),
+            first_tape.len() + rejected_tape.len() - CLAIM_WORDS
+        );
+        assert_eq!(
+            &tape[CLAIM_WORDS..first_tape.len()],
+            &first_tape[CLAIM_WORDS..]
+        );
+        assert_eq!(&tape[first_tape.len()..], &rejected_tape[CLAIM_WORDS..]);
     }
 }

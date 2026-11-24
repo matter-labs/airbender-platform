@@ -31,7 +31,7 @@ impl Bn254 {
     /// `1`, and multiplied by `initial` (`initial_inverse`) at the `1` (`-1`) digits of the loop
     /// count, so that the result is `initial^(6x+2) f` for the plain Miller loop output `f`: the
     /// accumulator goes through the double-and-add of the exponent. This is how the residue
-    /// witness pairing check (`crate::residue_witness`) gets `d^(6x+2)` almost for free (the
+    /// witness pairing check (`crate::oracle_common::residue_witness`) gets `d^(6x+2)` almost for free (the
     /// squarings are the loop's own). `initial_inverse` must be the inverse of `initial`.
     ///
     /// The prepared `G2` points are borrowed: precomputed lines are read in place.
@@ -120,7 +120,9 @@ impl Bn254 {
         // no pair: the accumulator is the initial value to the power of the loop count all
         // the same
         match initial {
-            Some((initial, _)) => initial.pow(crate::residue_witness::bn254::SIX_X_PLUS_2),
+            Some((initial, _)) => {
+                initial.pow(crate::oracle_common::residue_witness::bn254::SIX_X_PLUS_2)
+            }
             None => result,
         }
     }

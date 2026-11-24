@@ -258,9 +258,9 @@ pub(crate) fn reduce_product_of_residues_with_quotient(
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
-    use crate::hints::host::{answer_query, RecordingHintOracle};
     use crate::hints::test_support::InProcessMemoryOracle;
     use crate::hints::QuerierMemory;
+    use crate::oracle_common::{answer_query, RecordingHintOracle};
     use ruint::aliases::{U256 as HostU256, U512};
 
     fn host(value: &U256) -> HostU256 {

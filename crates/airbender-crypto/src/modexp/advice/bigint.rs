@@ -13,21 +13,96 @@ use super::exponent::{exponentiate, ModMul};
 use crate::hints::{MemoryOracle, MODEXP_ADVICE_QUERY_ID};
 use crate::modexp::strip_leading_zeroes;
 use crate::modexp::u256::U256 as HintU256;
-use crate::modexp::ModExpAdviceParamsGeneric;
+use crate::modexp::{ModExpAdviceParamsGeneric, ModExpOutput, MAX_DIGITS};
 use crate::{bigint_op_delegation_raw, bigint_op_delegation_with_carry_bit_raw, BigIntOps};
-use alloc::vec::Vec;
-use core::alloc::Allocator;
 use core::fmt::Debug;
 use core::mem::MaybeUninit;
 use ruint::aliases::U256;
 
-/// A little-endian big integer: the first `digits` digits of `backing`, whose capacity is kept
-pub(crate) struct BigintRepr<A: Allocator + Clone> {
-    pub(crate) backing: Vec<DelegatedU256, A>,
+/// The digits a `BigintRepr` can hold: a product of two operands of the most digits
+pub(crate) const BIGINT_CAPACITY: usize = 2 * MAX_DIGITS;
+
+/// The digits of a `BigintRepr` on the stack: `len` initialized slots, aligned for the
+/// delegation, and the spare capacity after them
+pub(crate) struct DigitBuffer {
+    slots: [MaybeUninit<DelegatedU256>; BIGINT_CAPACITY],
+    len: usize,
+}
+
+impl DigitBuffer {
+    pub(crate) fn new() -> Self {
+        Self {
+            slots: [const { MaybeUninit::uninit() }; BIGINT_CAPACITY],
+            len: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_ptr(&self) -> *const DelegatedU256 {
+        self.slots.as_ptr().cast()
+    }
+
+    /// The initialized digits
+    #[inline(always)]
+    pub(crate) fn as_slice(&self) -> &[DelegatedU256] {
+        // SAFETY: the first `len` slots are initialized (the invariant of `set_len`)
+        unsafe { core::slice::from_raw_parts(self.as_ptr(), self.len) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [DelegatedU256] {
+        // SAFETY: as for `as_slice`
+        unsafe { core::slice::from_raw_parts_mut(self.slots.as_mut_ptr().cast(), self.len) }
+    }
+
+    /// The slots after the initialized digits
+    #[inline(always)]
+    pub(crate) fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<DelegatedU256>] {
+        &mut self.slots[self.len..]
+    }
+
+    /// # Safety
+    ///
+    /// The first `len` slots must be initialized, and `len` at most the capacity.
+    #[inline(always)]
+    pub(crate) unsafe fn set_len(&mut self, len: usize) {
+        debug_assert!(len <= BIGINT_CAPACITY);
+        self.len = len;
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.len = len;
+        }
+    }
+
+    pub(crate) fn push(&mut self, digit: DelegatedU256) {
+        assert!(self.len < BIGINT_CAPACITY, "the digit buffer is full");
+        self.slots[self.len].write(digit);
+        self.len += 1;
+    }
+}
+
+impl core::ops::Index<usize> for DigitBuffer {
+    type Output = DelegatedU256;
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &DelegatedU256 {
+        &self.as_slice()[index]
+    }
+}
+
+/// A little-endian big integer: the first `digits` digits of `backing`
+pub(crate) struct BigintRepr {
+    pub(crate) backing: DigitBuffer,
     pub(crate) digits: usize,
 }
 
-impl<A: Allocator + Clone> Debug for BigintRepr<A> {
+impl Debug for BigintRepr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "0x")?;
         for digit in self.u64_digits_ref().iter().rev() {
@@ -39,16 +114,18 @@ impl<A: Allocator + Clone> Debug for BigintRepr<A> {
 }
 
 #[allow(clippy::bool_comparison)]
-impl<A: Allocator + Clone> BigintRepr<A> {
-    pub(crate) fn with_capacity_in(capacity: usize, allocator: A) -> Self {
-        let backing = Vec::with_capacity_in(capacity, allocator);
-
-        Self { backing, digits: 0 }
+impl BigintRepr {
+    /// Zero, with no digits
+    pub(crate) fn new() -> Self {
+        Self {
+            backing: DigitBuffer::new(),
+            digits: 0,
+        }
     }
 
-    pub(crate) fn duplicate_with_capacity(&self, capacity: usize, allocator: A) -> Self {
+    pub(crate) fn duplicate(&self) -> Self {
         unsafe {
-            let mut backing = Vec::with_capacity_in(capacity, allocator);
+            let mut backing = DigitBuffer::new();
             for (dst, src) in backing.spare_capacity_mut()[..self.digits_ref().len()]
                 .iter_mut()
                 .zip(self.digits_ref().iter())
@@ -65,11 +142,11 @@ impl<A: Allocator + Clone> BigintRepr<A> {
     }
 
     pub(crate) fn digits_ref(&self) -> &[DelegatedU256] {
-        &self.backing[..self.digits]
+        &self.backing.as_slice()[..self.digits]
     }
 
     pub(crate) fn digits_mut(&mut self) -> &mut [DelegatedU256] {
-        &mut self.backing[..self.digits]
+        &mut self.backing.as_mut_slice()[..self.digits]
     }
 
     pub(crate) fn u64_digits_ref(&self) -> &[u64] {
@@ -90,34 +167,31 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         self.digits = digits;
     }
 
-    pub(crate) fn capacity(&self) -> usize {
-        self.backing.capacity()
-    }
-
-    pub(crate) fn from_big_endian_with_double_capacity(bytes: &[u8], allocator: A) -> Self {
+    /// The integer of at most `MAX_DIGITS` significant digits (EIP-7823; longer ones panic)
+    pub(crate) fn from_big_endian(bytes: &[u8]) -> Self {
+        let bytes = strip_leading_zeroes(bytes);
         if bytes.is_empty() {
-            let backing = Vec::new_in(allocator);
-            return Self { backing, digits: 0 };
+            return Self::new();
         }
         let (remainder, digits_bytes) = bytes.as_rchunks::<32>();
-        let mut capacity = digits_bytes.len();
+        let mut max_digits = digits_bytes.len();
         if remainder.is_empty() == false {
-            capacity += 1;
+            max_digits += 1;
         }
-        let max_digits = capacity;
-        capacity *= 2;
+        assert!(
+            max_digits <= MAX_DIGITS,
+            "a ModExp operand is longer than EIP-7823 allows"
+        );
 
-        Self::from_big_endian(remainder, digits_bytes, max_digits, capacity, allocator)
+        Self::from_big_endian_digits(remainder, digits_bytes, max_digits)
     }
 
-    fn from_big_endian(
+    fn from_big_endian_digits(
         remainder: &[u8],
         digits_bytes: &[[u8; 32]],
         max_digits: usize,
-        capacity: usize,
-        allocator: A,
     ) -> Self {
-        let mut backing = Vec::with_capacity_in(capacity, allocator);
+        let mut backing = DigitBuffer::new();
         for (dst, digit) in backing.spare_capacity_mut()[..digits_bytes.len()]
             .iter_mut()
             .zip(digits_bytes.iter().rev())
@@ -139,7 +213,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         }
 
         let mut meaningful_digits = max_digits;
-        for digit in backing.iter().rev() {
+        for digit in backing.as_slice().iter().rev() {
             if digit.is_zero() {
                 meaningful_digits -= 1;
             } else {
@@ -154,59 +228,43 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         }
     }
 
-    pub(crate) fn from_big_endian_with_double_capacity_or_min_capacity(
-        bytes: &[u8],
-        min_capacity: usize,
-        allocator: A,
-    ) -> Self {
-        if bytes.is_empty() {
-            let backing = Vec::with_capacity_in(min_capacity, allocator);
-            return Self { backing, digits: 0 };
-        }
-        let (remainder, digits_bytes) = bytes.as_rchunks::<32>();
-        let mut capacity = digits_bytes.len();
-        if remainder.is_empty() == false {
-            capacity += 1;
-        }
-        let max_digits = capacity;
-        capacity *= 2;
-        capacity = core::cmp::max(min_capacity, capacity);
-
-        Self::from_big_endian(remainder, digits_bytes, max_digits, capacity, allocator)
-    }
-
+    /// `self^exp mod modulus`, for a modulus without zero top digits.
+    ///
+    /// The advice is untrusted. Whatever the advisor answers, either this panics in one of the
+    /// checks of the advice (`modexp advice: ...`: a quotient or remainder of the wrong length,
+    /// `q * m + r` that is not the product, or a final value that is not below the modulus), or it
+    /// returns the right value: below the modulus, so of at most the modulus's digits, which
+    /// [`to_big_endian`](Self::to_big_endian) always holds for a modulus within EIP-7823's bound.
+    /// No answer reaches any other panic, or memory outside the buffers.
     pub(crate) fn modpow(
         self,
         exp: &[u8],
         modulus: Self,
         advisor: &mut impl ModexpAdvisor,
-        allocator: A,
     ) -> Self {
         assert!(modulus.digits > 0);
         let n = modulus.digits;
         let mut current = self;
 
-        // sized for products of two reduced values and for the initial reduction of a long base
+        // every buffer holds a product of two operands, and so the initial reduction of a long
+        // base
         let mut arithmetic = BigintModMul {
             modulus: &modulus,
-            product: Self::with_capacity_in(2 * n, allocator.clone()),
-            quotient: Self::with_capacity_in(
-                core::cmp::max(n + 1, current.digits + 1 - n.min(current.digits)),
-                allocator.clone(),
-            ),
-            remainder: Self::with_capacity_in(n, allocator.clone()),
-            check: Self::with_capacity_in(core::cmp::max(2 * n, current.digits), allocator.clone()),
+            product: Self::new(),
+            quotient: Self::new(),
+            remainder: Self::new(),
+            check: Self::new(),
             scratch: ProductScratch::new(),
             advisor,
-            allocator: allocator.clone(),
         };
 
         // Reduce a base of `n` or more digits (the cost model assumes this gate). Afterwards every
-        // value has at most `n` digits. A remainder need not be below `m`: it is still
-        // congruent, and the result is checked to be fully reduced at the end.
+        // value has at most `n` digits. A remainder need not be below `m`, nor be free of zero top
+        // digits: it is still congruent, and the result is checked to be fully reduced at the end.
         if current.digits >= n {
             arithmetic.reduce_initially(&mut current);
         }
+        // not advice: `reduce_product_into` accepts no longer remainder
         assert!(current.digits <= n);
 
         // 1^exp mod m = 1, as m > 1
@@ -217,12 +275,10 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         let exp = strip_leading_zeroes(exp);
         if exp.is_empty() {
             // x^0 = 1
-            let mut result = Vec::with_capacity_in(1, allocator);
-            result.push(DelegatedU256::ONE);
-            return Self {
-                backing: result,
-                digits: 1,
-            };
+            let mut result = Self::new();
+            result.backing.push(DelegatedU256::ONE);
+            result.digits = 1;
+            return result;
         }
 
         // 0^exp mod m = 0 for exp > 0
@@ -231,9 +287,8 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         }
 
         let result = exponentiate(&mut arithmetic, &current, exp);
-        drop(arithmetic);
 
-        // the result must be below m
+        // the result must be below m: this also bounds its digits by those of the modulus
         result.assert_fully_reduced(modulus);
         result
     }
@@ -261,18 +316,22 @@ impl<A: Allocator + Clone> BigintRepr<A> {
     }
 
     /// `digits[k..] += lo + hi * 2^256` (a 512-bit value at digit position `k`), with carry
-    /// propagation; panics if the sum does not fit in `digits`
+    /// propagation. Returns whether the sum fits in `digits`; it never writes outside them, and
+    /// their content is unspecified when it does not fit.
     ///
     /// # Safety
     /// `lo` and `hi` must point to aligned, initialized digits outside `digits`.
+    #[must_use]
     unsafe fn add_wide_at(
         digits: &mut [DelegatedU256],
         k: usize,
         lo: *const DelegatedU256,
         hi: *const DelegatedU256,
-    ) {
+    ) -> bool {
         let len = digits.len();
-        assert!(k < len, "the product does not fit");
+        if k >= len {
+            return false;
+        }
         let base = digits.as_mut_ptr();
         let mut carry =
             bigint_op_delegation_raw(base.add(k).cast(), lo.cast(), BigIntOps::Add) != 0;
@@ -285,11 +344,13 @@ impl<A: Allocator + Clone> BigintRepr<A> {
                 BigIntOps::Add,
             ) != 0;
             j += 1;
-        } else {
-            assert!(!carry && (*hi).is_zero(), "the product does not fit");
+        } else if carry || !(*hi).is_zero() {
+            return false;
         }
         while carry {
-            assert!(j < len, "the product does not fit");
+            if j >= len {
+                return false;
+            }
             carry = bigint_op_delegation_with_carry_bit_raw(
                 base.add(j).cast(),
                 DelegatedU256::zero_ptr().cast(),
@@ -298,6 +359,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
             ) != 0;
             j += 1;
         }
+        true
     }
 
     /// `self = a * b` (schoolbook), with the zero top digits dropped
@@ -313,7 +375,9 @@ impl<A: Allocator + Clone> BigintRepr<A> {
                 // SAFETY: the scratch slots are distinct from `out`
                 unsafe {
                     scratch.product(a_digit, b_digit);
-                    Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi);
+                    let fits = Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi);
+                    // a product of `a.digits` and `b.digits` digits, whatever the digits are
+                    assert!(fits, "the product does not fit");
                 }
             }
         }
@@ -335,8 +399,10 @@ impl<A: Allocator + Clone> BigintRepr<A> {
                 // SAFETY: the scratch slots are distinct from `out`
                 unsafe {
                     scratch.product(a_i, a_j);
-                    Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi);
-                    Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi);
+                    // a square of `a.digits` digits, whatever the digits are
+                    let fits = Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi)
+                        && Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi);
+                    assert!(fits, "the product does not fit");
                 }
             }
         }
@@ -344,14 +410,18 @@ impl<A: Allocator + Clone> BigintRepr<A> {
             // SAFETY: as above
             unsafe {
                 scratch.product(a_i, a_i);
-                Self::add_wide_at(out, 2 * i, &scratch.lo, &scratch.hi);
+                let fits = Self::add_wide_at(out, 2 * i, &scratch.lo, &scratch.hi);
+                assert!(fits, "the product does not fit");
             }
         }
         self.trim();
     }
 
-    /// `self = q * m + r` in exactly `digits` digits; panics if the value does not fit, so a
-    /// hint reconstructing a truncated value cannot pass the comparison with the product
+    /// `self = q * m + r` in exactly `digits` digits. Returns whether the value fits, so that a
+    /// hint reconstructing a truncated value cannot pass the comparison with the product; `self`
+    /// is unspecified when it does not. `q`, `m` and `r` may have any content and any number of
+    /// digits (they are untrusted): nothing is written outside the `digits` digits.
+    #[must_use]
     fn fma_into(
         &mut self,
         q: &Self,
@@ -359,8 +429,10 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         r: &Self,
         digits: usize,
         scratch: &mut ProductScratch,
-    ) {
-        assert!(r.digits <= digits, "the remainder hint is too long");
+    ) -> bool {
+        if r.digits > digits {
+            return false;
+        }
         self.fill_zero(digits);
         let out = self.digits_mut();
         for (slot, r_digit) in out.iter_mut().zip(r.digits_ref()) {
@@ -372,10 +444,13 @@ impl<A: Allocator + Clone> BigintRepr<A> {
                 // SAFETY: the scratch slots are distinct from `out`
                 unsafe {
                     scratch.product(q_digit, m_digit);
-                    Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi);
+                    if !Self::add_wide_at(out, i + j, &scratch.lo, &scratch.hi) {
+                        return false;
+                    }
                 }
             }
         }
+        true
     }
 
     /// The most digits a quotient of a `dividend_digits`-digit value by the modulus can have
@@ -389,21 +464,31 @@ impl<A: Allocator + Clone> BigintRepr<A> {
         }
     }
 
-    fn assert_eq(a: &Self, b: &Self) {
+    /// Whether `a` and `b` are the same integer (zero top digits do not matter)
+    #[must_use]
+    fn eq_value(a: &Self, b: &Self) -> bool {
         let meaningful_digits_floor = core::cmp::min(a.digits, b.digits);
         for (a_digit, b_digit) in a.digits_ref().iter().zip(b.digits_ref().iter()) {
-            assert!(a_digit.eq(b_digit));
+            if !a_digit.eq(b_digit) {
+                return false;
+            }
         }
         for input in [a, b] {
             if input.digits > meaningful_digits_floor {
                 for el in input.digits_ref()[meaningful_digits_floor..].iter() {
-                    assert!(el.is_zero());
+                    if !el.is_zero() {
+                        return false;
+                    }
                 }
             }
         }
+        true
     }
 
+    /// Panics unless `self < modulus`, for a value of at most the modulus's digits: the last
+    /// check of the advice, as an accepted remainder need not be below the modulus.
     fn assert_fully_reduced(&self, mut modulus: Self) {
+        // not advice: every value of the walk has at most the modulus's digits
         assert!(modulus.digits >= self.digits);
         if self.digits < modulus.digits {
             return;
@@ -426,11 +511,19 @@ impl<A: Allocator + Clone> BigintRepr<A> {
             };
         }
 
-        assert!(borrow > 0);
+        assert!(
+            borrow > 0,
+            "modexp advice: the result is not below the modulus"
+        );
     }
 
-    pub fn to_big_endian<B: Allocator>(&self, allocator: B) -> Vec<u8, B> {
-        let mut result = Vec::with_capacity_in(self.digits * 32, allocator);
+    /// The big-endian bytes of the significant digits. For a value of at most [`MAX_DIGITS`]
+    /// significant digits, which the output holds: a modulus, or a result of [`modpow`]
+    /// (below its modulus whatever the advice). A double-width intermediate value does not fit.
+    ///
+    /// [`modpow`]: Self::modpow
+    pub fn to_big_endian(&self) -> ModExpOutput {
+        let mut result = ModExpOutput::new();
         let mut found_non_zero = false;
         for digit in self.digits_ref().iter().rev() {
             if digit.is_zero() == false {
@@ -439,8 +532,7 @@ impl<A: Allocator + Clone> BigintRepr<A> {
 
             // skip the zero top digits
             if found_non_zero {
-                let be_bytes = digit.to_be_bytes();
-                result.extend(be_bytes);
+                result.extend_from_slice(&digit.to_be_bytes());
             }
         }
 
@@ -486,30 +578,40 @@ impl ProductScratch {
 
 /// Modular multiplication of multi-digit values: the product, an advised quotient and
 /// remainder, and the check `q * m + r == product`. The remainder becomes the new value by
-/// swapping buffers (every value buffer has capacity for `n` digits).
-struct BigintModMul<'a, A: Allocator + Clone, Adv: ModexpAdvisor> {
-    modulus: &'a BigintRepr<A>,
-    product: BigintRepr<A>,
-    quotient: BigintRepr<A>,
-    remainder: BigintRepr<A>,
-    check: BigintRepr<A>,
+/// swapping buffers (every buffer has the same capacity).
+struct BigintModMul<'a, Adv: ModexpAdvisor> {
+    modulus: &'a BigintRepr,
+    product: BigintRepr,
+    quotient: BigintRepr,
+    remainder: BigintRepr,
+    check: BigintRepr,
     scratch: ProductScratch,
     advisor: &'a mut Adv,
-    allocator: A,
 }
 
-impl<A: Allocator + Clone, Adv: ModexpAdvisor> BigintModMul<'_, A, Adv> {
+impl<Adv: ModexpAdvisor> BigintModMul<'_, Adv> {
     /// `x = value mod m` for the `value` in `x` (at least as many digits as the modulus)
-    fn reduce_initially(&mut self, x: &mut BigintRepr<A>) {
+    fn reduce_initially(&mut self, x: &mut BigintRepr) {
         assert!(x.digits >= self.modulus.digits);
         core::mem::swap(x, &mut self.product);
         self.reduce_product_into(x);
     }
 
-    /// `x = product mod m`: the advised remainder, after the check of the advice
-    fn reduce_product_into(&mut self, x: &mut BigintRepr<A>) {
+    /// `x = product mod m`: the advised remainder, after the checks of the advice. These are the
+    /// only panics an advisor can cause here: the quotient and the remainder are untrusted in
+    /// their digits and in their lengths.
+    ///
+    /// An accepted remainder is congruent to the product and has at most the modulus's digits. It
+    /// need not be below the modulus (the result is checked at the end), and may have zero top
+    /// digits, even be zero with digits: nothing below relies on a value's digit count to tell
+    /// whether it is zero, beyond skipping work.
+    fn reduce_product_into(&mut self, x: &mut BigintRepr) {
         let n = self.modulus.digits;
-        assert!(self.product.digits > 0);
+        if self.product.digits == 0 {
+            // a zero product (of a zero that a remainder spelled with digits) needs no advice
+            x.fill_zero(0);
+            return;
+        }
         self.advisor.get_reduction_op_advice(
             &self.product,
             self.modulus,
@@ -517,41 +619,48 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> BigintModMul<'_, A, Adv> {
             &mut self.remainder,
         );
         assert!(
-            self.quotient.digits <= BigintRepr::<A>::max_quotient_digits(self.product.digits, n)
+            self.quotient.digits <= BigintRepr::max_quotient_digits(self.product.digits, n),
+            "modexp advice: the quotient is too long"
         );
-        assert!(self.remainder.digits <= n);
-        self.check.fma_into(
+        assert!(
+            self.remainder.digits <= n,
+            "modexp advice: the remainder is too long"
+        );
+        let fits = self.check.fma_into(
             &self.quotient,
             self.modulus,
             &self.remainder,
             self.product.digits,
             &mut self.scratch,
         );
-        BigintRepr::assert_eq(&self.product, &self.check);
-        assert!(self.remainder.capacity() >= n && x.capacity() >= n);
+        assert!(
+            fits,
+            "modexp advice: q * m + r does not fit the digits of the product"
+        );
+        assert!(
+            BigintRepr::eq_value(&self.product, &self.check),
+            "modexp advice: q * m + r is not the product"
+        );
         core::mem::swap(x, &mut self.remainder);
     }
 }
 
-impl<A: Allocator + Clone, Adv: ModexpAdvisor> ModMul for BigintModMul<'_, A, Adv> {
-    type Elem = BigintRepr<A>;
+impl<Adv: ModexpAdvisor> ModMul for BigintModMul<'_, Adv> {
+    type Elem = BigintRepr;
 
-    fn placeholder(&mut self) -> BigintRepr<A> {
-        BigintRepr {
-            backing: Vec::new_in(self.allocator.clone()),
-            digits: 0,
-        }
+    fn placeholder(&mut self) -> BigintRepr {
+        BigintRepr::new()
     }
 
-    fn clone_elem(&mut self, x: &BigintRepr<A>) -> BigintRepr<A> {
-        x.duplicate_with_capacity(self.modulus.digits, self.allocator.clone())
+    fn clone_elem(&mut self, x: &BigintRepr) -> BigintRepr {
+        x.duplicate()
     }
 
-    fn is_zero(&self, x: &BigintRepr<A>) -> bool {
+    fn is_zero(&self, x: &BigintRepr) -> bool {
         x.digits == 0
     }
 
-    fn square_assign(&mut self, x: &mut BigintRepr<A>) {
+    fn square_assign(&mut self, x: &mut BigintRepr) {
         if x.digits == 0 {
             return;
         }
@@ -559,7 +668,7 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> ModMul for BigintModMul<'_, A, Ad
         self.reduce_product_into(x);
     }
 
-    fn mul_assign(&mut self, x: &mut BigintRepr<A>, y: &BigintRepr<A>) {
+    fn mul_assign(&mut self, x: &mut BigintRepr, y: &BigintRepr) {
         if x.digits == 0 {
             return;
         }
@@ -575,12 +684,12 @@ impl<A: Allocator + Clone, Adv: ModexpAdvisor> ModMul for BigintModMul<'_, A, Ad
 /// The source of the hints of the advice path
 pub(crate) trait ModexpAdvisor {
     /// The quotient and remainder of `a / m`
-    fn get_reduction_op_advice<A: Allocator + Clone>(
+    fn get_reduction_op_advice(
         &mut self,
-        a: &BigintRepr<A>,
-        m: &BigintRepr<A>,
-        quotient_dst: &mut BigintRepr<A>,
-        remainder_dst: &mut BigintRepr<A>,
+        a: &BigintRepr,
+        m: &BigintRepr,
+        quotient_dst: &mut BigintRepr,
+        remainder_dst: &mut BigintRepr,
     );
 
     /// The quotient `(hi * 2^256 + lo) / modulus` as `(q_lo, q_hi)`, for the single-digit
@@ -614,12 +723,10 @@ pub(crate) fn naive_wide_quotient(
 
 #[cfg(any(test, feature = "testing"))]
 pub(crate) mod naive_advisor {
-    use alloc::alloc::Global;
-
     use super::*;
     use num_bigint::BigUint;
 
-    fn write_bigint(src: BigUint, dst: &mut BigintRepr<impl Allocator + Clone>) {
+    fn write_bigint(src: BigUint, dst: &mut BigintRepr) {
         unsafe {
             let mut src = src.iter_u64_digits();
             let dst_capacity = dst.clear_as_capacity_mut();
@@ -647,22 +754,31 @@ pub(crate) mod naive_advisor {
         }
     }
 
+    /// The integer of any `BigintRepr`, of up to its whole capacity
+    pub(crate) fn to_biguint(x: &BigintRepr) -> BigUint {
+        let bytes: alloc::vec::Vec<u8> = x
+            .u64_digits_ref()
+            .iter()
+            .flat_map(|limb| limb.to_le_bytes())
+            .collect();
+        BigUint::from_bytes_le(&bytes)
+    }
+
     pub(crate) struct NaiveAdvisor;
 
     impl ModexpAdvisor for NaiveAdvisor {
-        fn get_reduction_op_advice<A: Allocator + Clone>(
+        fn get_reduction_op_advice(
             &mut self,
-            a: &BigintRepr<A>,
-            m: &BigintRepr<A>,
-            quotient_dst: &mut BigintRepr<A>,
-            remainder_dst: &mut BigintRepr<A>,
+            a: &BigintRepr,
+            m: &BigintRepr,
+            quotient_dst: &mut BigintRepr,
+            remainder_dst: &mut BigintRepr,
         ) {
-            let a = a.to_big_endian(Global);
-            let a = BigUint::from_bytes_be(&a);
+            // a product has up to twice the digits of an operand: more than `to_big_endian` holds
+            let a = to_biguint(a);
 
             assert!(m.digits > 0);
-            let m = m.to_big_endian(Global);
-            let m = BigUint::from_bytes_be(&m);
+            let m = to_biguint(m);
 
             use num_traits::ops::euclid::Euclid;
             let (q, r) = a.div_rem_euclid(&m);
@@ -690,21 +806,20 @@ const BIGINT_DIGIT_WORDS: usize = U256::BYTES / core::mem::size_of::<u32>();
 
 /// Receives the next `num_words` words of the hint straight into the digits of `dst`, whole digits
 /// at a time (the last digit zero-padded)
-fn write_bigint<O: MemoryOracle>(
-    oracle: &mut O,
-    num_words: usize,
-    dst: &mut BigintRepr<impl Allocator + Clone>,
-) {
+fn write_bigint<O: MemoryOracle>(oracle: &mut O, num_words: usize, dst: &mut BigintRepr) {
     let num_digits = num_words.div_ceil(BIGINT_DIGIT_WORDS);
     let dst_capacity = dst.clear_as_capacity_mut();
-    assert!(dst_capacity.len() >= num_digits, "the hint is too long");
+    assert!(
+        dst_capacity.len() >= num_digits,
+        "modexp advice: the hint is too long"
+    );
     let words = dst_capacity.as_mut_ptr().cast::<u32>();
     // SAFETY: the first `num_digits` digits are within the capacity, and aligned for `u32` (digits
     // are little-endian 64-bit limbs); all their words are written below
     unsafe {
         oracle
             .write_words(words, num_words)
-            .expect("the hint has the words of its lengths");
+            .expect("modexp advice: the hint has the words of its lengths");
         words
             .add(num_words)
             .write_bytes(0, num_digits * BIGINT_DIGIT_WORDS - num_words);
@@ -713,12 +828,12 @@ fn write_bigint<O: MemoryOracle>(
 }
 
 impl<'a, O: MemoryOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
-    fn get_reduction_op_advice<A: Allocator + Clone>(
+    fn get_reduction_op_advice(
         &mut self,
-        a: &BigintRepr<A>,
-        m: &BigintRepr<A>,
-        quotient_dst: &mut BigintRepr<A>,
-        remainder_dst: &mut BigintRepr<A>,
+        a: &BigintRepr,
+        m: &BigintRepr,
+        quotient_dst: &mut BigintRepr,
+        remainder_dst: &mut BigintRepr,
     ) {
         assert!(m.digits > 0);
         // the oracle reads the request and the digits while it receives the query: their addresses
@@ -741,30 +856,35 @@ impl<'a, O: MemoryOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
                 core::ptr::from_ref(&arg).expose_provenance(),
             )
         }
-        .expect("must send the modexp advice query");
-        // the lengths are bounded here; the values are checked by `reduce_product_into`
-        let q_len = oracle.read_word().expect("quotient length") as usize;
-        let r_len = oracle.read_word().expect("remainder length") as usize;
+        .expect("modexp advice: the oracle takes the query");
+        // The lengths are untrusted words: they are bounded here, before anything is received
+        // into the buffers (both bounds are below their capacity); the values are checked by
+        // `reduce_product_into`.
+        let q_len = oracle
+            .read_word()
+            .expect("modexp advice: the hint has a quotient length") as usize;
+        let r_len = oracle
+            .read_word()
+            .expect("modexp advice: the hint has a remainder length") as usize;
 
-        let max_quotient_digits = if a.digits < m.digits {
-            0
-        } else if a.digits == m.digits {
-            1
-        } else {
-            a.digits + 1 - m.digits
-        };
-
+        let max_quotient_digits = BigintRepr::max_quotient_digits(a.digits, m.digits);
         let max_remainder_digits = m.digits;
 
-        assert!(q_len.div_ceil(BIGINT_DIGIT_WORDS) <= max_quotient_digits);
-        assert!(r_len.div_ceil(BIGINT_DIGIT_WORDS) <= max_remainder_digits);
+        assert!(
+            q_len.div_ceil(BIGINT_DIGIT_WORDS) <= max_quotient_digits,
+            "modexp advice: the quotient is too long"
+        );
+        assert!(
+            r_len.div_ceil(BIGINT_DIGIT_WORDS) <= max_remainder_digits,
+            "modexp advice: the remainder is too long"
+        );
 
         write_bigint(oracle, q_len, quotient_dst);
         write_bigint(oracle, r_len, remainder_dst);
 
         oracle
             .finish_query()
-            .expect("the modexp advice has no excess data");
+            .expect("modexp advice: the hint has no excess data");
     }
 
     fn wide_quotient(
@@ -779,18 +899,18 @@ impl<'a, O: MemoryOracle> ModexpAdvisor for OracleAdvisor<'a, O> {
 
 #[cfg(test)]
 mod tests {
-    use std::alloc::Global;
-
     use super::*;
     use crate::hints::test_support::InProcessMemoryOracle;
     use crate::hints::QuerierMemory;
+    use std::vec;
+    use std::vec::Vec;
 
     /// The quotient and remainder read from an oracle that answers with `response`
-    fn advice(response: Vec<u32>) -> (BigintRepr<Global>, BigintRepr<Global>) {
-        let dividend = BigintRepr::from_big_endian_with_double_capacity(&[0xA5; 96], Global);
-        let modulus = BigintRepr::from_big_endian_with_double_capacity(&[0x5A; 64], Global);
-        let mut quotient = BigintRepr::with_capacity_in(4, Global);
-        let mut remainder = BigintRepr::with_capacity_in(4, Global);
+    fn advice(response: Vec<u32>) -> (BigintRepr, BigintRepr) {
+        let dividend = BigintRepr::from_big_endian(&[0xA5; 96]);
+        let modulus = BigintRepr::from_big_endian(&[0x5A; 64]);
+        let mut quotient = BigintRepr::new();
+        let mut remainder = BigintRepr::new();
         let mut response = Some(response);
         let mut oracle = InProcessMemoryOracle::new(move |query_id, _, _: &dyn QuerierMemory| {
             assert_eq!(query_id, MODEXP_ADVICE_QUERY_ID);
@@ -827,7 +947,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "modexp advice: the remainder is too long")]
+    fn oracle_advisor_rejects_too_long_remainder() {
+        // at most 2 remainder digits for a 2-digit modulus: the length alone is rejected, before
+        // any word is received
+        advice(vec![0, 2 * 8 + 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "modexp advice: the quotient is too long")]
     fn oracle_advisor_rejects_too_long_quotient() {
         // at most 2 quotient digits for a 3-digit dividend and a 2-digit modulus
         let mut response = vec![3 * 8, 0];

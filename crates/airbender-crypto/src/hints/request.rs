@@ -3,7 +3,7 @@
 use super::answer::HintAnswer;
 use super::oracle::HintError;
 use super::FIELD_OPS_ADVISE_QUERY_ID;
-use airbender_oracle::MemoryOracle;
+use airbender_oracle::{read_querier_word, MemoryOracle, QuerierMemory};
 use core::mem::{offset_of, MaybeUninit};
 
 /// The request of a field hint query: the op, and the address and length (in `u32` words) of
@@ -91,39 +91,6 @@ impl FieldHintOp {
             FieldHintOp::Bls12381PairingResidueWitness,
         ];
         ALL.into_iter().find(|op| *op as u32 == value)
-    }
-}
-
-/// Read access of the oracle to the memory of the querier.
-pub trait QuerierMemory {
-    /// Size in bytes of a word, and of an address, of the querier: 4 on the proving target, and
-    /// `size_of::<usize>()` for a querier in the same process.
-    fn word_size(&self) -> usize;
-
-    /// Reads the `u32` at `address`, which must be 4-byte aligned.
-    fn read_u32(&self, address: usize) -> Result<u32, HintError>;
-}
-
-pub(super) fn offset_address(address: usize, offset: usize) -> Result<usize, HintError> {
-    address
-        .checked_add(offset)
-        .ok_or(HintError("querier address overflows"))
-}
-
-/// Reads a querier word (`QuerierMemory::word_size` bytes, low half first).
-pub fn read_querier_word<M: QuerierMemory + ?Sized>(
-    memory: &M,
-    address: usize,
-) -> Result<usize, HintError> {
-    let low = memory.read_u32(address)?;
-    match memory.word_size() {
-        4 => Ok(low as usize),
-        8 => {
-            let high = memory.read_u32(offset_address(address, 4)?)?;
-            usize::try_from(u64::from(low) | (u64::from(high) << 32))
-                .map_err(|_| HintError("querier word does not fit into usize"))
-        }
-        _ => Err(HintError("unsupported querier word size")),
     }
 }
 

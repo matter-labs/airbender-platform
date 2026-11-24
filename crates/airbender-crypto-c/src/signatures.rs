@@ -1,6 +1,6 @@
 //! C bindings of the signature operations.
 use crate::{commit, crypto, read, with_active_oracle, Bytes};
-#[cfg(any(not(target_arch = "riscv32"), feature = "delegation"))]
+#[cfg(any(not(target_arch = "riscv32"), feature = "csr-oracle"))]
 use crypto::hints::Secp256k1HooksWithOracle;
 use crypto::secp256k1::hooks::DefaultSecp256k1Hooks;
 
