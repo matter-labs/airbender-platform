@@ -63,6 +63,8 @@ hex-literal = { workspace = true }
 ark-test-curves = { workspace = true, features = ["secp256k1", "bls12_381_curve"] }
 rand_core = { workspace = true, features = ["getrandom"] }
 rand_chacha = { workspace = true }
+# The permutation behind `sha3` (already in the lock file), for the host tests of `sha3::rv64`
+keccak = { version = "0.1", default-features = false }
 
 [features]
 # forward = ["blake2"]
