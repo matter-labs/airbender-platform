@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generator of `keccak_f1600_rv64.S`: Keccak-f[1600], 24 rounds unrolled, for RV64.
+"""Baseline generator: Keccak-f[1600], 24 rounds unrolled, for RV64.
 
-    python3 keccak_f1600_rv64_gen.py                 # rewrite keccak_f1600_rv64.S (variant rv64i)
+    python3 keccak_f1600_rv64_gen.py                 # write keccak_f1600_rv64_baseline.S
     python3 keccak_f1600_rv64_gen.py --check         # emulate every variant against a reference
     python3 keccak_f1600_rv64_gen.py --counts        # instruction counts of every variant
     python3 keccak_f1600_rv64_gen.py --variant NAME  # print one variant to stdout
     python3 keccak_f1600_rv64_gen.py --search        # search the complemented lanes again (minutes)
 
-Only the variant `rv64i` is compiled into the crate. The others exist to count what an opcode
+The variant `rv64i` reproduces the census baseline. The others exist to count what an opcode
 would save: `zbb-rot` (with `rori`), `andn`, and `xor3` (a hypothetical `rd ^= rs1 ^ rs2`;
 `xor3nd` is the form `rd = rs1 ^ rs2 ^ rs3`), alone and combined. They are printed, never
 written next to the sources; the `xor3` ones cannot be assembled, only emulated here.
@@ -34,7 +34,7 @@ Design (see also the header of the emitted file):
 * Three entries share the rounds: state to state, the same after absorbing whole blocks (a loop
   around the rounds that keeps the lanes in registers), and the last permutation of a hash, which
   stores the four lanes of the digest only.
-* The shipped variant has two more entries, for a state that no permutation has touched (the
+* The baseline variant has two more entries, for a state that no permutation has touched (the
   caller initialises no lane of it): whole blocks absorbed from the zero state, the first one
   loaded straight from the input; and a whole hash of at most 64 bytes from its nine lanes,
   whose round 0 knows the fifteen zero lanes. Its last round of a hash computes the digest
@@ -1622,7 +1622,7 @@ def main():
         sys.stdout.write(emit(args.variant)[0])
     else:
         check("rv64i", runs=50)
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keccak_f1600_rv64.S")
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keccak_f1600_rv64_baseline.S")
         with open(path, "w") as output:
             output.write(emit("rv64i")[0])
         print("wrote", path)
