@@ -36,7 +36,11 @@ const SHORT_LANES: usize = SHORT_BYTES / 8 + 1;
 
 /// Bit `i` is set when lane `i` (`x + 5 y`) of the state is stored complemented. It must be the
 /// set that `keccak_f1600_rv64.S` was generated for (its header names the lanes).
+#[cfg(not(feature = "keccak_call"))]
 pub const COMPLEMENTED_LANES: u32 = 1 << 3 | 1 << 7 | 1 << 8 | 1 << 12 | 1 << 17 | 1 << 23;
+/// `call.keccak` permutes the plain state: no lane is complemented.
+#[cfg(feature = "keccak_call")]
+pub const COMPLEMENTED_LANES: u32 = 0;
 
 const fn complement_of(lane: usize) -> u64 {
     if COMPLEMENTED_LANES >> lane & 1 == 1 {
@@ -69,7 +73,8 @@ pub trait KeccakF1600 {
     /// afterwards. `digest` may be the start of `state`.
     ///
     /// # Safety
-    /// `state` must be aligned and valid for reads of 25 words, `digest` for writes of 4 words.
+    /// `state` must be aligned and valid for reads and writes of 25 words (an implementation may
+    /// permute it in place), `digest` for writes of 4 words.
     unsafe fn squeeze(state: *mut [u64; LANES], digest: *mut [u64; 4]);
 
     /// A whole hash of at most 64 bytes. `lanes` are the first nine lanes of its only block,
@@ -81,7 +86,7 @@ pub trait KeccakF1600 {
     unsafe fn squeeze_short(lanes: *const [u64; SHORT_LANES], digest: *mut [u64; 4]);
 }
 
-#[cfg(target_arch = "riscv64")]
+#[cfg(all(target_arch = "riscv64", not(feature = "keccak_call")))]
 mod assembly {
     use super::{KeccakF1600, LANES, SHORT_LANES};
 
@@ -156,8 +161,98 @@ mod assembly {
     }
 }
 
-#[cfg(target_arch = "riscv64")]
+#[cfg(all(target_arch = "riscv64", not(feature = "keccak_call")))]
 pub use self::assembly::Assembly;
+
+/// The permutation as binbender's `call.keccak` (github.com/matter-labs/binbender,
+/// crates/machine/src/isa.rs, `Opcode::Call(Table::Keccak)`): custom-2 (0x5b), funct3 0,
+/// rd = x0, imm = 0. It permutes in place the 25 plain lanes at `rs1`, lane `x + 5 y` the
+/// little-endian doubleword at `rs1 + 8 (x + 5 y)`.
+#[cfg(all(target_arch = "riscv64", feature = "keccak_call"))]
+mod call {
+    use super::{KeccakF1600, LANES, RATE_WORDS, SHORT_LANES};
+
+    /// # Safety
+    /// `state` must be aligned and valid for reads and writes of 25 words.
+    #[inline(always)]
+    unsafe fn keccak_f(state: *mut [u64; LANES]) {
+        // SAFETY: the caller's contract. The call reads and writes those 25 words and no other
+        // memory or register.
+        unsafe {
+            core::arch::asm!(".insn i 0x5b, 0, x0, {0}, 0", in(reg) state, options(nostack));
+        }
+    }
+
+    /// Keccak-f[1600] through `call.keccak`
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Assembly;
+
+    impl KeccakF1600 for Assembly {
+        #[inline(always)]
+        fn permute(state: &mut [u64; LANES]) {
+            // SAFETY: a unique reference to 25 aligned words.
+            unsafe { keccak_f(state) }
+        }
+
+        #[inline(always)]
+        unsafe fn absorb_blocks(state: &mut [u64; LANES], data: *const u64, blocks: usize) {
+            for block in 0..blocks {
+                for lane in 0..RATE_WORDS {
+                    // SAFETY: the caller's contract: `data` holds `17 * blocks` aligned words.
+                    state[lane] ^= unsafe { data.add(block * RATE_WORDS + lane).read() };
+                }
+                // SAFETY: a unique reference to 25 aligned words.
+                unsafe { keccak_f(state) };
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn absorb_first(state: *mut [u64; LANES], data: *const u64, blocks: usize) {
+            // SAFETY: the caller's contract: `state` is valid for writes of 25 aligned words and
+            // `data` for reads of `17 * blocks`.
+            unsafe {
+                let lanes = state.cast::<u64>();
+                for lane in 0..RATE_WORDS {
+                    lanes.add(lane).write(data.add(lane).read());
+                }
+                for lane in RATE_WORDS..LANES {
+                    lanes.add(lane).write(0);
+                }
+                keccak_f(state);
+                if blocks > 1 {
+                    Self::absorb_blocks(&mut *state, data.add(RATE_WORDS), blocks - 1);
+                }
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn squeeze(state: *mut [u64; LANES], digest: *mut [u64; 4]) {
+            // SAFETY: the caller's contract, which lets the state be permuted in place. `digest`
+            // may start at `state`: the lanes are copied in order.
+            unsafe {
+                keccak_f(state);
+                for lane in 0..4 {
+                    digest.cast::<u64>().add(lane).write(state.cast::<u64>().add(lane).read());
+                }
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn squeeze_short(lanes: *const [u64; SHORT_LANES], digest: *mut [u64; 4]) {
+            let mut state = [0u64; LANES];
+            // SAFETY: the caller's contract: nine aligned words to read.
+            state[..SHORT_LANES].copy_from_slice(unsafe { &*lanes });
+            state[RATE_WORDS - 1] ^= 1 << 63;
+            // SAFETY: a local array of 25 words.
+            unsafe { keccak_f(&mut state) };
+            // SAFETY: the caller's contract: four aligned words to write.
+            unsafe { digest.write(state[..4].try_into().unwrap()) };
+        }
+    }
+}
+
+#[cfg(all(target_arch = "riscv64", feature = "keccak_call"))]
+pub use self::call::Assembly;
 
 /// Keccak-256 with the permutation of `keccak_f1600_rv64.S`
 #[cfg(target_arch = "riscv64")]
